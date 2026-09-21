@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: '1'
+
+jobs:
+  offline-quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install development dependencies
+        run: python scripts/run_with_timeout.py 120 python -m pip install -e '.[dev]'
+      - name: Ruff
+        run: python scripts/run_with_timeout.py 60 python -m ruff check src tests scripts
+      - name: Mypy
+        run: python scripts/run_with_timeout.py 60 python -m mypy src
+      - name: Bootstrap tests
+        run: python scripts/run_with_timeout.py 60 python -m pytest tests/bootstrap -q -m 'unit or integration' --timeout=30

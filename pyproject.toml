@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ydbdoc-review-ng"
+version = "1.0.0"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["PyYAML>=6,<7"]
+
+[project.optional-dependencies]
+runtime = ["ydb>=3.31,<4"]
+dev = [
+  "pytest>=8",
+  "pytest-timeout>=2.3",
+  "pytest-socket>=0.7",
+  "ruff>=0.11",
+  "mypy>=1.15",
+]
+
+[project.scripts]
+ydbdoc-review = "ydbdoc_review_ng.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "--strict-markers --timeout=30 --timeout-method=signal --disable-socket -m 'not live'"
+markers = [
+  "unit: fast isolated behavior tests",
+  "integration: tests spanning process or tool boundaries",
+  "e2e: end-to-end tests with offline fakes",
+  "live: explicitly authorized tests using external systems",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/run_pr_51079_smoke.py" = ["EXE001", "I001"]
+"tests/test_plan.py" = ["I001"]
+"tests/test_runner.py" = ["I001"]
+"tests/test_single_field.py" = ["I001"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true

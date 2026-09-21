@@ -1,0 +1,276 @@
+"""Installable production composition. Construction is lazy and performs no I/O.
+
+Tests replace only HTTP transports and the YDB executor, not workflow stages.
+Each factory instance is one job; credentials are never included in diagnostics.
+"""
+
+from __future__ import annotations
+
+import os
+import re
+from collections.abc import Mapping
+from datetime import UTC, datetime
+from decimal import Decimal
+from typing import Any, cast
+
+from ydbdoc_review_ng.application import (
+    AuthorizedRun,
+    ImmutableRunSnapshot,
+    LinearWorkflows,
+    TranslateWorkflowInput,
+    VerifyWorkflowInput,
+)
+from ydbdoc_review_ng.domain import GitSha, Mode, RepositoryId, SnapshotRef
+from ydbdoc_review_ng.models import (
+    AttemptResult,
+    HttpTransport,
+    ModelCallResult,
+    ModelRequest,
+    ModelTokenPrice,
+    NativeYandexClient,
+    PerModelPricing,
+    UrllibTransport,
+    YandexCredentials,
+)
+from ydbdoc_review_ng.persistence import YdbExecutor, YdbPersistence
+from ydbdoc_review_ng.publication import GitPublicationAdapter, PublicationContext
+from ydbdoc_review_ng.quality import QualityReviewResult
+from ydbdoc_review_ng.reporting import QAReporter, ReportContext
+from ydbdoc_review_ng.repository import BaseBranch, PullRequestState, ResolvedRepositorySnapshots
+from ydbdoc_review_ng.runtime_github import (
+    GitHubBackend,
+    GitHubHTTP,
+    JsonTransport,
+    RuntimeBoundaryError,
+)
+from ydbdoc_review_ng.runtime_ydb import SDKExecutor
+
+_YANDEXGPT_5_1_TOKEN_RUB = Decimal("0.0012")
+_PRODUCTION_PRICING = PerModelPricing(
+    {
+        "yandexgpt-5.1/latest": ModelTokenPrice(
+            _YANDEXGPT_5_1_TOKEN_RUB,
+            _YANDEXGPT_5_1_TOKEN_RUB,
+            _YANDEXGPT_5_1_TOKEN_RUB,
+        )
+    }
+)
+
+
+class SystemClock:
+    def now(self) -> datetime:
+        return datetime.now(UTC)
+
+
+class RecordedModels:
+    def __init__(
+        self, environment: Mapping[str, str], persistence: YdbPersistence, transport: HttpTransport
+    ) -> None:
+        self.environment, self.persistence, self.transport = environment, persistence, transport
+        self.cost: Decimal | None = Decimal(0)
+
+    def record(self, attempt: AttemptResult) -> None:
+        self.persistence(attempt)
+        self.cost = (
+            None if self.cost is None or attempt.cost_rub is None else self.cost + attempt.cost_rub
+        )
+
+    def invoke(self, request: ModelRequest, /) -> ModelCallResult:
+        client = NativeYandexClient(
+            YandexCredentials(
+                self.environment.get("YANDEX_API_KEY", ""),
+                self.environment.get("YANDEX_FOLDER_ID", ""),
+            ),
+            self.transport,
+            self.record,
+            pricing=_PRODUCTION_PRICING,
+        )
+        return client.invoke(request)
+
+
+class RuntimeSource:
+    def __init__(self, environment: Mapping[str, str], github: GitHubBackend) -> None:
+        self.environment, self.github = environment, github
+        self.snapshots: ResolvedRepositorySnapshots
+        self.context: PublicationContext
+        self.changes: list[dict[str, Any]] = []
+        self.source_pr = 0
+
+    def _authorize(self) -> None:
+        actor = self.environment.get("GITHUB_TRIGGERING_ACTOR") or self.environment.get(
+            "GITHUB_ACTOR", ""
+        )
+        allowed = re.split(r"[,\s]+", self.environment.get("YDBDOC_ALLOWED_ACTORS", "").strip())
+        if not actor or actor not in allowed:
+            raise RuntimeBoundaryError("actor_not_authorized")
+
+    def authorize_translate(self, request: TranslateWorkflowInput, /) -> AuthorizedRun:
+        self._authorize()
+        return AuthorizedRun(
+            Mode.DOC_TRANSLATE, f"translation/pr-{request.pr_number}", None, request
+        )
+
+    def authorize_verify(self, request: VerifyWorkflowInput, /) -> AuthorizedRun:
+        self._authorize()
+        pr = self.github.request("GET", f"/pulls/{request.pr_number}")
+        if (
+            pr["head"]["repo"]["full_name"] != self.github.repository
+            or pr["head"]["sha"] != request.target_sha.value
+        ):
+            raise RuntimeBoundaryError("verification_head_mismatch")
+        match = re.search(r"<!-- ydbdoc-source-pr:(\d+) -->", pr.get("body") or "")
+        if match is None:
+            raise RuntimeBoundaryError("source_pr_provenance_missing")
+        pinned = re.search(r"<!-- ydbdoc-source-sha:([0-9a-f]{40}) -->", pr.get("body") or "")
+        if pinned is None or pinned[1] != request.source_sha.value:
+            raise RuntimeBoundaryError("source_sha_provenance_mismatch")
+        return AuthorizedRun(
+            Mode.DOC_VERIFY,
+            pr["head"]["ref"],
+            request.target_sha,
+            (request, int(match[1]), pr["base"]["ref"]),
+        )
+
+    def _snapshot(
+        self,
+        authorization: AuthorizedRun,
+        source_pr: int,
+        expected_source: GitSha,
+        expected_base: str | None = None,
+    ) -> ImmutableRunSnapshot:
+        pr = self.github.request("GET", f"/pulls/{source_pr}")
+        if pr["base"]["repo"]["full_name"] != self.github.repository:
+            raise RuntimeBoundaryError("repository_mismatch")
+        base = BaseBranch(pr["base"]["ref"])
+        if expected_base is not None and base.value != expected_base:
+            raise RuntimeBoundaryError("base_mismatch")
+        tip = self.github.head(base.value)
+        if tip is None:
+            raise RuntimeBoundaryError("base_missing")
+        repository = RepositoryId(self.github.repository)
+        base_snapshot = SnapshotRef(repository, tip)
+        merged = bool(pr["merged"])
+        original = SnapshotRef(
+            repository, GitSha(pr["merge_commit_sha"] if merged else pr["head"]["sha"])
+        )
+        source = base_snapshot if merged else original
+        # Verify keeps the previously pinned authoritative source even if base advances.
+        if authorization.mode is Mode.DOC_VERIFY:
+            if not merged and original.commit_sha != expected_source:
+                raise RuntimeBoundaryError("source_pr_changed")
+            source = SnapshotRef(repository, expected_source)
+        elif source.commit_sha != expected_source:
+            raise RuntimeBoundaryError("source_sha_mismatch")
+        self.snapshots = ResolvedRepositorySnapshots(
+            PullRequestState.MERGED if merged else PullRequestState.OPEN,
+            base,
+            original if merged else source,
+            source,
+            source,
+            source,
+            source if merged else base_snapshot,
+            source if merged else None,
+            original if merged else None,
+        )
+        self.changes = self.github.request("GET", f"/pulls/{source_pr}/files?per_page=100")
+        if len(self.changes) != pr["changed_files"]:
+            raise RuntimeBoundaryError("source_change_list_incomplete")
+        # Reject source movement while resolving the diff inventory.
+        fresh = self.github.request("GET", f"/pulls/{source_pr}")
+        if fresh["head"]["sha"] != pr["head"]["sha"] or fresh["base"]["ref"] != base.value:
+            raise RuntimeBoundaryError("source_pr_changed")
+        head = self.github.head(authorization.branch)
+        if (
+            authorization.current_target_sha is not None
+            and head != authorization.current_target_sha
+        ):
+            raise RuntimeBoundaryError("verification_head_mismatch")
+        self.context = PublicationContext(
+            self.github.repository, authorization.branch, base.value, base.value, head or tip
+        )
+        self.source_pr = source_pr
+        self.github.source_pr = source_pr
+        self.github.source_sha = source.commit_sha
+        return ImmutableRunSnapshot(
+            authorization.mode,
+            source.commit_sha,
+            authorization.current_target_sha,
+            authorization.branch,
+            self.context,
+        )
+
+    def snapshot_translate(self, authorization: AuthorizedRun, /) -> ImmutableRunSnapshot:
+        request = authorization.context
+        assert isinstance(request, TranslateWorkflowInput)
+        return self._snapshot(authorization, request.pr_number, request.source_sha)
+
+    def snapshot_verify(self, authorization: AuthorizedRun, /) -> ImmutableRunSnapshot:
+        request, source_pr, base = cast(tuple[VerifyWorkflowInput, int, str], authorization.context)
+        return self._snapshot(authorization, source_pr, request.source_sha, base)
+
+
+class RuntimeReporter:
+    def __init__(
+        self, source: RuntimeSource, publisher: GitPublicationAdapter, models: RecordedModels
+    ) -> None:
+        self.source, self.publisher, self.models = source, publisher, models
+
+    def update_current_pr(
+        self,
+        *,
+        mode: Mode,
+        pr_number: int,
+        branch: str,
+        commit_sha: GitSha,
+        review: QualityReviewResult,
+    ) -> None:
+        if mode is Mode.DOC_TRANSLATE and self.publisher.noop:
+            return
+        if self.source.github.head(branch) != commit_sha:
+            raise RuntimeBoundaryError("report_head_changed")
+        reporter = QAReporter(
+            self.source.github,
+            self.publisher,
+            lambda: ReportContext(
+                self.source.snapshots.source_snapshot.commit_sha, commit_sha, self.models.cost
+            ),
+            lambda: self.source.github.checks(commit_sha),
+            verification_context=self.source.context,
+        )
+        reporter.update_current_pr(
+            mode=mode, pr_number=pr_number, branch=branch, commit_sha=commit_sha, review=review
+        )
+
+
+def create_runtime(
+    *,
+    environment: Mapping[str, str] | None = None,
+    ydb_executor: YdbExecutor | None = None,
+    github_transport: JsonTransport | None = None,
+    model_transport: HttpTransport | None = None,
+) -> LinearWorkflows:
+    """One job's real composition; optional arguments replace only external I/O."""
+    from ydbdoc_review_ng.runtime_content import RuntimeContent
+
+    env = dict(os.environ if environment is None else environment)
+    executor = ydb_executor or SDKExecutor(
+        env.get("YDB_ENDPOINT", ""), env.get("YDB_DATABASE", ""), env.get("YDB_TOKEN", "")
+    )
+    persistence = YdbPersistence(executor)
+    github = GitHubBackend(
+        github_transport or GitHubHTTP(env.get("YDB_GH_TOKEN") or env.get("GH_TOKEN", ""))
+    )
+    models = RecordedModels(env, persistence, model_transport or UrllibTransport())
+    source = RuntimeSource(env, github)
+    content = RuntimeContent(source, models, env)
+    publisher = GitPublicationAdapter(github, content.publication_plan, content.validate_plan)
+    content.publisher = publisher
+    return LinearWorkflows(
+        clock=SystemClock(),
+        persistence=persistence,
+        source=source,
+        content=content,
+        reviewer=content,
+        publisher=publisher,
+        reporter=RuntimeReporter(source, publisher, models),
+    )

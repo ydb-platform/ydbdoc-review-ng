@@ -1,0 +1,21 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.coverage
+coverage.xml
+htmlcov/
+build/
+dist/
+.venv/
+.env
+.DS_Store
+*.log
+
+# Local orchestration state and paid-model transcripts are not versioned.
+.unlazy/
+artifacts/
+coordination/
+reports/

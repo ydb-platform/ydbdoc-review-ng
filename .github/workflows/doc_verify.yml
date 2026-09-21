@@ -1,0 +1,59 @@
+name: doc_verify
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Translation PR number
+        type: string
+        required: true
+      source_sha:
+        description: Immutable authoritative source SHA
+        type: string
+        required: true
+      target_sha:
+        description: Exact current translation head SHA
+        type: string
+        required: true
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+jobs:
+  doc_verify:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      YDBDOC_ALLOWED_ACTORS: ${{ vars.YDBDOC_ALLOWED_ACTORS }}
+      YDB_GH_TOKEN: ${{ secrets.YDB_GH_TOKEN }}
+      YANDEX_API_KEY: ${{ secrets.YANDEX_API_KEY }}
+      YANDEX_FOLDER_ID: ${{ vars.YANDEX_FOLDER_ID }}
+      YDB_ENDPOINT: ${{ vars.YDB_ENDPOINT }}
+      YDB_DATABASE: ${{ vars.YDB_DATABASE }}
+      YDB_TOKEN: ${{ secrets.YDB_TOKEN }}
+      YDBDOC_MAX_DEPENDENCY_FILES_PER_ARTICLE: ${{ vars.YDBDOC_MAX_DEPENDENCY_FILES_PER_ARTICLE }}
+      YDBDOC_MAX_SOURCE_CHARACTERS: ${{ vars.YDBDOC_MAX_SOURCE_CHARACTERS }}
+    steps:
+      # The dispatch ref is input data, never executable runtime code. This
+      # protected repository variable must contain a reviewed 40-hex commit.
+      - name: Verify trusted runtime pin
+        shell: bash
+        env:
+          YDBDOC_TRUSTED_RUNTIME_SHA: ${{ vars.YDBDOC_TRUSTED_RUNTIME_SHA }}
+        run: |
+          [[ "$YDBDOC_TRUSTED_RUNTIME_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ vars.YDBDOC_TRUSTED_RUNTIME_SHA }}
+          persist-credentials: false
+      - name: Verify trusted runtime checkout
+        shell: bash
+        env:
+          YDBDOC_TRUSTED_RUNTIME_SHA: ${{ vars.YDBDOC_TRUSTED_RUNTIME_SHA }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$YDBDOC_TRUSTED_RUNTIME_SHA"
+      - uses: ./.github/actions/doc-review
+        with:
+          mode: verify
+          pr: ${{ inputs.pr }}
+          source-sha: ${{ inputs.source_sha }}
+          target-sha: ${{ inputs.target_sha }}

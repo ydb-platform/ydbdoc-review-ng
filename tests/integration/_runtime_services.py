@@ -1,0 +1,154 @@
+"""Ordinary in-memory remote-service boundaries for installed runtime smoke."""
+
+import base64
+import json
+from decimal import Decimal
+
+
+class RuntimeServices:
+    """Remote service responses, not a substitute workflow or content adapter."""
+
+    source = "a" * 40
+    base = "b" * 40
+    translated = "e" * 40
+
+    def __init__(self):
+        self.events = []
+        self.audit = []
+        self.comments = []
+        self.branch_head = None
+        self.pr_exists = False
+        self.files = {
+            "ydb/docs/ru/core/page.md": b"# Source\n",
+            "ydb/docs/en/core/page.md": b"# Old\n",
+        }
+        self.blob = None
+
+    def execute(self, statement, parameters):
+        self.audit.append(dict(parameters))
+        if "SUM" in statement:
+            return [{"total_cost_rub": Decimal(0)}]
+        return []
+
+    def github(self, method, path, payload):
+        self.events.append((method, path))
+        path = path.removeprefix("/repos/ydb-platform/ydb")
+        if path == "/user":
+            return {"id": 42, "type": "User", "login": "pat-publisher"}
+        if path == "/pulls/42":
+            return {
+                "merged": False,
+                "head": {
+                    "sha": self.source,
+                    "ref": "source",
+                    "repo": {"full_name": "ydb-platform/ydb"},
+                },
+                "base": {"ref": "main", "repo": {"full_name": "ydb-platform/ydb"}},
+                "changed_files": 1,
+            }
+        if path == "/pulls/43":
+            return {
+                "head": {
+                    "sha": self.translated,
+                    "ref": "translation/pr-42",
+                    "repo": {"full_name": "ydb-platform/ydb"},
+                },
+                "base": {"ref": "main", "repo": {"full_name": "ydb-platform/ydb"}},
+                "body": "<!-- ydbdoc-source-pr:42 -->\n<!-- ydbdoc-source-sha:"
+                + self.source
+                + " -->",
+            }
+        if path == "/pulls/42/files?per_page=100":
+            return [{"status": "modified", "filename": "ydb/docs/ru/core/page.md"}]
+        if path == "/git/ref/heads/main":
+            return {"object": {"sha": self.base}}
+        if path.startswith("/git/ref/heads/translation"):
+            return None if self.branch_head is None else {"object": {"sha": self.branch_head}}
+        if path.startswith("/contents/"):
+            name = path[10:].split("?")[0]
+            content = self.files.get(name)
+            return (
+                None
+                if content is None
+                else {
+                    "type": "file",
+                    "encoding": "base64",
+                    "content": base64.b64encode(content).decode(),
+                }
+            )
+        if method == "GET" and path.startswith("/git/commits/"):
+            return {"tree": {"sha": "c" * 40}}
+        if path == "/git/blobs":
+            self.blob = base64.b64decode(payload["content"])
+            return {"sha": "c" * 40}
+        if path == "/git/trees":
+            return {"sha": "d" * 40}
+        if path == "/git/commits":
+            return {"sha": self.translated}
+        if path == "/git/refs" or path.startswith("/git/refs/heads/"):
+            self.branch_head = payload["sha"]
+            self.files["ydb/docs/en/core/page.md"] = self.blob
+            return {}
+        if path.startswith("/commits/") and "/check-runs?" in path:
+            return {
+                "total_count": 2,
+                "check_runs": [
+                    {
+                        "name": name,
+                        "head_sha": self.translated,
+                        "status": "completed",
+                        "conclusion": "success",
+                    }
+                    for name in ("doc_verify", "build-docs")
+                ],
+            }
+        if path.startswith("/pulls?"):
+            return [{"number": 43}] if self.pr_exists else []
+        if path == "/pulls" and method == "POST":
+            assert "ydbdoc-source-pr:42" in payload["body"]
+            self.pr_exists = True
+            return {"number": 43}
+        if path == "/issues/43/comments?per_page=100":
+            return self.comments
+        if path == "/issues/43/comments":
+            self.comments.append(
+                {
+                    "id": 7,
+                    "user": {"id": 42, "type": "User", "login": "pat-publisher"},
+                    "body": payload["body"],
+                }
+            )
+            return {"id": 7}
+        if path == "/issues/comments/7":
+            self.comments[0]["body"] = payload["body"]
+            return {}
+        raise AssertionError((method, path))
+
+    def model(self, request):
+        from ydbdoc_review_ng.models import HttpResponse
+
+        body = json.loads(request.body)
+        schema = body["jsonSchema"]["schema"]
+        self.events.append(("MODEL", tuple(schema["properties"])))
+        values = (
+            {"verdict": "GREEN", "findings": []}
+            if "verdict" in schema["properties"]
+            else {key: "Translated" for key in schema["properties"]}
+        )
+        return HttpResponse(
+            200,
+            json.dumps(
+                {
+                    "result": {
+                        "alternatives": [
+                            {
+                                "status": "ALTERNATIVE_STATUS_FINAL",
+                                "message": {"role": "assistant", "text": json.dumps(values)},
+                            }
+                        ],
+                        "usage": {"inputTextTokens": "10", "completionTokens": "5"},
+                    }
+                }
+            ).encode(),
+            Decimal("0.01"),
+        )
