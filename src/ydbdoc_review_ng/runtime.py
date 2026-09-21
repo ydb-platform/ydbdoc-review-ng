@@ -11,7 +11,7 @@ import re
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any, cast
+from typing import cast
 
 from ydbdoc_review_ng.application import (
     AuthorizedRun,
@@ -20,6 +20,7 @@ from ydbdoc_review_ng.application import (
     TranslateWorkflowInput,
     VerifyWorkflowInput,
 )
+from ydbdoc_review_ng.continuation import SourceChangeInventory, normalize_source_inventory
 from ydbdoc_review_ng.domain import GitSha, Mode, RepositoryId, SnapshotRef
 from ydbdoc_review_ng.models import (
     AttemptResult,
@@ -32,7 +33,7 @@ from ydbdoc_review_ng.models import (
     UrllibTransport,
     YandexCredentials,
 )
-from ydbdoc_review_ng.persistence import YdbExecutor, YdbPersistence
+from ydbdoc_review_ng.persistence import ContinuationCheckpoint, YdbExecutor, YdbPersistence
 from ydbdoc_review_ng.publication import GitPublicationAdapter, PublicationContext
 from ydbdoc_review_ng.quality import QualityReviewResult
 from ydbdoc_review_ng.reporting import QAReporter, ReportContext
@@ -105,7 +106,8 @@ class RuntimeSource:
         self.environment, self.github = environment, github
         self.snapshots: ResolvedRepositorySnapshots
         self.context: PublicationContext
-        self.changes: list[dict[str, Any]] = []
+        self.inventory = SourceChangeInventory(())
+        self.metadata_snapshot: SnapshotRef
         self.source_pr = 0
 
     def _authorize(self) -> None:
@@ -197,9 +199,10 @@ class RuntimeSource:
             source if merged else None,
             original if merged else None,
         )
-        self.changes = self.github.request("GET", f"/pulls/{source_pr}/files?per_page=100")
-        if len(self.changes) != pr["changed_files"]:
+        changes = self.github.request("GET", f"/pulls/{source_pr}/files?per_page=100")
+        if len(changes) != pr["changed_files"]:
             raise RuntimeBoundaryError("source_change_list_incomplete")
+        self.inventory = normalize_source_inventory(changes)
         # Reject source movement while resolving the diff inventory.
         fresh = self.github.request("GET", f"/pulls/{source_pr}")
         if fresh["head"]["sha"] != pr["head"]["sha"] or fresh["base"]["ref"] != base.value:
@@ -213,6 +216,7 @@ class RuntimeSource:
         self.context = PublicationContext(
             self.github.repository, authorization.branch, base.value, base.value, head or tip
         )
+        self.metadata_snapshot = SnapshotRef(repository, self.context.current_head)
         self.source_pr = source_pr
         self.github.source_pr = source_pr
         self.github.source_sha = source.commit_sha
@@ -232,6 +236,54 @@ class RuntimeSource:
     def snapshot_verify(self, authorization: AuthorizedRun, /) -> ImmutableRunSnapshot:
         request, source_pr, base = cast(tuple[VerifyWorkflowInput, int, str], authorization.context)
         return self._snapshot(authorization, source_pr, request.source_sha, base)
+
+    def snapshot_continue(self, checkpoint: ContinuationCheckpoint, /) -> ImmutableRunSnapshot:
+        """Restore scope inputs from saved refs/inventory, never today's PR file list.
+
+        The scope reader needs only the normalized snapshot table. The old PR's
+        merge commit is not a source or a diff baseline for replay.
+        """
+        pr = self.github.read_pull_request_identity(checkpoint.source_pr)
+        if pr.base_repository != self.github.repository or pr.provenance is not None:
+            raise RuntimeBoundaryError("continue_source_identity_mismatch")
+        head = self.github.head(checkpoint.translation_branch)
+        if head != checkpoint.target_sha:
+            raise RuntimeBoundaryError("continue_translation_head_mismatch")
+        repository = RepositoryId(self.github.repository)
+        source = SnapshotRef(repository, checkpoint.source_sha)
+        base = SnapshotRef(repository, checkpoint.base_sha)
+        self.snapshots = ResolvedRepositorySnapshots(
+            PullRequestState.OPEN,
+            BaseBranch(pr.base_branch),
+            source,
+            source,
+            source,
+            source,
+            base,
+            None,
+            None,
+        )
+        self.inventory = checkpoint.source_inventory
+        # Current target is an identity/publication parent only. Metadata starts
+        # at the saved base and source, including for a previously merged PR.
+        self.metadata_snapshot = base
+        self.context = PublicationContext(
+            self.github.repository,
+            checkpoint.translation_branch,
+            pr.base_branch,
+            pr.base_branch,
+            checkpoint.target_sha or checkpoint.base_sha,
+        )
+        self.source_pr = checkpoint.source_pr
+        self.github.source_pr = checkpoint.source_pr
+        self.github.source_sha = checkpoint.source_sha
+        return ImmutableRunSnapshot(
+            Mode.DOC_CONTINUE,
+            checkpoint.source_sha,
+            checkpoint.target_sha,
+            checkpoint.translation_branch,
+            self.context,
+        )
 
 
 class RuntimeReporter:

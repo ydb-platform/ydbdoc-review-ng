@@ -18,10 +18,15 @@ from zoneinfo import ZoneInfo
 from ydbdoc_review_ng.continuation import (
     ContinuationStage,
     ContinuationState,
+    SourceChangeInventory,
+    decode_scope_target_paths,
+    decode_source_inventory,
     decode_state,
+    encode_scope_target_paths,
+    encode_source_inventory,
     encode_state,
 )
-from ydbdoc_review_ng.domain import GitSha, Mode
+from ydbdoc_review_ng.domain import GitSha, Mode, RepoPath
 from ydbdoc_review_ng.models import AttemptResult
 
 _MOSCOW = ZoneInfo("Europe/Moscow")
@@ -70,6 +75,8 @@ class ContinuationCheckpoint:
     base_sha: GitSha
     translation_branch: str
     target_sha: GitSha | None
+    source_inventory: SourceChangeInventory
+    scope_target_paths: tuple[RepoPath, ...]
     state: ContinuationState = field(repr=False)
     created_at: datetime
     status: CheckpointStatus = CheckpointStatus.OPEN
@@ -93,10 +100,19 @@ class ContinuationCheckpoint:
             raise PersistenceError("invalid continuation envelope")
         try:
             encode_state(self.state)
+            encode_source_inventory(self.source_inventory)
+            encode_scope_target_paths(self.scope_target_paths)
         except (TypeError, ValueError):
             raise PersistenceError("invalid continuation state") from None
         if self.state.stage is ContinuationStage.REVIEW and self.target_sha is None:
             raise PersistenceError("review checkpoint requires target SHA")
+        if (self.state.stage is ContinuationStage.DIRECTION) != (not self.scope_target_paths):
+            raise PersistenceError("continuation scope selection incompatible with stage")
+        referenced = {item.target_path for item in self.state.accepted_maps} | set(
+            self.state.pending_paths
+        )
+        if not referenced.issubset(self.scope_target_paths):
+            raise PersistenceError("continuation scope selection omits state paths")
 
     @property
     def expires_at(self) -> datetime:
@@ -182,6 +198,8 @@ class YdbPersistence:
                 translation_branch Utf8 NOT NULL,
                 target_sha Utf8,
                 stage Utf8 NOT NULL,
+                source_inventory String NOT NULL,
+                scope_target_paths String NOT NULL,
                 state String NOT NULL,
                 status Utf8 NOT NULL,
                 created_at Timestamp NOT NULL,
@@ -200,12 +218,18 @@ class YdbPersistence:
         if rows:
             previous = self._checkpoint(rows[0])
             self._require_open(previous, now)
+            if (
+                previous.state.stage is not ContinuationStage.DIRECTION
+                and previous.scope_target_paths != checkpoint.scope_target_paths
+            ):
+                raise PersistenceError("continuation lineage mismatch")
             for name in (
                 "job_id",
                 "source_pr",
                 "source_sha",
                 "base_sha",
                 "translation_branch",
+                "source_inventory",
             ):
                 if getattr(previous, name) != getattr(checkpoint, name):
                     raise PersistenceError("continuation lineage mismatch")
@@ -215,9 +239,11 @@ class YdbPersistence:
             "checkpoint save",
             f"""UPSERT INTO `{self._table("continuations")}`
                 (continuation_id, job_id, source_pr, trigger_pr, source_sha, base_sha,
-                 translation_branch, target_sha, stage, state, status, created_at)
+                 translation_branch, target_sha, stage, source_inventory, scope_target_paths,
+                 state, status, created_at)
                 VALUES ($continuation_id, $job_id, $source_pr, $trigger_pr, $source_sha,
-                 $base_sha, $translation_branch, $target_sha, $stage, $state, $status, $created_at);""",
+                 $base_sha, $translation_branch, $target_sha, $stage, $source_inventory,
+                 $scope_target_paths, $state, $status, $created_at);""",
             {
                 "continuation_id": checkpoint.continuation_id,
                 "job_id": checkpoint.job_id,
@@ -230,6 +256,12 @@ class YdbPersistence:
                 if checkpoint.target_sha is None
                 else checkpoint.target_sha.value,
                 "stage": checkpoint.state.stage.value,
+                "source_inventory": encode_source_inventory(checkpoint.source_inventory).encode(
+                    "utf-8"
+                ),
+                "scope_target_paths": encode_scope_target_paths(
+                    checkpoint.scope_target_paths
+                ).encode("utf-8"),
                 "state": encode_state(checkpoint.state).encode("utf-8"),
                 "status": checkpoint.status.value,
                 "created_at": checkpoint.created_at,
@@ -279,6 +311,12 @@ class YdbPersistence:
                 trigger_pr=cast(int, row["trigger_pr"]),
                 source_sha=GitSha(cast(str, row["source_sha"])),
                 base_sha=GitSha(cast(str, row["base_sha"])),
+                source_inventory=decode_source_inventory(
+                    cast(str | bytes, row["source_inventory"])
+                ),
+                scope_target_paths=decode_scope_target_paths(
+                    cast(str | bytes, row["scope_target_paths"])
+                ),
                 translation_branch=cast(str, row["translation_branch"]),
                 target_sha=None
                 if row["target_sha"] is None

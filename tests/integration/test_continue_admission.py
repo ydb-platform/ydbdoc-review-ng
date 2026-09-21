@@ -47,6 +47,8 @@ class AdmissionServices:
             "base_sha": BASE_SHA,
             "translation_branch": BRANCH,
             "target_sha": TARGET_SHA,
+            "source_inventory": b"[]",
+            "scope_target_paths": b"[]",
             "stage": "direction",
             "status": "open",
             "created_at": NOW - timedelta(days=1),

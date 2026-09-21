@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from hashlib import sha256
@@ -22,9 +23,17 @@ __all__ = [
     "ContinuationState",
     "ContinuationStateError",
     "RestoredPlan",
+    "SourceChange",
+    "SourceChangeInventory",
     "candidate_sha256",
+    "checkpoint_scope_sha256",
+    "decode_scope_target_paths",
+    "decode_source_inventory",
     "decode_state",
+    "encode_scope_target_paths",
+    "encode_source_inventory",
     "encode_state",
+    "normalize_source_inventory",
     "scope_sha256",
     "validate_restored_maps",
 ]
@@ -64,6 +73,150 @@ class ContinuationStage(str, Enum):
     DIRECTION = "direction"
     TRANSLATION = "translation"
     REVIEW = "review"
+
+
+@dataclass(frozen=True, slots=True)
+class SourceChange:
+    """Only PR-file facts consumed by scope/metadata discovery, never patch bytes."""
+
+    path: RepoPath
+    status: str
+    previous_path: RepoPath | None
+    rename_changed: bool | None
+
+    def __post_init__(self) -> None:
+        _exact(self.path, RepoPath)
+        _exact(self.status, str)
+        if self.status not in {
+            "added",
+            "removed",
+            "modified",
+            "renamed",
+            "copied",
+            "changed",
+            "unchanged",
+        }:
+            raise _fail()
+        if self.previous_path is not None:
+            _exact(self.previous_path, RepoPath)
+        if any(
+            len(path.value.encode("utf-8")) > 4096
+            for path in (self.path, self.previous_path)
+            if path is not None
+        ):
+            raise _fail()
+        if self.status == "renamed":
+            if self.previous_path is None or self.previous_path == self.path:
+                raise _fail()
+            _exact(self.rename_changed, bool)
+        elif self.previous_path is not None or self.rename_changed is not None:
+            raise _fail()
+
+
+@dataclass(frozen=True, slots=True)
+class SourceChangeInventory:
+    """Bounded immutable inventory outside the closed eight-key continuation state."""
+
+    files: tuple[SourceChange, ...]
+
+    def __post_init__(self) -> None:
+        _exact(self.files, tuple)
+        if len(self.files) > 100 or any(type(item) is not SourceChange for item in self.files):
+            raise _fail()
+        paths = tuple(item.path.value for item in self.files)
+        if paths != tuple(sorted(set(paths))):
+            raise _fail()
+
+
+def normalize_source_inventory(files: Sequence[Mapping[str, object]], /) -> SourceChangeInventory:
+    """Project the existing PR files response onto the exact inputs we consume."""
+    if len(files) > 100:
+        raise _fail()
+    try:
+        changes = tuple(
+            SourceChange(
+                _path(raw["filename"]),
+                cast(str, raw["status"]),
+                _path(raw["previous_filename"]) if raw["status"] == "renamed" else None,
+                raw.get("changes") != 0 if raw["status"] == "renamed" else None,
+            )
+            for raw in files
+        )
+        return SourceChangeInventory(tuple(sorted(changes, key=lambda item: item.path.value)))
+    except (KeyError, TypeError, ValueError):
+        raise _fail() from None
+
+
+def encode_source_inventory(inventory: SourceChangeInventory, /) -> str:
+    _exact(inventory, SourceChangeInventory)
+    return json.dumps(
+        [
+            {
+                "path": item.path.value,
+                "status": item.status,
+                "previous_path": None if item.previous_path is None else item.previous_path.value,
+                "rename_changed": item.rename_changed,
+            }
+            for item in inventory.files
+        ],
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def decode_source_inventory(raw: str | bytes, /) -> SourceChangeInventory:
+    if type(raw) not in {str, bytes} or len(raw) > 4_000_000:
+        raise _fail()
+    try:
+        parsed = json.loads(raw, object_pairs_hook=_ObjectPairs)
+        _exact(parsed, list)
+        if len(parsed) > 100:
+            raise _fail()
+        files = []
+        for value in parsed:
+            values = dict(_pairs(value))
+            if set(values) != {"path", "status", "previous_path", "rename_changed"}:
+                raise _fail()
+            files.append(
+                SourceChange(
+                    _path(values["path"]),
+                    cast(str, values["status"]),
+                    None if values["previous_path"] is None else _path(values["previous_path"]),
+                    cast(bool | None, values["rename_changed"]),
+                )
+            )
+        return SourceChangeInventory(tuple(files))
+    except (KeyError, TypeError, ValueError):
+        raise _fail() from None
+
+
+def encode_scope_target_paths(paths: tuple[RepoPath, ...], /) -> str:
+    """Encode the exact selected manifest order, including whole-file/no-op entries."""
+    _exact_paths(paths)
+    # Covers a full 100-file PR with the default 100 dependencies per article.
+    if len(paths) > 10_100:
+        raise _fail()
+    values = tuple(path.value for path in paths)
+    if values != tuple(sorted(values)) or any(
+        len(value.encode("utf-8")) > 4096 for value in values
+    ):
+        raise _fail()
+    encoded = json.dumps(values, ensure_ascii=False, separators=(",", ":"))
+    if len(encoded.encode("utf-8")) > 4_000_000:
+        raise _fail()
+    return encoded
+
+
+def decode_scope_target_paths(raw: str | bytes, /) -> tuple[RepoPath, ...]:
+    if type(raw) not in {str, bytes} or len(raw) > 4_000_000:
+        raise _fail()
+    try:
+        paths = _path_list(json.loads(raw))
+        encode_scope_target_paths(paths)
+        return paths
+    except (KeyError, TypeError, ValueError, RecursionError):
+        raise _fail() from None
 
 
 @dataclass(frozen=True, slots=True)
@@ -323,6 +476,22 @@ def scope_sha256(manifest: ScopeManifest, /) -> ContentHash:
     ]
     payload = {"direction": manifest.direction.value, "entries": entries}
     canonical = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    return ContentHash(sha256(canonical.encode("utf-8")).hexdigest())
+
+
+def checkpoint_scope_sha256(
+    manifest: ScopeManifest, inventory: SourceChangeInventory, /
+) -> ContentHash:
+    """Bind a checkpoint's scope to the exact metadata and PR-file provenance."""
+    canonical = json.dumps(
+        {
+            "scope_sha256": scope_sha256(manifest).value,
+            "source_inventory": json.loads(encode_source_inventory(inventory)),
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
     return ContentHash(sha256(canonical.encode("utf-8")).hexdigest())
 
 

@@ -98,8 +98,8 @@ class ImmutableRunSnapshot:
     context: object = field(repr=False)
 
     def __post_init__(self) -> None:
-        if self.mode not in {Mode.DOC_TRANSLATE, Mode.DOC_VERIFY}:
-            raise ValueError("ImmutableRunSnapshot.mode must be doc_translate or doc_verify")
+        if self.mode not in {Mode.DOC_TRANSLATE, Mode.DOC_VERIFY, Mode.DOC_CONTINUE}:
+            raise ValueError("ImmutableRunSnapshot.mode must be a supported workflow mode")
         if type(self.source_sha) is not GitSha:
             raise TypeError("ImmutableRunSnapshot.source_sha must be GitSha")
         if self.target_sha is not None and type(self.target_sha) is not GitSha:

@@ -90,6 +90,8 @@ def test_install_schema_creates_ttl_protected_job_and_attempt_tables() -> None:
     assert "source_sha Utf8 NOT NULL" not in executor.calls[0][0]
     assert "job_id Utf8," in executor.calls[1][0]
     assert "ON created_at" in executor.calls[2][0]
+    assert "source_inventory String NOT NULL" in executor.calls[2][0]
+    assert "scope_target_paths String NOT NULL" in executor.calls[2][0]
 
 
 def test_existing_schema_migration_keeps_audits_and_adds_nullable_binding() -> None:
@@ -103,6 +105,8 @@ def test_existing_schema_migration_keeps_audits_and_adds_nullable_binding() -> N
     )
     assert "CREATE TABLE `ydbdoc_review/continuations`" in statements[2]
     assert 'TTL = Interval("P14D") ON created_at' in statements[2]
+    assert "source_inventory String NOT NULL" in statements[2]
+    assert "scope_target_paths String NOT NULL" in statements[2]
 
 
 def test_migration_failure_does_not_echo_sdk_diagnostics() -> None:

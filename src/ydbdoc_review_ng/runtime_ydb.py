@@ -21,6 +21,8 @@ def parameter_types(parameters: Mapping[str, object]) -> dict[str, str]:
         "source_sha": "Utf8?",
         "job_id": "Utf8?",
         "state": "String",
+        "source_inventory": "String",
+        "scope_target_paths": "String",
         "request": "String",
         "response": "String?",
         "cost_rub": "Decimal(22,9)?",

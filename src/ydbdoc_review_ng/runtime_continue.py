@@ -8,10 +8,34 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
+from ydbdoc_review_ng.continuation import (
+    AcceptedMap,
+    ContinuationStage,
+    ContinuationStateError,
+    RestoredPlan,
+    candidate_sha256,
+    checkpoint_scope_sha256,
+    validate_restored_maps,
+)
+from ydbdoc_review_ng.direction import (
+    Direction,
+    DirectionPairDecision,
+    DirectionPairVerdict,
+    DirectionSelectionResult,
+    DirectionSelectionState,
+)
 from ydbdoc_review_ng.persistence import ContinuationCheckpoint
 from ydbdoc_review_ng.runtime_github import GitHubBackend, RuntimeBoundaryError
+from ydbdoc_review_ng.scope import FileOperation, ScopeOrigin
+
+if TYPE_CHECKING:
+    from ydbdoc_review_ng.runtime_content import (
+        FrozenPreparation,
+        FrozenSourcePlans,
+        RuntimeContent,
+    )
 
 
 class CheckpointReader(Protocol):
@@ -35,6 +59,81 @@ class ContinueAdmission:
     source_pr: int
     trigger: ContinueTrigger
     checkpoint: ContinuationCheckpoint
+
+
+@dataclass(frozen=True, slots=True)
+class ContinueReplay:
+    preparation: FrozenPreparation
+    plans: FrozenSourcePlans | None
+    accepted_maps: tuple[AcceptedMap, ...]
+
+
+def replay_continue(
+    content: RuntimeContent, checkpoint: ContinuationCheckpoint, /
+) -> ContinueReplay:
+    """Rebuild and validate saved plans. No workflow execution or model calls."""
+    snapshot = content.source.snapshot_continue(checkpoint)
+    preparation = content.prepare_source(snapshot)
+    state = checkpoint.state
+    if state.stage is ContinuationStage.DIRECTION:
+        return ContinueReplay(preparation, None, ())
+    referenced = {item.target_path for item in state.accepted_maps} | set(state.pending_paths)
+    potential = next(
+        (scope for scope in preparation.potential.scopes if scope.direction is state.direction),
+        None,
+    )
+    if potential is None:
+        raise ContinuationStateError()
+    # Accepted/pending maps omit no-op and whole-file operations. Only the saved
+    # selected manifest can distinguish a selected no-op from COMPLETE_PAIR.
+    selected_paths = set(checkpoint.scope_target_paths)
+    selected_keys = {
+        key
+        for entry in potential.entries
+        if entry.origin is ScopeOrigin.INITIAL and entry.pair.target_path in selected_paths
+        for key in entry.initial_keys
+    }
+    mixed = len({locale for pair in preparation.inventories for locale in pair.changed_locales}) > 1
+    decisions = tuple(
+        DirectionPairDecision(
+            pair,
+            DirectionPairVerdict.COMPLETE_PAIR
+            if mixed and pair.is_complete and pair.key not in selected_keys
+            else DirectionPairVerdict.RU_TO_EN
+            if state.direction is Direction.RU_TO_EN
+            else DirectionPairVerdict.EN_TO_RU,
+        )
+        for pair in preparation.inventories
+    )
+    direction = DirectionSelectionResult(
+        DirectionSelectionState.SELECTED, state.direction, decisions, None
+    )
+    plans = content.select_source(preparation, direction=direction)
+    if (
+        plans.manifest is None
+        or tuple(entry.pair.target_path for entry in plans.manifest.entries)
+        != checkpoint.scope_target_paths
+        or checkpoint_scope_sha256(plans.manifest, checkpoint.source_inventory)
+        != state.scope_sha256
+    ):
+        raise ContinuationStateError()
+    restored = tuple(
+        RestoredPlan(document.entry.pair.target_path, document.source, document.plan)
+        for document in plans.documents
+    )
+    validate_restored_maps(state, restored)
+    required = {
+        document.entry.pair.target_path
+        for document in plans.documents
+        if document.entry.operation is not FileOperation.RENAME_TARGET
+    }
+    if required != referenced:
+        raise ContinuationStateError()
+    if state.stage is ContinuationStage.REVIEW:
+        candidate = content.assemble(plans, state.accepted_maps)
+        if candidate_sha256(candidate.content) != state.candidate_sha256:
+            raise ContinuationStateError()
+    return ContinueReplay(preparation, plans, state.accepted_maps)
 
 
 def _command_context(body: str) -> str | None:
