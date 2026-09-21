@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable
+from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 from ydbdoc_review_ng.domain import GitSha, RepoPath, SnapshotRef
@@ -19,6 +22,85 @@ JsonTransport = Callable[[str, str, object], Any]
 
 class RuntimeBoundaryError(RuntimeError):
     """Only fixed diagnostics cross a remote-service boundary."""
+
+
+@dataclass(frozen=True, slots=True)
+class IssueEvent:
+    event_id: int
+    event: str
+    label: str | None
+    actor: str
+    created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class OperatorComment:
+    comment_id: int
+    author: str
+    created_at: datetime
+    updated_at: datetime
+    body: str = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
+class TranslationProvenance:
+    source_pr: int
+    source_sha: GitSha
+
+
+@dataclass(frozen=True, slots=True)
+class PullRequestIdentity:
+    number: int
+    head_repository: str
+    head_branch: str
+    head_sha: GitSha
+    base_repository: str
+    base_branch: str
+    provenance: TranslationProvenance | None
+
+
+def _positive_id(value: Any) -> int:
+    if type(value) is not int or value < 1:
+        raise ValueError
+    return value
+
+
+def _text(value: Any) -> str:
+    if type(value) is not str or not value.strip():
+        raise ValueError
+    return value
+
+
+def _timestamp(value: Any) -> datetime:
+    if (
+        type(value) is not str
+        or re.fullmatch(
+            r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?"
+            r"(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)",
+            value,
+        )
+        is None
+    ):
+        raise ValueError
+    return datetime.fromisoformat(value)
+
+
+def _single_page(value: Any) -> list[Any]:
+    if not isinstance(value, list):
+        raise TypeError
+    if len(value) > 100:
+        raise RuntimeBoundaryError("github_result_exceeds_single_page")
+    return value
+
+
+def _translation_provenance(body: str) -> TranslationProvenance | None:
+    if "ydbdoc-source-" not in body:
+        return None
+    prs = re.findall(r"<!-- ydbdoc-source-pr:([1-9][0-9]*) -->", body)
+    shas = re.findall(r"<!-- ydbdoc-source-sha:([0-9a-f]{40}) -->", body)
+    if len(prs) != 1 or len(shas) != 1 or body.count("ydbdoc-source-") != 2:
+        raise RuntimeBoundaryError("translation_provenance_invalid")
+    return TranslationProvenance(int(prs[0]), GitSha(shas[0]))
 
 
 class GitHubHTTP:
@@ -64,6 +146,76 @@ class GitHubBackend:
 
     def request(self, method: str, path: str, payload: object = None) -> Any:
         return self.transport(method, self.prefix + path, payload)
+
+    def read_issue_events(self, pr_number: int, /) -> tuple[IssueEvent, ...]:
+        """Read one complete page, retaining the actual actor and event time."""
+        rows = self.request("GET", f"/issues/{pr_number}/events?per_page=100")
+        try:
+            events = tuple(
+                IssueEvent(
+                    _positive_id(row["id"]),
+                    _text(row["event"]),
+                    _text(row["label"]["name"])
+                    if row["event"] in {"labeled", "unlabeled"}
+                    else None,
+                    _text(row["actor"]["login"]),
+                    _timestamp(row["created_at"]),
+                )
+                for row in _single_page(rows)
+            )
+            if len({event.event_id for event in events}) != len(events):
+                raise ValueError
+            return events
+        except (KeyError, TypeError, ValueError):
+            raise RuntimeBoundaryError("issue_events_invalid") from None
+
+    def read_operator_comments(self, pr_number: int, /) -> tuple[OperatorComment, ...]:
+        """Unlike QA comments, these keep authors and timestamps for authorization."""
+        rows = self.request("GET", f"/issues/{pr_number}/comments?per_page=100")
+        try:
+            comments = []
+            for row in _single_page(rows):
+                if type(row["body"]) is not str:
+                    raise ValueError
+                created_at = _timestamp(row["created_at"])
+                updated_at = _timestamp(row["updated_at"])
+                if updated_at < created_at:
+                    raise ValueError
+                comments.append(
+                    OperatorComment(
+                        _positive_id(row["id"]),
+                        _text(row["user"]["login"]),
+                        created_at,
+                        updated_at,
+                        row["body"],
+                    )
+                )
+            if len({comment.comment_id for comment in comments}) != len(comments):
+                raise ValueError
+            return tuple(comments)
+        except (KeyError, TypeError, ValueError):
+            raise RuntimeBoundaryError("operator_comments_invalid") from None
+
+    def read_pull_request_identity(self, pr_number: int, /) -> PullRequestIdentity:
+        """Read existing publication markers; callers must match them to a checkpoint."""
+        row = self.request("GET", f"/pulls/{pr_number}")
+        try:
+            body = row["body"]
+            if body is None:
+                body = ""
+            if type(body) is not str or _positive_id(row["number"]) != pr_number:
+                raise ValueError
+            return PullRequestIdentity(
+                pr_number,
+                _text(row["head"]["repo"]["full_name"]),
+                _text(row["head"]["ref"]),
+                GitSha(row["head"]["sha"]),
+                _text(row["base"]["repo"]["full_name"]),
+                _text(row["base"]["ref"]),
+                _translation_provenance(body),
+            )
+        except (KeyError, TypeError, ValueError):
+            raise RuntimeBoundaryError("pull_request_identity_invalid") from None
 
     def read_bytes(self, snapshot: SnapshotRef, path: RepoPath, /) -> bytes | None:
         if snapshot.repository.value != self.repository:

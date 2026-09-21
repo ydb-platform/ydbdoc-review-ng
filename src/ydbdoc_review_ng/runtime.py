@@ -37,6 +37,7 @@ from ydbdoc_review_ng.publication import GitPublicationAdapter, PublicationConte
 from ydbdoc_review_ng.quality import QualityReviewResult
 from ydbdoc_review_ng.reporting import QAReporter, ReportContext
 from ydbdoc_review_ng.repository import BaseBranch, PullRequestState, ResolvedRepositorySnapshots
+from ydbdoc_review_ng.runtime_continue import CheckpointReader, ContinueAdmission, admit_continue
 from ydbdoc_review_ng.runtime_github import (
     GitHubBackend,
     GitHubHTTP,
@@ -120,6 +121,19 @@ class RuntimeSource:
         return AuthorizedRun(
             Mode.DOC_TRANSLATE, f"translation/pr-{request.pr_number}", None, request
         )
+
+    def authorize_continue(
+        self, pr_number: int, checkpoints: CheckpointReader, /, *, now: datetime
+    ) -> ContinueAdmission:
+        """Read-only admission using actual label/comment actors, not Actions actor env."""
+        allowed = frozenset(
+            actor
+            for actor in re.split(
+                r"[,\s]+", self.environment.get("YDBDOC_ALLOWED_ACTORS", "").strip()
+            )
+            if actor
+        )
+        return admit_continue(self.github, checkpoints, pr_number, allowed, now=now)
 
     def authorize_verify(self, request: VerifyWorkflowInput, /) -> AuthorizedRun:
         self._authorize()
