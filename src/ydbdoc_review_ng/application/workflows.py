@@ -10,7 +10,7 @@ from enum import Enum
 from typing import NoReturn, Protocol
 
 from ydbdoc_review_ng.domain import GitSha, Mode
-from ydbdoc_review_ng.persistence import DailyBudgetExceeded, JobStatus
+from ydbdoc_review_ng.persistence import ContinuationCheckpoint, DailyBudgetExceeded, JobStatus
 from ydbdoc_review_ng.ports import Clock
 from ydbdoc_review_ng.quality import QualityReviewResult, Verdict
 
@@ -136,7 +136,7 @@ class WorkflowPersistencePort(Protocol):
         /,
         *,
         pr_number: int,
-        source_sha: str,
+        source_sha: str | None,
         target_sha: str | None,
         started_at: datetime,
     ) -> str: ...
@@ -153,6 +153,16 @@ class WorkflowPersistencePort(Protocol):
     ) -> None: ...
 
     def check_daily_budget(self, mode: Mode, /, *, limit_rub: Decimal, now: datetime) -> None: ...
+
+    def bind_job_snapshot(
+        self, job_id: str, /, *, source_sha: str, target_sha: str | None
+    ) -> None: ...
+
+    def save_checkpoint(self, checkpoint: ContinuationCheckpoint, /, *, now: datetime) -> None: ...
+
+    def load_checkpoint(self, pr_number: int, /, *, now: datetime) -> ContinuationCheckpoint: ...
+
+    def close_checkpoint(self, continuation_id: str, /) -> None: ...
 
 
 class SourceWorkflowPort(Protocol):
@@ -210,6 +220,7 @@ class LinearWorkflows:
     """Execute doc_translate and doc_verify as bounded linear workflows."""
 
     __slots__ = (
+        "_bind_models",
         "_clock",
         "_content",
         "_persistence",
@@ -229,6 +240,7 @@ class LinearWorkflows:
         reviewer: QualityReviewPort,
         publisher: PublicationPort,
         reporter: VerdictPort,
+        bind_models: Callable[[str], None] | None = None,
     ) -> None:
         self._clock = clock
         self._persistence = persistence
@@ -237,6 +249,7 @@ class LinearWorkflows:
         self._reviewer = reviewer
         self._publisher = publisher
         self._reporter = reporter
+        self._bind_models = bind_models
 
     def doc_translate(self, request: TranslateWorkflowInput, /) -> WorkflowResult:
         mode = Mode.DOC_TRANSLATE
@@ -377,7 +390,7 @@ class LinearWorkflows:
         self,
         mode: Mode,
         pr_number: int,
-        source_sha: GitSha,
+        source_sha: GitSha | None,
         *,
         target_sha: GitSha | None,
     ) -> tuple[str, datetime]:
@@ -386,13 +399,18 @@ class LinearWorkflows:
             job_id = self._persistence.start_job(
                 mode,
                 pr_number=pr_number,
-                source_sha=source_sha.value,
+                source_sha=source_sha.value if source_sha is not None else None,
                 target_sha=target_sha.value if target_sha is not None else None,
                 started_at=started_at,
             )
-            return job_id, started_at
         except Exception:  # noqa: BLE001 - sanitize every injected audit/clock failure.
             raise WorkflowError(mode, WorkflowStage.AUDIT_START) from None
+        try:
+            if self._bind_models is not None:
+                self._bind_models(job_id)
+        except Exception as error:  # noqa: BLE001 - terminalize after successful audit creation.
+            self._fail_job(job_id, mode, WorkflowStage.AUDIT_START, error, started_at, target_sha)
+        return job_id, started_at
 
     def _succeed_job(
         self, job_id: str, mode: Mode, audit_started_at: datetime, final_sha: GitSha

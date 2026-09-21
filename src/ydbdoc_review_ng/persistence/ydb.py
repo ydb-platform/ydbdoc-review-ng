@@ -7,14 +7,21 @@ transactions, retries, and workflow sequencing belong outside this module.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from datetime import UTC, date, datetime, time
+from dataclasses import dataclass, field, replace
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from enum import Enum
-from typing import Protocol
+from typing import Protocol, cast
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
-from ydbdoc_review_ng.domain import Mode
+from ydbdoc_review_ng.continuation import (
+    ContinuationStage,
+    ContinuationState,
+    decode_state,
+    encode_state,
+)
+from ydbdoc_review_ng.domain import GitSha, Mode
 from ydbdoc_review_ng.models import AttemptResult
 
 _MOSCOW = ZoneInfo("Europe/Moscow")
@@ -46,6 +53,56 @@ class JobStatus(str, Enum):
     FAILED = "failed"
 
 
+class CheckpointStatus(str, Enum):
+    OPEN = "open"
+    CLOSED = "closed"
+
+
+@dataclass(frozen=True, slots=True)
+class ContinuationCheckpoint:
+    """One lineage's current semantic stop; its original timestamp never moves."""
+
+    continuation_id: str
+    job_id: str
+    source_pr: int
+    trigger_pr: int
+    source_sha: GitSha
+    base_sha: GitSha
+    translation_branch: str
+    target_sha: GitSha | None
+    state: ContinuationState = field(repr=False)
+    created_at: datetime
+    status: CheckpointStatus = CheckpointStatus.OPEN
+
+    def __post_init__(self) -> None:
+        if any(
+            type(value) is not str or not value.strip()
+            for value in (self.continuation_id, self.job_id, self.translation_branch)
+        ) or any(
+            type(value) is not int or value < 1 for value in (self.source_pr, self.trigger_pr)
+        ):
+            raise PersistenceError("invalid continuation envelope")
+        if (
+            type(self.source_sha) is not GitSha
+            or type(self.base_sha) is not GitSha
+            or (self.target_sha is not None and type(self.target_sha) is not GitSha)
+            or type(self.status) is not CheckpointStatus
+            or type(self.created_at) is not datetime
+            or self.created_at.utcoffset() is None
+        ):
+            raise PersistenceError("invalid continuation envelope")
+        try:
+            encode_state(self.state)
+        except (TypeError, ValueError):
+            raise PersistenceError("invalid continuation state") from None
+        if self.state.stage is ContinuationStage.REVIEW and self.target_sha is None:
+            raise PersistenceError("review checkpoint requires target SHA")
+
+    @property
+    def expires_at(self) -> datetime:
+        return self.created_at + timedelta(days=14)
+
+
 class YdbPersistence:
     """Store job/attempt audit data and expose the non-atomic daily gate."""
 
@@ -64,7 +121,7 @@ class YdbPersistence:
                 job_id Utf8 NOT NULL,
                 mode Utf8 NOT NULL,
                 pr_number Uint64 NOT NULL,
-                source_sha Utf8 NOT NULL,
+                source_sha Utf8,
                 target_sha Utf8,
                 started_at Timestamp NOT NULL,
                 finished_at Timestamp,
@@ -78,6 +135,7 @@ class YdbPersistence:
             "schema installation",
             f"""CREATE TABLE `{self._table("attempts")}` (
                 attempt_id Utf8 NOT NULL,
+                job_id Utf8,
                 role Utf8 NOT NULL,
                 request String NOT NULL,
                 response String,
@@ -91,6 +149,146 @@ class YdbPersistence:
             ) WITH (TTL = {_TTL} ON started_at);""",
             {},
         )
+        self._install_continuations()
+
+    def migrate_schema(self) -> None:
+        """Explicit one-time upgrade from the original jobs/attempts schema.
+
+        Do not run after install_schema. DDL is non-transactional; a partial
+        failure requires checking applied statements before retrying the upgrade.
+        """
+        self._execute(
+            "schema migration",
+            f"ALTER TABLE `{self._table('attempts')}` ADD COLUMN job_id Utf8;",
+            {},
+        )
+        self._execute(
+            "schema migration",
+            f"ALTER TABLE `{self._table('jobs')}` ALTER COLUMN source_sha DROP NOT NULL;",
+            {},
+        )
+        self._install_continuations()
+
+    def _install_continuations(self) -> None:
+        self._execute(
+            "continuation schema installation",
+            f"""CREATE TABLE `{self._table("continuations")}` (
+                continuation_id Utf8 NOT NULL,
+                job_id Utf8 NOT NULL,
+                source_pr Uint64 NOT NULL,
+                trigger_pr Uint64 NOT NULL,
+                source_sha Utf8 NOT NULL,
+                base_sha Utf8 NOT NULL,
+                translation_branch Utf8 NOT NULL,
+                target_sha Utf8,
+                stage Utf8 NOT NULL,
+                state String NOT NULL,
+                status Utf8 NOT NULL,
+                created_at Timestamp NOT NULL,
+                PRIMARY KEY (continuation_id)
+            ) WITH (TTL = {_TTL} ON created_at);""",
+            {},
+        )
+
+    def save_checkpoint(self, checkpoint: ContinuationCheckpoint, /, *, now: datetime) -> None:
+        """Save or replace one semantic stop, retaining the persisted lineage age."""
+        rows = self._execute(
+            "checkpoint lookup",
+            f"SELECT * FROM `{self._table('continuations')}` WHERE continuation_id = $continuation_id;",
+            {"continuation_id": checkpoint.continuation_id},
+        )
+        if rows:
+            previous = self._checkpoint(rows[0])
+            self._require_open(previous, now)
+            for name in (
+                "job_id",
+                "source_pr",
+                "source_sha",
+                "base_sha",
+                "translation_branch",
+            ):
+                if getattr(previous, name) != getattr(checkpoint, name):
+                    raise PersistenceError("continuation lineage mismatch")
+            checkpoint = replace(checkpoint, created_at=previous.created_at)
+        self._require_open(checkpoint, now)
+        self._execute(
+            "checkpoint save",
+            f"""UPSERT INTO `{self._table("continuations")}`
+                (continuation_id, job_id, source_pr, trigger_pr, source_sha, base_sha,
+                 translation_branch, target_sha, stage, state, status, created_at)
+                VALUES ($continuation_id, $job_id, $source_pr, $trigger_pr, $source_sha,
+                 $base_sha, $translation_branch, $target_sha, $stage, $state, $status, $created_at);""",
+            {
+                "continuation_id": checkpoint.continuation_id,
+                "job_id": checkpoint.job_id,
+                "source_pr": checkpoint.source_pr,
+                "trigger_pr": checkpoint.trigger_pr,
+                "source_sha": checkpoint.source_sha.value,
+                "base_sha": checkpoint.base_sha.value,
+                "translation_branch": checkpoint.translation_branch,
+                "target_sha": None
+                if checkpoint.target_sha is None
+                else checkpoint.target_sha.value,
+                "stage": checkpoint.state.stage.value,
+                "state": encode_state(checkpoint.state).encode("utf-8"),
+                "status": checkpoint.status.value,
+                "created_at": checkpoint.created_at,
+            },
+        )
+
+    def load_checkpoint(self, pr_number: int, /, *, now: datetime) -> ContinuationCheckpoint:
+        rows = self._execute(
+            "checkpoint lookup",
+            f"""SELECT * FROM `{self._table("continuations")}`
+                WHERE (source_pr = $pr_number OR trigger_pr = $pr_number) AND status = 'open';""",
+            {"pr_number": pr_number},
+        )
+        applicable = [self._checkpoint(row) for row in rows if row.get("status") == "open"]
+        if len(applicable) != 1:
+            raise PersistenceError("continuation checkpoint missing or ambiguous")
+        checkpoint = applicable[0]
+        self._require_open(checkpoint, now)
+        return checkpoint
+
+    def close_checkpoint(self, continuation_id: str, /) -> None:
+        self._execute(
+            "checkpoint close",
+            f"UPDATE `{self._table('continuations')}` SET status = 'closed' WHERE continuation_id = $continuation_id;",
+            {"continuation_id": continuation_id},
+        )
+
+    @staticmethod
+    def _require_open(checkpoint: ContinuationCheckpoint, now: datetime) -> None:
+        if (
+            now.utcoffset() is None
+            or checkpoint.status is not CheckpointStatus.OPEN
+            or not (checkpoint.created_at <= now < checkpoint.expires_at)
+        ):
+            raise PersistenceError("continuation checkpoint closed or expired")
+
+    @staticmethod
+    def _checkpoint(row: Mapping[str, object]) -> ContinuationCheckpoint:
+        try:
+            state = decode_state(cast(str | bytes, row["state"]))
+            if row["stage"] != state.stage.value:
+                raise ValueError
+            return ContinuationCheckpoint(
+                continuation_id=cast(str, row["continuation_id"]),
+                job_id=cast(str, row["job_id"]),
+                source_pr=cast(int, row["source_pr"]),
+                trigger_pr=cast(int, row["trigger_pr"]),
+                source_sha=GitSha(cast(str, row["source_sha"])),
+                base_sha=GitSha(cast(str, row["base_sha"])),
+                translation_branch=cast(str, row["translation_branch"]),
+                target_sha=None
+                if row["target_sha"] is None
+                else GitSha(cast(str, row["target_sha"])),
+                state=state,
+                created_at=cast(datetime, row["created_at"]),
+                status=CheckpointStatus(cast(str, row["status"])),
+            )
+        except (KeyError, TypeError, ValueError):
+            raise PersistenceError("invalid continuation checkpoint") from None
 
     def start_job(
         self,
@@ -98,11 +296,13 @@ class YdbPersistence:
         /,
         *,
         pr_number: int,
-        source_sha: str,
+        source_sha: str | None,
         target_sha: str | None,
         started_at: datetime,
     ) -> str:
         self._require_audited_mode(mode)
+        if source_sha is None and mode is not Mode.DOC_CONTINUE:
+            raise ValueError("source SHA is required for translate and verify")
         job_id = str(uuid4())
         self._execute(
             "job start",
@@ -120,6 +320,23 @@ class YdbPersistence:
             },
         )
         return job_id
+
+    def bind_job_snapshot(self, job_id: str, /, *, source_sha: str, target_sha: str | None) -> None:
+        """Bind a restored continue snapshot without replacing conflicting SHA values."""
+        try:
+            GitSha(source_sha)
+            if target_sha is not None:
+                GitSha(target_sha)
+        except (TypeError, ValueError):
+            raise PersistenceError("invalid job snapshot") from None
+        self._execute(
+            "job snapshot binding",
+            f"""UPDATE `{self._table("jobs")}` SET source_sha = $source_sha, target_sha = $target_sha
+                WHERE job_id = $job_id AND mode = 'doc_continue' AND status = 'started'
+                AND (source_sha IS NULL OR source_sha = $source_sha)
+                AND (target_sha IS NULL OR target_sha = $target_sha);""",
+            {"job_id": job_id, "source_sha": source_sha, "target_sha": target_sha},
+        )
 
     def finish_job(
         self,
@@ -150,17 +367,18 @@ class YdbPersistence:
                 VALUES ($job_id, $target_sha, $finished_at, $status, $error);"""
         self._execute("job finish", statement, parameters)
 
-    def __call__(self, attempt: AttemptResult, /) -> None:
+    def __call__(self, attempt: AttemptResult, /, *, job_id: str | None = None) -> None:
         """Record a started model attempt through the T010 ``AttemptRecorder`` shape."""
         self._execute(
             "attempt recording",
             f"""UPSERT INTO `{self._table("attempts")}`
-                (attempt_id, role, request, response, status, error, model, started_at,
+                (attempt_id, job_id, role, request, response, status, error, model, started_at,
                  finished_at, cost_rub)
-                VALUES ($attempt_id, $role, $request, $response, $status, $error, $model,
+                VALUES ($attempt_id, $job_id, $role, $request, $response, $status, $error, $model,
                  $started_at, $finished_at, $cost_rub);""",
             {
                 "attempt_id": str(uuid4()),
+                "job_id": job_id,
                 "role": attempt.request_role.value,
                 "request": attempt.request_payload,
                 "response": attempt.raw_response,
@@ -190,7 +408,7 @@ class YdbPersistence:
         return total
 
     def check_daily_budget(self, mode: Mode, /, *, limit_rub: Decimal, now: datetime) -> None:
-        if mode is Mode.DOC_VERIFY:
+        if mode in {Mode.DOC_VERIFY, Mode.DOC_CONTINUE}:
             return
         self._require_audited_mode(mode)
         if type(limit_rub) is not Decimal or limit_rub < 0:
@@ -213,8 +431,8 @@ class YdbPersistence:
 
     @staticmethod
     def _require_audited_mode(mode: Mode) -> None:
-        if mode not in {Mode.DOC_TRANSLATE, Mode.DOC_VERIFY}:
-            raise ValueError("mode must be doc_translate or doc_verify")
+        if mode not in {Mode.DOC_TRANSLATE, Mode.DOC_VERIFY, Mode.DOC_CONTINUE}:
+            raise ValueError("unsupported audit mode")
 
     @staticmethod
     def _moscow_day_interval(day: date) -> tuple[datetime, datetime]:

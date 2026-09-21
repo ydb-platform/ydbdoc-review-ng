@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime
 from typing import Any
 
 from ydbdoc_review_ng.persistence import PersistenceError
@@ -15,6 +16,11 @@ DEFAULT_YDB_DATABASE = "/ru-central1/b1g7gqj2vnq67gjseuva/etns0641qf73btm7j21k"
 def parameter_types(parameters: Mapping[str, object]) -> dict[str, str]:
     types = {
         "pr_number": "Uint64",
+        "source_pr": "Uint64",
+        "trigger_pr": "Uint64",
+        "source_sha": "Utf8?",
+        "job_id": "Utf8?",
+        "state": "String",
         "request": "String",
         "response": "String?",
         "cost_rub": "Decimal(22,9)?",
@@ -79,6 +85,16 @@ class SDKExecutor:
             results = self._pool.execute_with_retries(
                 "\n".join(declarations) + "\n" + statement, values
             )
-            return [dict(row) for result in results for row in result.rows]
+            # The SDK decodes native YDB Timestamp values as naive UTC datetimes.
+            return [
+                {
+                    name: value.replace(tzinfo=UTC)
+                    if isinstance(value, datetime) and value.tzinfo is None
+                    else value
+                    for name, value in row.items()
+                }
+                for result in results
+                for row in result.rows
+            ]
         except Exception:  # noqa: BLE001 - SDK diagnostics may contain credentials or audit payloads.
             raise PersistenceError("YDB query execution failed") from None

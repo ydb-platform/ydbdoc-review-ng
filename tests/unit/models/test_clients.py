@@ -248,7 +248,8 @@ def test_t017_f09_runtime_prices_ordinary_native_usage_without_synthetic_cost() 
         def __init__(self) -> None:
             self.attempts = []
 
-        def __call__(self, attempt) -> None:
+        def __call__(self, attempt, *, job_id) -> None:
+            assert job_id == "current-job"
             self.attempts.append(attempt)
 
     persistence = Persistence()
@@ -257,6 +258,7 @@ def test_t017_f09_runtime_prices_ordinary_native_usage_without_synthetic_cost() 
         persistence,  # type: ignore[arg-type]
         FakeTransport(native_response()),
     )
+    models.bind_job("current-job")
 
     result = models.invoke(request())
 

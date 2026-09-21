@@ -68,14 +68,25 @@ class RecordedModels:
     ) -> None:
         self.environment, self.persistence, self.transport = environment, persistence, transport
         self.cost: Decimal | None = Decimal(0)
+        self.job_id: str | None = None
+
+    def bind_job(self, job_id: str) -> None:
+        if not job_id:
+            raise RuntimeBoundaryError("model_job_missing")
+        self.job_id = job_id
+        self.cost = Decimal(0)
 
     def record(self, attempt: AttemptResult) -> None:
-        self.persistence(attempt)
+        if self.job_id is None:
+            raise RuntimeBoundaryError("model_job_missing")
+        self.persistence(attempt, job_id=self.job_id)
         self.cost = (
             None if self.cost is None or attempt.cost_rub is None else self.cost + attempt.cost_rub
         )
 
     def invoke(self, request: ModelRequest, /) -> ModelCallResult:
+        if self.job_id is None:
+            raise RuntimeBoundaryError("model_job_missing")
         client = NativeYandexClient(
             YandexCredentials(
                 self.environment.get("YANDEX_API_KEY", ""),
@@ -276,4 +287,5 @@ def create_runtime(
         reviewer=content,
         publisher=publisher,
         reporter=RuntimeReporter(source, publisher, models),
+        bind_models=models.bind_job,
     )

@@ -1,6 +1,8 @@
 """Minimal durable YDB audit records and daily translation budget gate."""
 
 from ydbdoc_review_ng.persistence.ydb import (
+    CheckpointStatus,
+    ContinuationCheckpoint,
     DailyBudgetExceeded,
     JobStatus,
     PersistenceError,
@@ -9,6 +11,8 @@ from ydbdoc_review_ng.persistence.ydb import (
 )
 
 __all__ = [
+    "CheckpointStatus",
+    "ContinuationCheckpoint",
     "DailyBudgetExceeded",
     "JobStatus",
     "PersistenceError",

@@ -304,6 +304,57 @@ def verify_input() -> VerifyWorkflowInput:
     return VerifyWorkflowInput(42, SOURCE_SHA, TARGET_SHA)
 
 
+@pytest.mark.parametrize("mode", ["translate", "verify"])
+def test_model_binding_receives_new_audit_id_before_authorization(mode: str) -> None:
+    scenario = Scenario()
+    persistence = FakePersistence(scenario)
+    bound: list[str] = []
+
+    def bind(job_id: str) -> None:
+        assert scenario.events == ["job:start"]
+        bound.append(job_id)
+
+    workflows = LinearWorkflows(
+        clock=FakeClock(),
+        persistence=persistence,
+        source=FakeSource(scenario),
+        content=FakeContent(scenario),
+        reviewer=FakeReviewer(scenario),
+        publisher=FakePublisher(scenario),
+        reporter=FakeReporter(scenario),
+        bind_models=bind,
+    )
+    result = (
+        workflows.doc_translate(translate_input())
+        if mode == "translate"
+        else workflows.doc_verify(verify_input())
+    )
+    assert bound == [result.job_id]
+
+
+def test_binding_failure_terminalizes_started_audit_without_other_effects() -> None:
+    scenario = Scenario()
+    persistence = FakePersistence(scenario)
+
+    def bind(job_id: str) -> None:
+        raise RuntimeError(SECRET)
+
+    workflows = LinearWorkflows(
+        clock=FakeClock(),
+        persistence=persistence,
+        source=FakeSource(scenario),
+        content=FakeContent(scenario),
+        reviewer=FakeReviewer(scenario),
+        publisher=FakePublisher(scenario),
+        reporter=FakeReporter(scenario),
+        bind_models=bind,
+    )
+    with pytest.raises(WorkflowError) as error:
+        workflows.doc_translate(translate_input())
+    assert SECRET not in str(error.value)
+    assert scenario.events == ["job:start", "job:finish:failed"]
+
+
 def test_translate_success_publishes_once_then_reviews_and_terminalizes() -> None:
     scenario = Scenario()
     workflows, persistence = build_workflows(scenario)

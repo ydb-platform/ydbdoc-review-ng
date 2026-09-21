@@ -82,11 +82,58 @@ def test_install_schema_creates_ttl_protected_job_and_attempt_tables() -> None:
     YdbPersistence(executor).install_schema()
 
     ddl = "\n".join(statement for statement, _ in executor.calls)
-    assert len(executor.calls) == 2
+    assert len(executor.calls) == 3
     assert "jobs" in ddl
     assert "attempts" in ddl
-    assert ddl.count('Interval("P14D")') == 2
+    assert ddl.count('Interval("P14D")') == 3
     assert "request" in ddl and "response" in ddl
+    assert "source_sha Utf8 NOT NULL" not in executor.calls[0][0]
+    assert "job_id Utf8," in executor.calls[1][0]
+    assert "ON created_at" in executor.calls[2][0]
+
+
+def test_existing_schema_migration_keeps_audits_and_adds_nullable_binding() -> None:
+    executor = FakeExecutor()
+    YdbPersistence(executor).migrate_schema()
+    statements = [statement for statement, _ in executor.calls]
+    assert len(statements) == 3
+    assert statements[0] == "ALTER TABLE `ydbdoc_review/attempts` ADD COLUMN job_id Utf8;"
+    assert (
+        statements[1] == "ALTER TABLE `ydbdoc_review/jobs` ALTER COLUMN source_sha DROP NOT NULL;"
+    )
+    assert "CREATE TABLE `ydbdoc_review/continuations`" in statements[2]
+    assert 'TTL = Interval("P14D") ON created_at' in statements[2]
+
+
+def test_migration_failure_does_not_echo_sdk_diagnostics() -> None:
+    with pytest.raises(PersistenceError, match="schema migration") as error:
+        YdbPersistence(EchoingExecutor()).migrate_schema()
+    assert "bound parameters" not in str(error.value)
+
+
+def test_continue_starts_without_sha_then_binds_restored_snapshot() -> None:
+    executor = FakeExecutor()
+    store = YdbPersistence(executor)
+    job_id = store.start_job(
+        Mode.DOC_CONTINUE,
+        pr_number=52,
+        source_sha=None,
+        target_sha=None,
+        started_at=datetime(2026, 9, 21, 9, tzinfo=UTC),
+    )
+    store.bind_job_snapshot(job_id, source_sha="a" * 40, target_sha="b" * 40)
+    assert executor.calls[0][1]["source_sha"] is None
+    query, bound = executor.calls[1]
+    assert bound == {"job_id": job_id, "source_sha": "a" * 40, "target_sha": "b" * 40}
+    assert "UPDATE" in query and "source_sha IS NULL" in query
+
+
+def test_continue_budget_gate_performs_no_database_reads() -> None:
+    executor = FakeExecutor()
+    YdbPersistence(executor).check_daily_budget(
+        Mode.DOC_CONTINUE, limit_rub=Decimal(0), now=datetime(2026, 9, 21, tzinfo=UTC)
+    )
+    assert executor.calls == []
 
 
 def test_start_and_terminal_finish_write_a_job_audit_record() -> None:
