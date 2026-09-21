@@ -75,7 +75,14 @@ class CaptureServices(RuntimeServices):
             elif "UPDATE" in statement:
                 if parameters["continuation_id"] in self.rows:
                     row = self.rows[parameters["continuation_id"]]
-                    if "SET status = 'open'" in statement:
+                    if "SET consumed_by_job_id" in statement:
+                        if all(
+                            row.get(name) == value
+                            for name, value in parameters.items()
+                            if name != "new_consumed_by_job_id"
+                        ):
+                            row["consumed_by_job_id"] = parameters["new_consumed_by_job_id"]
+                    elif "SET status = 'open'" in statement:
                         if all(row.get(name) == value for name, value in parameters.items()):
                             row["status"] = "open"
                     else:
@@ -84,7 +91,7 @@ class CaptureServices(RuntimeServices):
                 row = self.rows.get(parameters["continuation_id"])
                 return [] if row is None else [row]
             else:
-                return [r for r in self.rows.values() if r["status"] == "open"]
+                return list(self.rows.values())
             return []
         if self.failure == "attempt" and "attempt_id" in parameters:
             raise OSError("attempt persistence failed")

@@ -3,6 +3,7 @@
 from ydbdoc_review_ng.application.workflows import (
     AuthorizedRun,
     ContentWorkflowPort,
+    ContinueWorkflowInput,
     ImmutableRunSnapshot,
     LinearWorkflows,
     PublicationPort,
@@ -21,6 +22,7 @@ from ydbdoc_review_ng.application.workflows import (
 __all__ = [
     "AuthorizedRun",
     "ContentWorkflowPort",
+    "ContinueWorkflowInput",
     "ImmutableRunSnapshot",
     "LinearWorkflows",
     "PublicationPort",

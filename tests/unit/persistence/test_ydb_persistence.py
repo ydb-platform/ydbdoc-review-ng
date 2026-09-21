@@ -92,6 +92,7 @@ def test_install_schema_creates_ttl_protected_job_and_attempt_tables() -> None:
     assert "ON created_at" in executor.calls[2][0]
     assert "source_inventory String NOT NULL" in executor.calls[2][0]
     assert "scope_target_paths String NOT NULL" in executor.calls[2][0]
+    assert "consumed_by_job_id Utf8," in executor.calls[2][0]
 
 
 def test_existing_schema_migration_keeps_audits_and_adds_nullable_binding() -> None:

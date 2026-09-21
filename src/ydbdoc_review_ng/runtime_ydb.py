@@ -20,6 +20,7 @@ def parameter_types(parameters: Mapping[str, object]) -> dict[str, str]:
         "trigger_pr": "Uint64",
         "source_sha": "Utf8?",
         "job_id": "Utf8?",
+        "consumed_by_job_id": "Utf8?",
         "state": "String",
         "source_inventory": "String",
         "scope_target_paths": "String",

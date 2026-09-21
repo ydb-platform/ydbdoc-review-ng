@@ -41,7 +41,14 @@ class CheckpointExecutor:
             self.rows[str(parameters["continuation_id"])] = dict(parameters)
         elif "UPDATE" in statement:
             row = self.rows[str(parameters["continuation_id"])]
-            if "SET status = 'open'" in statement:
+            if "SET consumed_by_job_id" in statement:
+                if all(
+                    row.get(key) == value
+                    for key, value in parameters.items()
+                    if key != "new_consumed_by_job_id"
+                ):
+                    row["consumed_by_job_id"] = parameters["new_consumed_by_job_id"]
+            elif "SET status = 'open'" in statement:
                 if all(row.get(key) == value for key, value in parameters.items()):
                     row["status"] = "open"
             else:
@@ -267,6 +274,171 @@ def test_checkpoint_errors_never_echo_state_payloads() -> None:
     with pytest.raises(ydb.PersistenceError) as error:
         YdbPersistence(EchoingExecutor()).save_checkpoint(checkpoint(), now=NOW)
     assert "confidential" not in str(error.value)
+
+
+def consumed_store(*, status="failed", error="continuable_direction"):
+    executor = CheckpointExecutor()
+    store = YdbPersistence(executor)
+    saved = save_semantic(store, checkpoint(), now=NOW)
+    executor.jobs["continue-job"] = {
+        "job_id": "continue-job",
+        "mode": "doc_continue",
+        "source_sha": saved.source_sha.value,
+        "target_sha": None,
+        "status": status,
+        "error": error,
+    }
+    executor.rows[saved.continuation_id]["consumed_by_job_id"] = "continue-job"
+    return executor, store, saved
+
+
+@pytest.mark.parametrize("status", ["succeeded", "started", "unknown", "missing"])
+def test_consumed_checkpoint_is_not_eligible_after_success_or_uncertain_consumer(status):
+    executor, store, _ = consumed_store(status=status, error=None)
+    if status == "missing":
+        del executor.jobs["continue-job"]
+    with pytest.raises(ydb.PersistenceError):
+        store.load_checkpoint(42, now=NOW)
+
+
+@pytest.mark.parametrize(
+    "fault", ["absent", "pending", "invalid_state", "wrong_lineage", "infra_failed"]
+)
+def test_unconfirmed_successor_preserves_old_semantic_checkpoint(fault):
+    executor, store, saved = consumed_store()
+    if fault != "absent":
+        successor = replace(saved, continuation_id="continue-job", job_id="continue-job")
+        save_semantic(store, successor, now=NOW)
+        row = executor.rows["continue-job"]
+        if fault == "pending":
+            row["status"] = "pending"
+        elif fault == "invalid_state":
+            row["state"] = b"invalid checkpoint state"
+        elif fault == "wrong_lineage":
+            row["base_sha"] = "c" * 40
+        else:
+            executor.jobs["continue-job"]["error"] = "checkpoint_failed"
+    assert store.load_checkpoint(42, now=NOW).continuation_id == saved.continuation_id
+
+
+def test_two_physical_open_rows_resolve_exact_successor_and_inherited_expiry():
+    executor, store, saved = consumed_store()
+    successor = replace(saved, continuation_id="continue-job", job_id="continue-job")
+    save_semantic(store, successor, now=NOW)
+    assert len([r for r in executor.rows.values() if r["status"] == "open"]) == 2
+    assert store.load_checkpoint(42, now=NOW) == successor
+    executor.rows["duplicate"] = {**executor.rows["continue-job"], "continuation_id": "duplicate"}
+    with pytest.raises(ydb.PersistenceError):
+        store.load_checkpoint(42, now=NOW)
+
+
+def test_closed_successor_with_successful_consumer_never_resurrects_open_ancestor():
+    executor, store, saved = consumed_store()
+    successor = replace(saved, continuation_id="continue-job", job_id="continue-job")
+    save_semantic(store, successor, now=NOW)
+    executor.rows["continue-job"]["consumed_by_job_id"] = "final-job"
+    executor.rows["continue-job"]["status"] = "closed"
+    executor.jobs["final-job"] = {
+        "job_id": "final-job",
+        "mode": "doc_continue",
+        "source_sha": saved.source_sha.value,
+        "status": "succeeded",
+        "error": None,
+    }
+    with pytest.raises(ydb.PersistenceError):
+        store.load_checkpoint(42, now=NOW)
+
+
+@pytest.mark.parametrize("history_status", ["open", "closed", "pending"])
+@pytest.mark.parametrize("reverse_rows", [False, True])
+@pytest.mark.parametrize("pr_number", [42, 52])
+def test_expired_independent_history_does_not_veto_fresh_open(
+    history_status, reverse_rows, pr_number
+):
+    executor, store, old = consumed_store(status="succeeded", error=None)
+    executor.rows[old.continuation_id].update(
+        status=history_status, created_at=NOW - timedelta(days=15)
+    )
+    fresh = replace(old, continuation_id="fresh", job_id="fresh-job")
+    executor.jobs[fresh.job_id] = {"job_id": fresh.job_id, "source_sha": fresh.source_sha.value}
+    save_semantic(store, fresh, now=NOW)
+    if reverse_rows:
+        executor.rows = dict(reversed(list(executor.rows.items())))
+
+    assert store.load_checkpoint(pr_number, now=NOW) == fresh
+    assert executor.rows[old.continuation_id]["created_at"] == NOW - timedelta(days=15)
+
+
+@pytest.mark.parametrize("ancestor_status", ["open", "closed"])
+@pytest.mark.parametrize("reverse_rows", [False, True])
+@pytest.mark.parametrize("fresh_lineage", [False, True])
+def test_expired_ancestor_and_successor_cannot_resume_or_veto_another_lineage(
+    ancestor_status, reverse_rows, fresh_lineage
+):
+    executor, store, old = consumed_store()
+    successor = replace(old, continuation_id="continue-job", job_id="continue-job")
+    save_semantic(store, successor, now=NOW)
+    executor.rows[old.continuation_id]["status"] = ancestor_status
+    now = old.expires_at
+    assert successor.created_at == old.created_at
+    assert successor.expires_at == now
+    fresh = replace(old, continuation_id="fresh", job_id="fresh-job", created_at=now)
+    if fresh_lineage:
+        executor.jobs[fresh.job_id] = {"job_id": fresh.job_id, "source_sha": fresh.source_sha.value}
+        save_semantic(store, fresh, now=now)
+    if reverse_rows:
+        executor.rows = dict(reversed(list(executor.rows.items())))
+
+    if fresh_lineage:
+        assert store.load_checkpoint(42, now=now) == fresh
+        assert store.load_checkpoint(52, now=now) == fresh
+    else:
+        with pytest.raises(ydb.PersistenceError):
+            store.load_checkpoint(42, now=now)
+    assert executor.rows[old.continuation_id]["created_at"] == NOW
+    assert executor.rows[successor.continuation_id]["created_at"] == NOW
+
+
+def test_consume_guards_exact_loaded_envelope_and_does_not_refresh_expiry():
+    executor, store, saved = consumed_store(status="started", error=None)
+    executor.rows[saved.continuation_id]["consumed_by_job_id"] = None
+    consume = getattr(store, "consume_checkpoint", None)
+    assert callable(consume), "guarded checkpoint consumption is required"
+    with pytest.raises(ydb.PersistenceError):
+        consume(replace(saved, base_sha=GitSha("c" * 40)), "continue-job", now=NOW)
+    consume(saved, "continue-job", now=NOW + timedelta(days=1))
+    assert executor.rows[saved.continuation_id]["consumed_by_job_id"] == "continue-job"
+    assert executor.rows[saved.continuation_id]["created_at"] == saved.created_at
+    with pytest.raises(ydb.PersistenceError):
+        store.load_checkpoint(42, now=NOW + timedelta(days=1))
+    executor.jobs["continue-job"].update(status="failed", error="checkpoint_failed")
+    eligible = store.load_checkpoint(42, now=NOW)
+    assert eligible.continuation_id == saved.continuation_id
+    assert eligible.expires_at == saved.expires_at
+
+
+@pytest.mark.parametrize("invalid", [[], {}, True, "", "original-job"])
+def test_invalid_consumption_envelope_fails_closed(invalid):
+    executor, store, saved = consumed_store()
+    executor.rows[saved.continuation_id]["consumed_by_job_id"] = invalid
+    with pytest.raises(ydb.PersistenceError):
+        store.load_checkpoint(42, now=NOW)
+
+
+def test_consumption_cycle_cannot_hide_beside_an_independent_open_record():
+    executor, store, saved = consumed_store()
+    successor = replace(saved, continuation_id="continue-job", job_id="continue-job")
+    save_semantic(store, successor, now=NOW)
+    executor.rows["continue-job"]["consumed_by_job_id"] = saved.job_id
+    executor.rows["unrelated"] = {
+        **executor.rows[saved.continuation_id],
+        "continuation_id": "unrelated",
+        "job_id": "independent-job",
+        "consumed_by_job_id": None,
+    }
+    executor.jobs["independent-job"] = {**executor.jobs[saved.job_id], "job_id": "independent-job"}
+    with pytest.raises(ydb.PersistenceError):
+        store.load_checkpoint(42, now=NOW)
 
 
 def test_checkpoint_inventory_is_required_and_cannot_change_within_lineage() -> None:

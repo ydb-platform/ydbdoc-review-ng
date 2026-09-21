@@ -109,6 +109,7 @@ class RuntimeSource:
         self.inventory = SourceChangeInventory(())
         self.metadata_snapshot: SnapshotRef
         self.source_pr = 0
+        self.continue_target_sha: GitSha | None = None
 
     def _authorize(self) -> None:
         actor = self.environment.get("GITHUB_TRIGGERING_ACTOR") or self.environment.get(
@@ -249,6 +250,7 @@ class RuntimeSource:
         head = self.github.head(checkpoint.translation_branch)
         if head != checkpoint.target_sha:
             raise RuntimeBoundaryError("continue_translation_head_mismatch")
+        self.continue_target_sha = checkpoint.target_sha
         repository = RepositoryId(self.github.repository)
         source = SnapshotRef(repository, checkpoint.source_sha)
         base = SnapshotRef(repository, checkpoint.base_sha)
@@ -303,7 +305,15 @@ class RuntimeReporter:
     ) -> None:
         if mode is Mode.DOC_TRANSLATE and self.publisher.noop:
             return
-        if self.source.github.head(branch) != commit_sha:
+        head = self.source.github.head(branch)
+        if (
+            mode is Mode.DOC_CONTINUE
+            and self.publisher.noop
+            and self.source.continue_target_sha is None
+            and head is None
+        ):
+            return
+        if head != commit_sha:
             raise RuntimeBoundaryError("report_head_changed")
         reporter = QAReporter(
             self.source.github,

@@ -91,6 +91,7 @@ class ContinuationCheckpoint:
     state: ContinuationState = field(repr=False)
     created_at: datetime
     status: CheckpointStatus = CheckpointStatus.OPEN
+    consumed_by_job_id: str | None = None
 
     def __post_init__(self) -> None:
         if any(
@@ -109,6 +110,12 @@ class ContinuationCheckpoint:
             or self.created_at.utcoffset() is None
         ):
             raise PersistenceError("invalid continuation envelope")
+        if self.consumed_by_job_id is not None and (
+            type(self.consumed_by_job_id) is not str
+            or not self.consumed_by_job_id.strip()
+            or self.consumed_by_job_id == self.job_id
+        ):
+            raise PersistenceError("invalid checkpoint consumption")
         try:
             encode_state(self.state)
             encode_source_inventory(self.source_inventory)
@@ -215,6 +222,7 @@ class YdbPersistence:
                 scope_target_paths String NOT NULL,
                 state String NOT NULL,
                 status Utf8 NOT NULL,
+                consumed_by_job_id Utf8,
                 created_at Timestamp NOT NULL,
                 PRIMARY KEY (continuation_id)
             ) WITH (TTL = {_TTL} ON created_at);""",
@@ -256,10 +264,10 @@ class YdbPersistence:
             f"""UPSERT INTO `{self._table("continuations")}`
                 (continuation_id, job_id, source_pr, trigger_pr, source_sha, base_sha,
                  translation_branch, target_sha, stage, source_inventory, scope_target_paths,
-                 state, status, created_at)
+                 state, status, created_at, consumed_by_job_id)
                 VALUES ($continuation_id, $job_id, $source_pr, $trigger_pr, $source_sha,
                  $base_sha, $translation_branch, $target_sha, $stage, $source_inventory,
-                 $scope_target_paths, $state, $status, $created_at);""",
+                 $scope_target_paths, $state, $status, $created_at, $consumed_by_job_id);""",
             self._checkpoint_values(checkpoint),
         )
         return checkpoint
@@ -285,7 +293,43 @@ class YdbPersistence:
             "state": encode_state(checkpoint.state).encode("utf-8"),
             "status": checkpoint.status.value,
             "created_at": checkpoint.created_at,
+            "consumed_by_job_id": checkpoint.consumed_by_job_id,
         }
+
+    def consume_checkpoint(
+        self, checkpoint: ContinuationCheckpoint, job_id: str, /, *, now: datetime
+    ) -> None:
+        """Associate the exact eligible OPEN record with this continuation attempt."""
+        self._require_open(checkpoint, now)
+        consumed = replace(checkpoint, consumed_by_job_id=job_id)
+        actual = self._checkpoint_by_id(checkpoint.continuation_id)
+        if actual == consumed:
+            return
+        if (
+            actual != checkpoint
+            or self.load_checkpoint(checkpoint.source_pr, now=now) != checkpoint
+        ):
+            raise PersistenceError("checkpoint consumption mismatch")
+        self._consuming_job(consumed)
+        values = {**self._checkpoint_values(checkpoint), "new_consumed_by_job_id": job_id}
+        with suppress(PersistenceError):
+            self._execute(
+                "checkpoint consumption",
+                f"""UPDATE `{self._table("continuations")}`
+                    SET consumed_by_job_id = $new_consumed_by_job_id
+                    WHERE continuation_id = $continuation_id AND status = $status
+                    AND job_id = $job_id AND source_pr = $source_pr AND trigger_pr = $trigger_pr
+                    AND source_sha = $source_sha AND base_sha = $base_sha
+                    AND translation_branch = $translation_branch AND created_at = $created_at
+                    AND (target_sha = $target_sha OR (target_sha IS NULL AND $target_sha IS NULL))
+                    AND stage = $stage AND state = $state AND source_inventory = $source_inventory
+                    AND scope_target_paths = $scope_target_paths
+                    AND (consumed_by_job_id = $consumed_by_job_id
+                         OR (consumed_by_job_id IS NULL AND $consumed_by_job_id IS NULL));""",
+                values,
+            )
+        if self._checkpoint_by_id(checkpoint.continuation_id) != consumed:
+            raise PersistenceError("checkpoint consumption unconfirmed")
 
     def activate_checkpoint(
         self, checkpoint: ContinuationCheckpoint, /, *, now: datetime
@@ -312,7 +356,9 @@ class YdbPersistence:
                         AND (target_sha = $target_sha OR (target_sha IS NULL AND $target_sha IS NULL))
                         AND stage = $stage AND state = $state
                         AND source_inventory = $source_inventory
-                        AND scope_target_paths = $scope_target_paths;""",
+                        AND scope_target_paths = $scope_target_paths
+                        AND (consumed_by_job_id = $consumed_by_job_id
+                             OR (consumed_by_job_id IS NULL AND $consumed_by_job_id IS NULL));""",
                     self._checkpoint_values(pending),
                 )
         actual = self._checkpoint_by_id(checkpoint.continuation_id)
@@ -339,11 +385,22 @@ class YdbPersistence:
         self._validate_job(checkpoint)
 
     def _validate_job(self, checkpoint: ContinuationCheckpoint) -> None:
+        row = self._job(checkpoint.job_id)
+        if not self._matches_producer(checkpoint, row):
+            raise PersistenceError("continuation original job is not a matching semantic stop")
+
+    def _job(self, job_id: str) -> Mapping[str, object]:
         rows = self._execute(
             "checkpoint job lookup",
             f"SELECT * FROM `{self._table('jobs')}` WHERE job_id = $job_id;",
-            {"job_id": checkpoint.job_id},
+            {"job_id": job_id},
         )
+        if len(rows) != 1 or rows[0].get("job_id") != job_id:
+            raise PersistenceError("checkpoint job missing or ambiguous")
+        return rows[0]
+
+    @staticmethod
+    def _matches_producer(checkpoint: ContinuationCheckpoint, row: Mapping[str, object]) -> bool:
         expected = {
             "job_id": checkpoint.job_id,
             "status": JobStatus.FAILED.value,
@@ -351,23 +408,143 @@ class YdbPersistence:
             "source_sha": checkpoint.source_sha.value,
             "target_sha": None if checkpoint.target_sha is None else checkpoint.target_sha.value,
         }
-        if len(rows) != 1 or any(rows[0].get(key) != value for key, value in expected.items()):
-            raise PersistenceError("continuation original job is not a matching semantic stop")
+        return all(row.get(key) == value for key, value in expected.items())
+
+    def _consuming_job(self, checkpoint: ContinuationCheckpoint) -> Mapping[str, object]:
+        assert checkpoint.consumed_by_job_id is not None
+        row = self._job(checkpoint.consumed_by_job_id)
+        if (
+            row.get("mode") != Mode.DOC_CONTINUE.value
+            or row.get("source_sha") != checkpoint.source_sha.value
+        ):
+            raise PersistenceError("checkpoint consuming job mismatch")
+        return row
+
+    @staticmethod
+    def _same_lineage(previous: ContinuationCheckpoint, following: ContinuationCheckpoint) -> bool:
+        return all(
+            getattr(previous, name) == getattr(following, name)
+            for name in (
+                "source_pr",
+                "source_sha",
+                "base_sha",
+                "translation_branch",
+                "source_inventory",
+                "created_at",
+            )
+        ) and (
+            previous.state.stage is ContinuationStage.DIRECTION
+            or (
+                previous.scope_target_paths == following.scope_target_paths
+                and previous.state.direction == following.state.direction
+                and previous.state.scope_sha256 == following.state.scope_sha256
+            )
+        )
 
     def load_checkpoint(self, pr_number: int, /, *, now: datetime) -> ContinuationCheckpoint:
         rows = self._execute(
             "checkpoint lookup",
             f"""SELECT * FROM `{self._table("continuations")}`
-                WHERE (source_pr = $pr_number OR trigger_pr = $pr_number) AND status = 'open';""",
+                WHERE source_pr = $pr_number OR trigger_pr = $pr_number;""",
             {"pr_number": pr_number},
         )
-        applicable = [self._checkpoint(row) for row in rows if row.get("status") == "open"]
+        if now.utcoffset() is None:
+            raise PersistenceError("invalid continuation lookup time")
+        relevant: list[int] = []
+        for index, row in enumerate(rows):
+            if row.get("status") != "open":
+                continue
+            created_at = row.get("created_at")
+            if type(created_at) is not datetime or created_at.utcoffset() is None:
+                raise PersistenceError("invalid continuation creation time")
+            if now - created_at < timedelta(days=14):
+                relevant.append(index)
+        # TTL cleanup is asynchronous. Only live OPEN roots and their exact
+        # consumer/producer descendants can affect the current continuation.
+        included = set(relevant)
+        for index in relevant:
+            consumer_id = rows[index].get("consumed_by_job_id")
+            if consumer_id is None:
+                continue
+            for successor_index, row in enumerate(rows):
+                if successor_index not in included and row.get("job_id") == consumer_id:
+                    relevant.append(successor_index)
+                    included.add(successor_index)
+        rows = [rows[index] for index in relevant]
+        consumed_jobs: set[str] = set()
+        for row in rows:
+            consumer_id = row.get("consumed_by_job_id")
+            if consumer_id is not None:
+                if type(consumer_id) is not str or not consumer_id.strip():
+                    raise PersistenceError("invalid checkpoint consumption")
+                consumed_jobs.add(consumer_id)
+        visited: set[object] = set()
+        applicable: list[ContinuationCheckpoint] = []
+        for row in rows:
+            if row.get("job_id") in consumed_jobs or row.get("status") == "pending":
+                continue
+            if row.get("status") == "closed" and row.get("consumed_by_job_id") is None:
+                continue
+            checkpoint = self._checkpoint(row)
+            self._require_live(replace(checkpoint, status=CheckpointStatus.OPEN), now)
+            self._validate_job(checkpoint)
+            candidate = self._resolve_consumed(checkpoint, rows, visited, now)
+            if candidate is not None:
+                applicable.append(candidate)
+        if any(
+            row.get("status") == "open" and row.get("continuation_id") not in visited
+            for row in rows
+        ):
+            raise PersistenceError("continuation lineage is unresolved")
         if len(applicable) != 1:
             raise PersistenceError("continuation checkpoint missing or ambiguous")
         checkpoint = applicable[0]
         self._require_open(checkpoint, now)
         self.validate_checkpoint_job(checkpoint)
         return checkpoint
+
+    def _resolve_consumed(
+        self,
+        checkpoint: ContinuationCheckpoint,
+        rows: Sequence[Mapping[str, object]],
+        visited: set[object],
+        now: datetime,
+    ) -> ContinuationCheckpoint | None:
+        path: set[str] = set()
+        while True:
+            if checkpoint.continuation_id in path:
+                raise PersistenceError("continuation lineage cycle")
+            path.add(checkpoint.continuation_id)
+            visited.add(checkpoint.continuation_id)
+            fallback = checkpoint if checkpoint.status is CheckpointStatus.OPEN else None
+            if checkpoint.consumed_by_job_id is None:
+                return fallback
+            consumer = self._consuming_job(checkpoint)
+            if consumer.get("status") == JobStatus.SUCCEEDED.value:
+                if consumer.get("error") is not None:
+                    raise PersistenceError("checkpoint consuming job mismatch")
+                return None
+            if consumer.get("status") != JobStatus.FAILED.value:
+                raise PersistenceError("checkpoint consumption is unresolved")
+            successors = [row for row in rows if row.get("job_id") == checkpoint.consumed_by_job_id]
+            if len(successors) > 1:
+                raise PersistenceError("continuation successor ambiguous")
+            if not successors:
+                return fallback
+            raw = successors[0]
+            visited.add(raw.get("continuation_id"))
+            try:
+                successor = self._checkpoint(raw)
+                self._require_live(replace(successor, status=CheckpointStatus.OPEN), now)
+            except PersistenceError:
+                return fallback
+            if (
+                successor.status is CheckpointStatus.PENDING
+                or not self._same_lineage(checkpoint, successor)
+                or not self._matches_producer(successor, consumer)
+            ):
+                return fallback
+            checkpoint = successor
 
     def close_checkpoint(self, continuation_id: str, /) -> None:
         self._execute(
@@ -417,6 +594,7 @@ class YdbPersistence:
                 state=state,
                 created_at=cast(datetime, row["created_at"]),
                 status=CheckpointStatus(cast(str, row["status"])),
+                consumed_by_job_id=cast(str | None, row.get("consumed_by_job_id")),
             )
         except (KeyError, TypeError, ValueError):
             raise PersistenceError("invalid continuation checkpoint") from None
@@ -497,6 +675,42 @@ class YdbPersistence:
                 (job_id, target_sha, finished_at, status, error)
                 VALUES ($job_id, $target_sha, $finished_at, $status, $error);"""
         self._execute("job finish", statement, parameters)
+
+    def finish_job_reconciled(
+        self,
+        job_id: str,
+        status: JobStatus,
+        /,
+        *,
+        error: str | None,
+        finished_at: datetime,
+        target_sha: str | None,
+    ) -> None:
+        """Confirm an ambiguous continuation terminal write without overwriting it."""
+        try:
+            self.finish_job(
+                job_id, status, error=error, finished_at=finished_at, target_sha=target_sha
+            )
+        except PersistenceError:
+            expected = {
+                "status": status.value,
+                "error": error,
+                "finished_at": finished_at,
+                "target_sha": target_sha,
+            }
+            row = self._job(job_id)
+            if any(row.get(key) != value for key, value in expected.items()):
+                if row.get("status") == JobStatus.STARTED.value:
+                    # Read-back proves the terminal write did not apply. Only
+                    # this known non-terminal case can become infrastructure FAILED.
+                    self.finish_job(
+                        job_id,
+                        JobStatus.FAILED,
+                        error="terminal_audit_failed",
+                        finished_at=finished_at,
+                        target_sha=target_sha,
+                    )
+                raise PersistenceError("continuation terminal audit unconfirmed") from None
 
     def __call__(self, attempt: AttemptResult, /, *, job_id: str | None = None) -> None:
         """Record a started model attempt through the T010 ``AttemptRecorder`` shape."""

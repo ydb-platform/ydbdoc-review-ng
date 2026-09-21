@@ -15,6 +15,7 @@ def test_continuation_and_job_parameters_have_explicit_sdk_types() -> None:
             "state": b"{}",
             "created_at": object(),
             "target_sha": None,
+            "consumed_by_job_id": None,
         }
     ) == {
         "source_sha": "Utf8?",
@@ -24,6 +25,7 @@ def test_continuation_and_job_parameters_have_explicit_sdk_types() -> None:
         "state": "String",
         "created_at": "Timestamp",
         "target_sha": "Utf8?",
+        "consumed_by_job_id": "Utf8?",
     }
 
 

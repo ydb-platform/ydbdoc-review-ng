@@ -8,9 +8,13 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
-from typing import NoReturn, Protocol
+from typing import TYPE_CHECKING, NoReturn, Protocol
 
-from ydbdoc_review_ng.continuation import ContinuationState, SourceChangeInventory
+from ydbdoc_review_ng.continuation import (
+    ContinuationStage,
+    ContinuationState,
+    SourceChangeInventory,
+)
 from ydbdoc_review_ng.domain import GitSha, Mode, RepoPath
 from ydbdoc_review_ng.persistence import (
     ContinuationCheckpoint,
@@ -20,6 +24,13 @@ from ydbdoc_review_ng.persistence import (
 )
 from ydbdoc_review_ng.ports import Clock
 from ydbdoc_review_ng.quality import QualityReviewResult, Verdict
+
+if TYPE_CHECKING:
+    from ydbdoc_review_ng.runtime_continue import (
+        CheckpointReader,
+        ContinueAdmission,
+        ContinueReplay,
+    )
 
 
 class WorkflowStage(str, Enum):
@@ -86,6 +97,14 @@ class SemanticCheckpointStop(RuntimeError):
 def _require_pr_number(value: object, type_name: str) -> None:
     if type(value) is not int or value < 1:
         raise ValueError(f"{type_name}.pr_number must be a positive integer")
+
+
+@dataclass(frozen=True, slots=True)
+class ContinueWorkflowInput:
+    pr_number: int
+
+    def __post_init__(self) -> None:
+        _require_pr_number(self.pr_number, type(self).__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -217,8 +236,27 @@ class WorkflowPersistencePort(Protocol):
 
     def close_checkpoint(self, continuation_id: str, /) -> None: ...
 
+    def consume_checkpoint(
+        self, checkpoint: ContinuationCheckpoint, job_id: str, /, *, now: datetime
+    ) -> None: ...
+
+    def finish_job_reconciled(
+        self,
+        job_id: str,
+        status: JobStatus,
+        /,
+        *,
+        error: str | None,
+        finished_at: datetime,
+        target_sha: str | None,
+    ) -> None: ...
+
 
 class SourceWorkflowPort(Protocol):
+    def authorize_continue(
+        self, pr_number: int, checkpoints: CheckpointReader, /, *, now: datetime
+    ) -> ContinueAdmission: ...
+
     def authorize_translate(self, request: TranslateWorkflowInput, /) -> AuthorizedRun: ...
 
     def snapshot_translate(self, authorization: AuthorizedRun, /) -> ImmutableRunSnapshot: ...
@@ -229,6 +267,17 @@ class SourceWorkflowPort(Protocol):
 
 
 class ContentWorkflowPort(Protocol):
+    def replay_continuation(self, checkpoint: ContinuationCheckpoint, /) -> ContinueReplay: ...
+
+    def prepare_continuation(
+        self,
+        replay: ContinueReplay,
+        checkpoint: ContinuationCheckpoint,
+        /,
+        *,
+        operator_context: str,
+    ) -> WorkflowCandidate: ...
+
     def prepare_translation(self, snapshot: ImmutableRunSnapshot, /) -> WorkflowCandidate: ...
 
     def load_verification_candidate(
@@ -274,7 +323,7 @@ class VerdictPort(Protocol):
 
 
 class LinearWorkflows:
-    """Execute doc_translate and doc_verify as bounded linear workflows."""
+    """Execute translation, verification and semantic continuation linearly."""
 
     __slots__ = (
         "_bind_models",
@@ -307,6 +356,121 @@ class LinearWorkflows:
         self._publisher = publisher
         self._reporter = reporter
         self._bind_models = bind_models
+
+    def doc_continue(self, request: ContinueWorkflowInput, /) -> WorkflowResult:
+        mode = Mode.DOC_CONTINUE
+        job_id, started_at = self._start_job(mode, request.pr_number, None, target_sha=None)
+        final_sha: GitSha | None = None
+        checkpoint: ContinuationCheckpoint | None = None
+        terminal_handoff = False
+        stage = WorkflowStage.AUTHORIZE
+        try:
+            admission = self._source.authorize_continue(
+                request.pr_number, self._persistence, now=self._clock.now()
+            )
+            checkpoint = admission.checkpoint
+            self._persistence.validate_checkpoint_job(checkpoint)
+            if checkpoint.state.stage is ContinuationStage.REVIEW:
+                raise ValueError("review continuation is not implemented")
+            stage = WorkflowStage.SNAPSHOT
+            replay = self._content.replay_continuation(checkpoint)
+            snapshot = replay.preparation.snapshot
+            if (
+                snapshot.mode is not mode
+                or snapshot.source_sha != checkpoint.source_sha
+                or snapshot.target_sha != checkpoint.target_sha
+                or snapshot.branch != checkpoint.translation_branch
+            ):
+                raise ValueError("continuation snapshot mismatch")
+            final_sha = snapshot.target_sha
+            self._persistence.bind_job_snapshot(
+                job_id,
+                source_sha=snapshot.source_sha.value,
+                target_sha=None if final_sha is None else final_sha.value,
+            )
+            stage = WorkflowStage.PREPARE
+            candidate = self._content.prepare_continuation(
+                replay, checkpoint, operator_context=admission.trigger.operator_context
+            )
+            stage = WorkflowStage.VALIDATE
+            self._content.validate_candidate(snapshot, candidate)
+            stage = WorkflowStage.PUBLISH
+            final_sha = self._publisher.publish(snapshot, candidate)
+            published_content = candidate.content
+            repair_published = False
+            stage = WorkflowStage.REVIEW
+
+            def publish_repair(repaired_content: bytes) -> None:
+                nonlocal final_sha, repair_published, stage, published_content
+                if repair_published:
+                    raise ValueError("T011 review invoked the repair callback more than once")
+                repaired = WorkflowCandidate(repaired_content, candidate.review_context)
+                stage = WorkflowStage.VALIDATE
+                self._content.validate_candidate(snapshot, repaired)
+                stage = WorkflowStage.PUBLISH
+                final_sha = self._publisher.publish(snapshot, repaired)
+                published_content = repaired_content
+                repair_published = True
+                stage = WorkflowStage.REVIEW
+
+            review = self._reviewer.review(snapshot, candidate, before_final_critic=publish_repair)
+            if review.repair_applied is not repair_published:
+                raise ValueError("T011 review returned an inconsistent repair result")
+            if review.final_candidate != published_content:
+                raise ValueError("review candidate differs from the published candidate")
+            stage = WorkflowStage.REPORT
+            self._reporter.update_current_pr(
+                mode=mode,
+                pr_number=request.pr_number,
+                branch=snapshot.branch,
+                commit_sha=final_sha,
+                review=review,
+            )
+            if review.final.verdict is Verdict.RED:
+                stage = WorkflowStage.CHECKPOINT
+                capture = self._content.review_checkpoint(snapshot, review, final_sha)
+                terminal_handoff = True
+                self._complete_semantic_handoff(
+                    capture,
+                    job_id,
+                    request.pr_number,
+                    mode,
+                    started_at,
+                    previous=checkpoint,
+                )
+            else:
+                stage = WorkflowStage.CHECKPOINT
+                self._persistence.consume_checkpoint(checkpoint, job_id, now=self._clock.now())
+                stage = WorkflowStage.TERMINAL_AUDIT
+                finished_at = self._clock.now()
+                terminal_handoff = True
+                self._persistence.finish_job_reconciled(
+                    job_id,
+                    JobStatus.SUCCEEDED,
+                    error=None,
+                    finished_at=finished_at,
+                    target_sha=final_sha.value,
+                )
+                with suppress(Exception):
+                    self._persistence.close_checkpoint(checkpoint.continuation_id)
+            return WorkflowResult(job_id, mode, final_sha, review.final.verdict, repair_published)
+        except SemanticCheckpointStop as stop:
+            assert checkpoint is not None
+            self._complete_semantic_handoff(
+                stop.capture,
+                job_id,
+                request.pr_number,
+                mode,
+                started_at,
+                previous=checkpoint,
+            )
+            raise WorkflowError(mode, stage) from None
+        except Exception as error:  # noqa: BLE001 - ports may expose arbitrary safe boundaries.
+            if terminal_handoff:
+                # Its durable marker is authoritative even when acknowledgement
+                # or read-back is unavailable. Never overwrite a possible SUCCESS.
+                raise WorkflowError(mode, stage) from None
+            self._fail_job(job_id, mode, stage, error, started_at, final_sha)
 
     def doc_translate(self, request: TranslateWorkflowInput, /) -> WorkflowResult:
         mode = Mode.DOC_TRANSLATE
@@ -480,8 +644,15 @@ class LinearWorkflows:
         trigger_pr: int,
         mode: Mode,
         created_at: datetime,
+        *,
+        previous: ContinuationCheckpoint | None = None,
     ) -> None:
-        checkpoint = capture.record(job_id, trigger_pr, created_at)
+        checkpoint = capture.record(
+            job_id, trigger_pr, created_at if previous is None else previous.created_at
+        )
+        if previous is not None:
+            self._replace_semantic_handoff(checkpoint, previous, mode, created_at)
+            return
         stage = WorkflowStage.CHECKPOINT
         try:
             pending = self._persistence.save_checkpoint(checkpoint, now=self._clock.now())
@@ -498,6 +669,43 @@ class LinearWorkflows:
         except Exception:  # noqa: BLE001 - each cleanup remains independent of acknowledgement loss.
             self._abandon_capture(checkpoint, mode, stage, created_at)
             raise WorkflowError(mode, stage) from None
+
+    def _replace_semantic_handoff(
+        self,
+        checkpoint: ContinuationCheckpoint,
+        previous: ContinuationCheckpoint,
+        mode: Mode,
+        started_at: datetime,
+    ) -> None:
+        stage = WorkflowStage.CHECKPOINT
+        terminal_attempted = False
+        try:
+            pending = self._persistence.save_checkpoint(checkpoint, now=self._clock.now())
+            stage = WorkflowStage.TERMINAL_AUDIT
+            finished_at = self._clock.now()
+            terminal_attempted = True
+            self._persistence.finish_job_reconciled(
+                checkpoint.job_id,
+                JobStatus.FAILED,
+                error=semantic_stop_error(checkpoint.state.stage),
+                finished_at=finished_at,
+                target_sha=None if checkpoint.target_sha is None else checkpoint.target_sha.value,
+            )
+            stage = WorkflowStage.CHECKPOINT
+            self._persistence.consume_checkpoint(previous, checkpoint.job_id, now=self._clock.now())
+            self._persistence.activate_checkpoint(pending, now=self._clock.now())
+        except Exception:  # noqa: BLE001 - pending/possibly activated rows must survive ambiguity.
+            if not terminal_attempted:
+                self._record_failed_terminal(
+                    checkpoint.job_id,
+                    mode,
+                    safe_error=f"{stage.value}_failed",
+                    fallback_time=started_at,
+                    target_sha=checkpoint.target_sha,
+                )
+            raise WorkflowError(mode, stage) from None
+        with suppress(Exception):
+            self._persistence.close_checkpoint(previous.continuation_id)
 
     def _abandon_capture(
         self,
