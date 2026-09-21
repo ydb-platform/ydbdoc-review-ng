@@ -7,7 +7,7 @@
 5. PASS фиксируется отдельным task commit; перед релизом выполняются полный
    non-live suite, static checks, package build и installed smoke.
 
-`v1.0.0` поставляет `doc_translate` и `doc_verify`. История разработки,
+`v1.0.x` поставляет `doc_translate` и `doc_verify`. История разработки,
 временные отчёты и paid-model transcripts не входят в публичный репозиторий.
 
 Возврат исходного `doc_continue` является отдельным TODO. Пока он не реализован

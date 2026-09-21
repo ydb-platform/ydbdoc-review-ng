@@ -15,10 +15,11 @@ and `ydb_executor`. No separate deployment Python module must be authored.
 | `YDB_GH_TOKEN`, fallback `GH_TOKEN` | Project token takes precedence. Contents/PR write and checks read in `ydb-platform/ydb`. |
 | `YANDEX_API_KEY`, `YANDEX_FOLDER_ID` | Native Yandex model credentials. |
 | `YDBDOC_MODEL` | Optional native model name, default `yandexgpt-5.1/latest`. |
-| `YDB_ENDPOINT`, `YDB_DATABASE`, `YDB_TOKEN` | YDB endpoint, database path and access token. Connection is lazy. |
+| `YDB_ENDPOINT`, `YDB_DATABASE`, `YDB_TOKEN` | Optional YDB endpoint, database path and access token. Connection is lazy. |
+| `YDB_SA_KEY` | Existing inline Yandex Cloud service-account JSON. Used when `YDB_TOKEN` is absent; endpoint/database default to the deployed documentation database and remain overridable by `YDB_ENDPOINT`/`YDB_DATABASE`. |
 | `YDBDOC_DAILY_BUDGET_RUB` | Passed to translate as `--budget-rub`; verify has no gate. |
 | `YDBDOC_MAX_DEPENDENCY_FILES_PER_ARTICLE`, `YDBDOC_MAX_SOURCE_CHARACTERS` | Scope bounds, defaults 100 dependency files and 200000 source characters. |
-| `YDBDOC_TRUSTED_RUNTIME_SHA` | Required only by the bundled dispatch workflows: reviewed lowercase 40-hex commit of this repository to checkout before invoking the local action. External `uses: ...@v1.0.0` consumers do not use this variable. |
+| `YDBDOC_TRUSTED_RUNTIME_SHA` | Required only by the bundled dispatch workflows: reviewed lowercase 40-hex commit of this repository to checkout before invoking the local action. External `uses: ...@v1.0.1` consumers do not use this variable. |
 
 Job start precedes authorization. Denied actors receive terminal failure audit
 without GitHub reads/mutations or model calls. Credentials/transcripts are not
@@ -68,10 +69,14 @@ authorization and the environment above, supplied executor/schema code is:
 ```python
 import os
 from ydbdoc_review_ng.persistence import YdbPersistence
-from ydbdoc_review_ng.runtime_ydb import SDKExecutor
+from ydbdoc_review_ng.runtime_ydb import DEFAULT_YDB_DATABASE, DEFAULT_YDB_ENDPOINT, SDKExecutor
 
-YdbPersistence(SDKExecutor(os.environ["YDB_ENDPOINT"], os.environ["YDB_DATABASE"],
-                          os.environ["YDB_TOKEN"])).install_schema()
+YdbPersistence(SDKExecutor(
+    os.environ.get("YDB_ENDPOINT", DEFAULT_YDB_ENDPOINT),
+    os.environ.get("YDB_DATABASE", DEFAULT_YDB_DATABASE),
+    os.environ.get("YDB_TOKEN", ""),
+    os.environ.get("YDB_SA_KEY", ""),
+)).install_schema()
 ```
 
 This creates two audit tables with 14-day TTL. It is a one-time operation, not
@@ -83,13 +88,13 @@ performed during local readiness.
 Релизный composite action подключается из подпапки репозитория:
 
 ```yaml
-- uses: ydb-platform/ydbdoc-review-ng/.github/actions/doc-review@v1.0.0
+- uses: ydb-platform/ydbdoc-review-ng/.github/actions/doc-review@v1.0.1
 ```
 
 Action устанавливает runtime из собственного checkout независимо от текущего
 workspace вызывающего workflow. `doc_translate` передаёт immutable source SHA.
 `doc_verify` передаёт source SHA из provenance marker translation PR и точный
-текущий target head SHA. `doc_continue` в `v1.0.0` отсутствует и до выполнения
+текущий target head SHA. `doc_continue` в `v1.0.x` отсутствует и до выполнения
 зафиксированного TODO остаётся на прежнем action.
 
 Copy `tests/integration/smoke_installed_runtime.py` and `_runtime_services.py`

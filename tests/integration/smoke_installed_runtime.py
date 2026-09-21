@@ -1,12 +1,14 @@
 """Run outside the checkout using the installed wheel and no real service I/O."""
 
 import importlib.metadata
+import json
 import os
 import socket
 import sys
 from pathlib import Path
 from unittest.mock import patch
 
+import ydb
 from _runtime_services import RuntimeServices
 
 import ydbdoc_review_ng.runtime
@@ -22,8 +24,18 @@ def denied(*args: object, **kwargs: object) -> None:
 
 def run() -> None:
     assert Path(ydbdoc_review_ng.runtime.__file__).is_relative_to(sys.prefix)
-    assert importlib.metadata.version("ydbdoc-review-ng") == "1.0.0"
+    assert importlib.metadata.version("ydbdoc-review-ng") == "1.0.1"
     assert importlib.metadata.version("PyYAML").startswith("6.")
+    credentials = ydb.iam.ServiceAccountCredentials.from_content(
+        json.dumps(
+            {
+                "id": "offline-test-key",
+                "service_account_id": "offline-test-account",
+                "private_key": "not-used-without-network",
+            }
+        )
+    )
+    assert credentials is not None
     services = RuntimeServices()
     services.files["ydb/docs/ru/core/toc.yaml"] = b"items: [{name: Page, href: page.md}]\n"
     services.files["ydb/docs/en/core/toc.yaml"] = b"items: []\n"

@@ -8,6 +8,9 @@ from typing import Any
 
 from ydbdoc_review_ng.persistence import PersistenceError
 
+DEFAULT_YDB_ENDPOINT = "grpcs://ydb.serverless.yandexcloud.net:2135"
+DEFAULT_YDB_DATABASE = "/ru-central1/b1g7gqj2vnq67gjseuva/etns0641qf73btm7j21k"
+
 
 def parameter_types(parameters: Mapping[str, object]) -> dict[str, str]:
     types = {
@@ -27,8 +30,11 @@ def parameter_types(parameters: Mapping[str, object]) -> dict[str, str]:
 
 
 class SDKExecutor:
-    def __init__(self, endpoint: str, database: str, token: str) -> None:
+    def __init__(
+        self, endpoint: str, database: str, token: str, service_account_key: str = ""
+    ) -> None:
         self._endpoint, self._database, self._token = endpoint, database, token
+        self._service_account_key = service_account_key
         self._pool: Any = None
         self._driver: Any = None
 
@@ -38,12 +44,21 @@ class SDKExecutor:
         try:
             sdk = importlib.import_module("ydb")
             if self._pool is None:
-                if not all((self._endpoint, self._database, self._token)):
+                if (
+                    not self._endpoint
+                    or not self._database
+                    or not (self._token or self._service_account_key)
+                ):
                     raise PersistenceError("YDB configuration is incomplete")
+                credentials = (
+                    sdk.AccessTokenCredentials(self._token)
+                    if self._token
+                    else sdk.iam.ServiceAccountCredentials.from_content(self._service_account_key)
+                )
                 self._driver = sdk.Driver(
                     endpoint=self._endpoint,
                     database=self._database,
-                    credentials=sdk.AccessTokenCredentials(self._token),
+                    credentials=credentials,
                 )
                 self._driver.wait(timeout=30, fail_fast=True)
                 self._pool = sdk.QuerySessionPool(self._driver)

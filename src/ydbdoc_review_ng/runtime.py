@@ -43,7 +43,7 @@ from ydbdoc_review_ng.runtime_github import (
     JsonTransport,
     RuntimeBoundaryError,
 )
-from ydbdoc_review_ng.runtime_ydb import SDKExecutor
+from ydbdoc_review_ng.runtime_ydb import DEFAULT_YDB_DATABASE, DEFAULT_YDB_ENDPOINT, SDKExecutor
 
 _YANDEXGPT_5_1_TOKEN_RUB = Decimal("0.0012")
 _PRODUCTION_PRICING = PerModelPricing(
@@ -254,7 +254,10 @@ def create_runtime(
 
     env = dict(os.environ if environment is None else environment)
     executor = ydb_executor or SDKExecutor(
-        env.get("YDB_ENDPOINT", ""), env.get("YDB_DATABASE", ""), env.get("YDB_TOKEN", "")
+        env.get("YDB_ENDPOINT") or env.get("YDBDOC_YDB_ENDPOINT") or DEFAULT_YDB_ENDPOINT,
+        env.get("YDB_DATABASE") or env.get("YDBDOC_YDB_DATABASE") or DEFAULT_YDB_DATABASE,
+        env.get("YDB_TOKEN", ""),
+        env.get("YDB_SA_KEY", ""),
     )
     persistence = YdbPersistence(executor)
     github = GitHubBackend(

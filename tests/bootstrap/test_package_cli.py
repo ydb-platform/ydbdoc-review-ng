@@ -25,7 +25,7 @@ def run_cli(*args: str) -> subprocess.CompletedProcess[str]:
 
 def test_distribution_metadata_and_src_package_discovery() -> None:
     distribution = importlib.metadata.distribution("ydbdoc-review-ng")
-    assert distribution.version == "1.0.0"
+    assert distribution.version == "1.0.1"
     entry_points = importlib.metadata.entry_points(group="console_scripts")
     matching = [entry.value for entry in entry_points if entry.name == "ydbdoc-review"]
     assert matching == ["ydbdoc_review_ng.cli:main"]
@@ -43,7 +43,7 @@ def test_package_manifest_has_the_fixed_minimal_contract() -> None:
     assert config["project"]["requires-python"] == ">=3.11"
     assert config["project"]["dependencies"] == ["PyYAML>=6,<7"]
     assert config["project"]["optional-dependencies"] == {
-        "runtime": ["ydb>=3.31,<4"],
+        "runtime": ["ydb[yc]>=3.31,<4"],
         "dev": [
             "pytest>=8",
             "pytest-timeout>=2.3",

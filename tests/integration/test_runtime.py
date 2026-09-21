@@ -1148,6 +1148,62 @@ def test_ydb_sdk_executor_uses_real_typed_values_with_injected_connection(monkey
     assert "secret" not in calls[0][0]
 
 
+def test_ydb_sdk_executor_accepts_deployed_inline_service_account_key(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    from ydbdoc_review_ng.runtime_ydb import SDKExecutor
+
+    observed = []
+    credentials = object()
+    pool = SimpleNamespace(execute_with_retries=lambda query, params: [])
+    driver = SimpleNamespace(wait=lambda **kwargs: None)
+    sdk = SimpleNamespace(
+        Driver=lambda **kwargs: observed.append(kwargs) or driver,
+        QuerySessionPool=lambda supplied: pool,
+        AccessTokenCredentials=lambda token: pytest.fail("access token path must not be used"),
+        iam=SimpleNamespace(
+            ServiceAccountCredentials=SimpleNamespace(
+                from_content=lambda content: observed.append(content) or credentials
+            )
+        ),
+        PrimitiveType=SimpleNamespace(Utf8="Utf8"),
+        TypedValue=lambda value, value_type: (value, value_type),
+    )
+    monkeypatch.setitem(sys.modules, "ydb", sdk)
+
+    executor = SDKExecutor("grpcs://db.example:2135", "/database", "", '{"id":"sa"}')
+    assert executor.execute("SELECT 1", {}) == []
+    assert observed == [
+        '{"id":"sa"}',
+        {
+            "endpoint": "grpcs://db.example:2135",
+            "database": "/database",
+            "credentials": credentials,
+        },
+    ]
+
+
+def test_runtime_uses_deployed_ydb_service_account_and_defaults(monkeypatch):
+    import ydbdoc_review_ng.runtime as runtime_module
+    from ydbdoc_review_ng.runtime import create_runtime
+    from ydbdoc_review_ng.runtime_ydb import DEFAULT_YDB_DATABASE, DEFAULT_YDB_ENDPOINT
+
+    captured = []
+
+    class CapturingExecutor:
+        def __init__(self, endpoint, database, token, service_account_key):
+            captured.append((endpoint, database, token, service_account_key))
+
+        def execute(self, statement, parameters):
+            return []
+
+    monkeypatch.setattr(runtime_module, "SDKExecutor", CapturingExecutor)
+    create_runtime(environment={"YDB_SA_KEY": '{"id":"sa"}'})
+
+    assert captured == [(DEFAULT_YDB_ENDPOINT, DEFAULT_YDB_DATABASE, "", '{"id":"sa"}')]
+
+
 def test_model_repair_is_published_before_final_critic_and_only_then_pr():
     from ydbdoc_review_ng.application import TranslateWorkflowInput
     from ydbdoc_review_ng.domain import GitSha

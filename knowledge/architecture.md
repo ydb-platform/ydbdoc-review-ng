@@ -21,7 +21,7 @@ source, запускает те же validators и critic, при необход
 repair commit в ту же branch, обновляет verdict и terminal job status. Budget
 gate у него отсутствует.
 
-В `v1.0.0` отдельного `doc_continue`, resumable state machine, soft-keep lattice
+В `v1.0.x` отдельного `doc_continue`, resumable state machine, soft-keep lattice
 и navigation overlay нет. В канонических требованиях сохранён TODO на возврат
 исходного операторского `/ydbdoc continue …`; его state contract и acceptance
 будут спроектированы отдельно до включения режима в новый action.
@@ -49,7 +49,7 @@ gate у него отсутствует.
 
 ## Совместимость
 
-`v1.0.0` фиксирует реализованные контракты `doc_translate` и `doc_verify`.
+`v1.0.x` фиксирует реализованные контракты `doc_translate` и `doc_verify`.
 Дополнительные гарантии можно сохранять, но они не расширяют future scope и не
 требуют новых подсистем. `doc_continue` становится частью нового action только
 после отдельной реализации и приёмки TODO из канонических требований.

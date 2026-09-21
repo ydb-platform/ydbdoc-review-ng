@@ -138,4 +138,5 @@ def test_two_workflow_entrypoints_share_one_composite_action():
         assert "contents: write" in workflow
         assert "pull-requests: write" in workflow
         assert "secrets.GITHUB_TOKEN" in workflow
+        assert "YDB_SA_KEY: ${{ secrets.YDB_SA_KEY }}" in workflow
         assert "doc_continue" not in workflow + action

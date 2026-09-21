@@ -108,14 +108,14 @@ python -m pip wheel --no-index --no-deps --no-build-isolation --wheel-dir dist .
 ```
 
 Wheel содержит `ydbdoc_review_ng` и console entrypoint. Prototype и тесты не
-являются runtime пакетом. Версия пакета `1.0.0` соответствует тегу `v1.0.0`.
+являются runtime пакетом. Версия пакета `1.0.1` соответствует тегу `v1.0.1`.
 
 Два workflow, `.github/workflows/doc_translate.yml` и `doc_verify.yml`, вызывают
 [один composite action](.github/actions/doc-review/README.md). Они устанавливают
 runtime extra и выбирают поставляемый factory. Проверка actors, snapshots,
 модель, metadata producer, публикация, audit и чтение CI checks реализованы.
 Внешний вызов использует путь
-`ydb-platform/ydbdoc-review-ng/.github/actions/doc-review@v1.0.0`; action всегда
+`ydb-platform/ydbdoc-review-ng/.github/actions/doc-review@v1.0.1`; action всегда
 устанавливает пакет из собственного repository checkout, а не из workspace
 вызывающего workflow. Credentials, разрешения в `ydb-platform/ydb`, создание
 YDB schema и подключение CI к translation head остаются deployment-настройками.
