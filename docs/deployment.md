@@ -94,8 +94,8 @@ performed during local readiness.
 Action устанавливает runtime из собственного checkout независимо от текущего
 workspace вызывающего workflow. `doc_translate` передаёт immutable source SHA.
 `doc_verify` передаёт source SHA из provenance marker translation PR и точный
-текущий target head SHA. `doc_continue` в `v1.0.x` отсутствует и до выполнения
-зафиксированного TODO остаётся на прежнем action.
+текущий target head SHA. `doc_continue` в `v1.0.x` отсутствует и до реализации
+и приёмки контракта следующего релиза остаётся на прежнем action.
 
 Copy `tests/integration/smoke_installed_runtime.py` and `_runtime_services.py`
 beside one another outside the checkout. Run the smoke with a fresh venv Python

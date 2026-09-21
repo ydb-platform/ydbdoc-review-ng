@@ -7,22 +7,17 @@
 
 Конвейер переводит изменения документации YDB между RU и EN, создаёт или
 обновляет отдельную translation branch и проверяет итоговый Markdown/YFM.
-Поддерживаются два пользовательских режима:
+Поддерживаются три пользовательских режима:
 
 - `doc_translate`: получить source PR/snapshot, проверить дневной бюджет,
   определить направление и scope, перевести, собрать, проверить, опубликовать
   candidate и выполнить model critic;
 - `doc_verify`: проверить текущее состояние существующей translation branch без
-  обязательного повторного перевода.
+  обязательного повторного перевода;
+- `doc_continue`: продолжить явно сохранённую как продолжаемую job после
+  предметного комментария техписа, не повторяя уже зелёные результаты.
 
-Релизы `v1.0.x` реализуют только эти два режима. До реализации следующего TODO
-после ошибки техпис исправляет translation branch вручную и повторно запускает
-`doc_verify` либо запускает новый `doc_translate`.
-
-### TODO: вернуть исходный `doc_continue`
-
-В следующем совместимом релизе требуется вернуть исходный операторский
-сценарий `doc_continue`:
+`doc_continue` реализует исходный операторский сценарий:
 
 - CI принимает label `doc_continue` только от аккаунта из
   `YDBDOC_ALLOWED_ACTORS`;
@@ -36,9 +31,12 @@
 - после продолжения используются те же проверки, публикация в ту же translation
   branch и один актуальный verdict, что и в основном pipeline.
 
-До реализации должны быть отдельно зафиксированы минимальная схема состояния,
-CLI/action inputs и acceptance tests. Этот TODO не входит в release gate
-`v1.0.x`; новый action не должен объявлять режим поддерживаемым раньше времени.
+Продолжение не является восстановлением произвольного упавшего процесса.
+Продолжаемыми состояниями являются только `direction_undetermined`, незавершённый
+перевод отдельных документов и RED после critic/единственной repair-попытки.
+Transport, persistence, GitHub и прочие инфраструктурные ошибки завершают job и
+требуют нового запуска. Ручная правка translation branch с последующим
+`doc_verify` остаётся допустимым альтернативным путём.
 
 ## 2. Авторизация, направление и scope
 
@@ -175,19 +173,60 @@ candidate заново собирается, проходит обязатель
 У `doc_verify` нет budget gate. Его critic и repair costs сохраняются и входят
 в дневную сумму, которую проверит следующий `doc_translate`.
 
-Для `v1.0.x` не требуются transactional state machine, safe resume, checkpoints,
-reuse keys, selective continuation или soft-keep policy. Обычный сбой
-завершается понятной ошибкой, после чего используется новый запуск либо ручная
-правка и `doc_verify`. Будущий `doc_continue` из TODO выше проектируется и
-принимается отдельно, не задним числом расширяя этот release gate.
+### 6.3 `doc_continue`
+
+1. Создать новую audit job с mode `doc_continue`, авторизовать отправителя label
+   и определить, является помеченный PR исходным или translation PR.
+2. По issue events найти текущее событие установки label `doc_continue` и взять
+   последний опубликованный строго до него комментарий разрешённого автора,
+   первая строка которого имеет вид `/ydbdoc continue`. Остальной многострочный
+   текст является operator context. Отсутствующий, пустой, более поздний или
+   неразрешённый комментарий останавливает job до model calls и GitHub mutations.
+3. Загрузить последний открытый continuation checkpoint для этого PR. Проверить
+   его 14-дневный срок, исходную job, stage, source/base SHA и точный head
+   translation branch при его наличии. Истёкший, закрытый, неоднозначный или
+   stale checkpoint не продолжается.
+4. Заново прочитать authoritative source только по сохранённым immutable SHA и
+   построить source plans. Проверить scope digest и идентификаторы сохранённых
+   полей. HEAD, старый target и текст комментария не заменяют source.
+5. Для `direction_undetermined` повторить только direction call с operator
+   context. Для незавершённого перевода вызвать модель только для pending
+   документов, объединив новые валидные maps с сохранёнными accepted maps. Для
+   RED review повторить critic/одну repair-попытку только для проблемных
+   документов, используя точный опубликованный candidate checkpoint.
+6. Candidate всегда заново собирается из source plans и accepted/new maps;
+   protected fragments восстанавливаются из source. Текущий target допустим
+   только как точный ранее опубликованный candidate для critic/repair, но не как
+   шаблон склейки или источник технических fragments.
+7. После тех же детерминированных проверок сделать commit в ту же translation
+   branch, вызвать final critic и обновить единственный verdict. GREEN закрывает
+   checkpoint. Если остаётся поддерживаемое семантическое препятствие, записать
+   следующий checkpoint с тем же первоначальным expiry; продление TTL запрещено.
+
+CLI принимает `ydbdoc-review continue --pr N`. Composite action принимает
+`mode: continue` и `pr`; `source-sha`, `target-sha` и `budget-rub` для этого
+режима запрещены, поскольку закреплённые SHA читаются только из checkpoint.
+
+У `doc_continue` нет budget gate. Все его фактические model attempts и costs
+учитываются в дневной сумме следующего `doc_translate`.
+
+Не требуются общая transactional state machine, возобновление произвольного
+шага, content dedup, pagination, reuse keys, event sourcing или soft-keep.
+Continuation является одной версионированной записью состояния только для трёх
+перечисленных семантических остановок. GitHub Actions concurrency по PR
+предотвращает штатные параллельные продолжения; сложная распределённая
+reservation не обещается.
 
 ## 7. YDB, TTL и бюджет
 
 YDB хранит только необходимые операционные данные:
 
 - job: режим, PR, source/target SHA, время и итоговый status/error;
-- каждая model attempt: роль, request, response при наличии, status/error, модель,
-  timestamps и фактическая cost.
+- каждая model attempt: `job_id`, роль, request, response при наличии,
+  status/error, модель, timestamps и фактическая cost;
+- continuation checkpoint: `continuation_id`, исходный `job_id`, source и
+  trigger PR, source/base SHA, translation branch и nullable target SHA, stage,
+  versioned state, status и первоначальное время создания.
 
 Оба workflow создают job audit record до ранних orchestration steps и завершают
 его terminal status/error на success и failure. YDB audit/status writes
@@ -202,9 +241,38 @@ GitHub, worktree и model calls.
 ноль. Request и response не выводятся в публичные логи, GitHub comments или
 artifacts.
 
-Для таблиц или строк с текстами настраивается TTL 14 дней средствами YDB. Не
-нужны content dedup, shared-content references, garbage collection, immutable
-model-call abstraction, pagination, resume state или event sourcing.
+Для таблиц или строк с текстами настраивается TTL 14 дней средствами YDB.
+Checkpoint state содержит только frozen direction/scope digest, accepted maps
+по документам, pending paths/field IDs и данные, необходимые для проверки
+точного опубликованного candidate. Новый checkpoint сохраняет первоначальное
+время expiry исходной цепочки. Не нужны content dedup, shared-content
+references, garbage collection, immutable model-call abstraction, pagination
+или event sourcing.
+
+### 7.1 Формат continuation state v1
+
+Одна JSON-запись state имеет закрытый versioned schema и проходит strict decode
+до model calls и GitHub mutations:
+
+- `state_version`: ровно `1`;
+- `stage`: ровно `direction`, `translation` или `review`;
+- `direction`: `ru_to_en`, `en_to_ru` или `null` только для `direction`;
+- `scope_sha256`: hash канонического frozen scope manifest либо `null` до выбора
+  направления;
+- `accepted_maps`: object `target_path → {field_id → translated_text}` только
+  для уже локально проверенных model maps;
+- `pending_paths`: упорядоченный список target paths, для которых новый model
+  call ещё требуется;
+- `review_paths`: упорядоченный список проблемных target paths только на stage
+  `review`;
+- `candidate_sha256`: SHA-256 точного опубликованного candidate на stage
+  `review`, иначе `null`.
+
+Scope hash включает direction, операции, source/target paths и content hashes
+source документов. При восстановлении каждый accepted `field_id` обязан снова
+принадлежать plan того же source content. Unknown/extra keys, duplicate paths,
+несовместимые stage fields и несовпадение digest отвергаются. State не содержит
+старые target fragments, credentials или произвольный worktree snapshot.
 
 Перед началом нового `doc_translate` для следующего PR конвейер суммирует все
 известные costs за текущую календарную дату Europe/Moscow: обе workflow, все
@@ -256,15 +324,19 @@ gate не выполняется. Конкурентная атомарная re
   положительный и отрицательный путь, non-vacuity fixtures и регрессии.
 - Fixture нужен для конкретного требования. Отдельные большие матрицы, квоты
   типов fixtures и тесты ради количества не требуются.
-- Перед release выполняются offline end-to-end сценарии обоих режимов, полный
+- Acceptance обязательно покрывает: запрет без разрешённого комментария;
+  expired/stale checkpoint с нулём model calls и mutations; повтор только
+  direction call; повтор только pending translation documents при сохранении
+  accepted maps; review только проблемных paths; source-only assembly; закрытие
+  checkpoint на GREEN и сохранение первоначального expiry при повторном RED.
+- Перед release выполняются offline end-to-end сценарии всех трёх режимов, полный
   non-live suite, Ruff, mypy и `git diff --check`.
 
 ## 11. Работа команды и совместимость
 
-- `v1.0.x` фиксирует реализованный контракт `doc_translate` и `doc_verify`.
+- `v1.0.x` фиксирует прежний контракт `doc_translate` и `doc_verify`; первый
+  release с `doc_continue` расширяет его без изменения их входов.
 - Реализованные гарантии сверх минимального контракта сохраняются, если они не
   требуют дальнейшего развития и не задают новые acceptance gates.
-- `doc_continue` остаётся отдельным TODO из §1 и не считается доступной
-  возможностью `v1.0.x`.
 - Каждый атомарный функционал получает developer tests и независимый tester
   verdict до следующей задачи.

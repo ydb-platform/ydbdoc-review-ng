@@ -75,11 +75,11 @@ Verify не имеет budget gate. Без runtime factory команда зав
 не печатает. Python callers могут использовать `main(argv, dispatcher=...)`
 или `factory=...` без environment factory.
 
-`continue` пока не поддерживается новым runtime. После ошибки исправьте source и
-начните новый `translate`, либо вручную исправьте существующую translation
-branch и запустите `verify`. Возврат исходного операторского сценария
-`/ydbdoc continue …` зафиксирован как TODO в `REQUIREMENTS_RU.md`; до его
-реализации существующий CI `doc_continue` остаётся на прежнем action. Подробнее
+`continue` пока не поддерживается релизом `v1.0.x`. После ошибки исправьте source
+и начните новый `translate`, либо вручную исправьте существующую translation
+branch и запустите `verify`. Исходный операторский сценарий
+`/ydbdoc continue …` задан в `REQUIREMENTS_RU.md` для следующего релиза; до его
+приёмки существующий CI `doc_continue` остаётся на прежнем action. Подробнее
 об environment и внешних портах:
 [deployment boundary](docs/deployment.md).
 

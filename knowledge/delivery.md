@@ -10,6 +10,6 @@
 `v1.0.x` поставляет `doc_translate` и `doc_verify`. История разработки,
 временные отчёты и paid-model transcripts не входят в публичный репозиторий.
 
-Возврат исходного `doc_continue` является отдельным TODO. Пока он не реализован
-и не прошёл собственные acceptance tests, новый action не принимает этот mode,
-а production workflow продолжения остаётся на прежней версии action.
+Возврат исходного `doc_continue` является отдельным release scope. Пока он не
+реализован и не прошёл собственные acceptance tests, новый action не принимает
+этот mode, а production workflow продолжения остаётся на прежней версии action.
