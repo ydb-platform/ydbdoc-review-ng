@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 
+from ydbdoc_review_ng.continuation import AcceptedMap
+
 
 class Verdict(str, Enum):
     GREEN = "GREEN"
@@ -44,3 +46,4 @@ class QualityReviewResult:
     repair_attempted: bool
     repair_applied: bool
     repair_error: RepairErrorReason | None
+    accepted_maps: tuple[AcceptedMap, ...] | None = field(default=None, repr=False)

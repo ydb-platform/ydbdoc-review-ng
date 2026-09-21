@@ -20,8 +20,13 @@ from ydbdoc_review_ng.continuation import (
     ContinuationStateError,
     scope_sha256,
 )
-from ydbdoc_review_ng.domain import ContentHash, GitSha, RepoPath
-from ydbdoc_review_ng.persistence import ContinuationCheckpoint, YdbPersistence
+from ydbdoc_review_ng.domain import ContentHash, GitSha, Mode, RepoPath
+from ydbdoc_review_ng.persistence import (
+    ContinuationCheckpoint,
+    JobStatus,
+    YdbPersistence,
+    semantic_stop_error,
+)
 from ydbdoc_review_ng.runtime import RecordedModels, RuntimeSource
 from ydbdoc_review_ng.runtime_content import RuntimeContent, unpack
 from ydbdoc_review_ng.runtime_github import GitHubBackend
@@ -108,10 +113,24 @@ class ReplayServices(RuntimeServices):
         return super().github(method, path, payload)
 
     def execute(self, statement, parameters):
+        if "/jobs`" in statement and "SELECT" in statement:
+            row = {}
+            for audit in self.audit:
+                if (
+                    audit.get("job_id") == parameters["job_id"]
+                    and "role" not in audit
+                    and "continuation_id" not in audit
+                ):
+                    row.update(audit)
+            return [row] if row else []
         self.audit.append(dict(parameters))
         if "continuations" in statement:
             if "UPSERT" in statement:
                 self.rows[parameters["continuation_id"]] = dict(parameters)
+            elif "SET status = 'open'" in statement:
+                row = self.rows[parameters["continuation_id"]]
+                if all(row.get(key) == value for key, value in parameters.items()):
+                    row["status"] = "open"
             elif "SELECT" in statement:
                 if "continuation_id" in parameters:
                     row = self.rows.get(parameters["continuation_id"])
@@ -223,12 +242,31 @@ def replay(content, saved):
     return replay_continue(content, saved)
 
 
+def save_semantic(store, saved):
+    job_id = store.start_job(
+        Mode.DOC_TRANSLATE,
+        pr_number=saved.source_pr,
+        source_sha=saved.source_sha.value,
+        target_sha=None,
+        started_at=NOW,
+    )
+    pending = store.save_checkpoint(replace(saved, job_id=job_id), now=NOW)
+    store.finish_job(
+        job_id,
+        JobStatus.FAILED,
+        error=semantic_stop_error(saved.state.stage),
+        finished_at=NOW,
+        target_sha=None if saved.target_sha is None else saved.target_sha.value,
+    )
+    return store.activate_checkpoint(pending, now=NOW)
+
+
 @pytest.mark.parametrize("merged", [False, True])
 def test_replay_reads_saved_source_and_base_after_heads_and_pr_inventory_move(merged):
     services = ReplayServices(merged=merged)
     source, _, store, plans = frozen(services)
     saved = checkpoint(source, plans)
-    store.save_checkpoint(saved, now=NOW)
+    saved = save_semantic(store, saved)
     services.current_source, services.current_base = "d" * 40, "f" * 40
     services.inventory = [{"status": "added", "filename": RU + "unrelated.md"}]
     services.events.clear()
@@ -590,7 +628,7 @@ def test_renamed_complete_pair_restores_exact_excluded_or_selected_noop(verdict,
     assert tuple(item.target_path.value for item in saved.state.accepted_maps) == (EN + "page.md",)
     assert tuple(path.value for path in saved.state.pending_paths) == (EN + "pending.md",)
     assert tuple(path.value for path in saved.scope_target_paths) == expected_paths
-    store.save_checkpoint(saved, now=NOW)
+    saved = save_semantic(store, saved)
     _, content, store = runtime(services)
     services.events.clear()
     saved = store.load_checkpoint(42, now=NOW)

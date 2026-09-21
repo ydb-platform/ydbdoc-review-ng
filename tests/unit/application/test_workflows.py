@@ -381,6 +381,28 @@ def test_translate_success_publishes_once_then_reviews_and_terminalizes() -> Non
     assert SECRET not in repr(result)
 
 
+@pytest.mark.parametrize("mode", ["translate", "verify"])
+def test_review_cannot_report_a_candidate_that_was_not_published(mode: str) -> None:
+    from dataclasses import replace
+
+    scenario = Scenario()
+    workflows, persistence = build_workflows(scenario)
+
+    class UnpublishedReviewer(FakeReviewer):
+        def review(self, snapshot, candidate, /, *, before_final_critic=None):
+            review = super().review(snapshot, candidate, before_final_critic=before_final_critic)
+            return replace(review, final_candidate=b"unpublished bytes")
+
+    workflows._reviewer = UnpublishedReviewer(scenario)
+    with pytest.raises(WorkflowError):
+        if mode == "translate":
+            workflows.doc_translate(translate_input())
+        else:
+            workflows.doc_verify(verify_input())
+    assert "report:current-pr-verdict" not in scenario.events
+    assert persistence.finished_errors == ["review_failed"]
+
+
 def test_translate_applies_one_t011_repair_and_publishes_exactly_twice() -> None:
     scenario = Scenario(repair=True)
     workflows, _ = build_workflows(scenario)

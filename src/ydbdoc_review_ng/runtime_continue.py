@@ -108,7 +108,9 @@ def replay_continue(
     direction = DirectionSelectionResult(
         DirectionSelectionState.SELECTED, state.direction, decisions, None
     )
-    plans = content.select_source(preparation, direction=direction)
+    plans = content.select_source(
+        preparation, direction=direction, review_documents=state.stage is ContinuationStage.REVIEW
+    )
     if (
         plans.manifest is None
         or tuple(entry.pair.target_path for entry in plans.manifest.entries)
@@ -127,7 +129,12 @@ def replay_continue(
         for document in plans.documents
         if document.entry.operation is not FileOperation.RENAME_TARGET
     }
-    if required != referenced:
+    reviewable = {document.entry.pair.target_path for document in plans.documents}
+    if (
+        not required <= referenced <= reviewable
+        or (state.stage is not ContinuationStage.REVIEW and required != referenced)
+        or not set(state.review_paths).issubset(reviewable)
+    ):
         raise ContinuationStateError()
     if state.stage is ContinuationStage.REVIEW:
         candidate = content.assemble(plans, state.accepted_maps)

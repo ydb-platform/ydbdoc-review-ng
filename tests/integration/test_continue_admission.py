@@ -56,6 +56,13 @@ class AdmissionServices:
             b'"scope_sha256":null,"accepted_maps":{},"pending_paths":[], '
             b'"review_paths":[],"candidate_sha256":null}',
         }
+        self.job = {
+            "job_id": "original-job",
+            "status": "failed",
+            "error": "continuable_direction",
+            "source_sha": SOURCE_SHA,
+            "target_sha": TARGET_SHA,
+        }
         repo = {"full_name": "ydb-platform/ydb"}
         self.prs = {
             42: {
@@ -93,6 +100,8 @@ class AdmissionServices:
         if not statement.lstrip().startswith("SELECT"):
             self.effects.append(("YDB_WRITE", statement))
             raise AssertionError("admission must be read-only")
+        if "/jobs`" in statement:
+            return [self.job] if parameters["job_id"] == self.job["job_id"] else []
         return (
             [self.row]
             if parameters["pr_number"] in (self.row["source_pr"], self.row["trigger_pr"])
@@ -138,9 +147,25 @@ def test_source_and_translation_pr_resolve_same_checkpoint_without_branch_guessi
 
 def test_prepublication_checkpoint_needs_no_translation_pr(services):
     services.row["target_sha"] = None
+    services.job["target_sha"] = None
     services.head = None
     result = admit(services)
     assert result.checkpoint.target_sha is None
+    assert services.effects == []
+
+
+@pytest.mark.parametrize("fault", ["pending", "generic", "mismatched-stage", "started"])
+def test_admission_rejects_unacknowledged_or_non_semantic_handoff(services, fault):
+    if fault == "pending":
+        services.row["status"] = "pending"
+    elif fault == "generic":
+        services.job["error"] = "prepare_failed"
+    elif fault == "mismatched-stage":
+        services.job["error"] = "continuable_translation"
+    else:
+        services.job["status"] = "started"
+    with pytest.raises(PersistenceError):
+        admit(services)
     assert services.effects == []
 
 

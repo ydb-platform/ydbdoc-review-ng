@@ -120,6 +120,46 @@ def test_green_uses_one_critic_and_does_not_attempt_repair() -> None:
     assert PATH.value in executor.calls[0].prompt
 
 
+def test_repair_transport_failure_is_terminal_before_final_critic() -> None:
+    _plan, request, _values, _target = prepared()
+    executor = FakeExecutor(
+        critic_json(
+            "RED",
+            [
+                finding(
+                    repairable=True,
+                    snippet="Установка YDB",
+                    line=1,
+                    field_ids=[request.requested_ids[0]],
+                )
+            ],
+        ),
+        None,
+        critic_json("RED", [finding(repairable=False, snippet="Установка YDB", line=1)]),
+    )
+    with pytest.raises(QualityExecutionError, match="repair"):
+        review(executor)
+    assert [call.role.value for call in executor.calls] == ["critic", "repair"]
+
+
+def test_quality_returns_final_validated_map_including_repaired_values() -> None:
+    plan, request, values, _target = prepared()
+    field_id = request.requested_ids[0]
+    executor = FakeExecutor(
+        critic_json(
+            "RED", [finding(repairable=True, snippet="Установка YDB", line=1, field_ids=[field_id])]
+        ),
+        json.dumps({field_id: "Новая установка YDB"}),
+        critic_json("RED", [finding(repairable=False, snippet="YDB", line=1)]),
+    )
+    result = review(executor)
+    assert result.accepted_maps[0].as_dict() == {**values, field_id: "Новая установка YDB"}
+    assert (
+        assemble_candidate(SOURCE, plan, request, result.accepted_maps[0].as_dict())
+        == result.final_candidate
+    )
+
+
 def test_exhausted_job_repair_allowance_still_reports_other_document_findings() -> None:
     plan, request, _values, target = prepared()
     problem = finding(

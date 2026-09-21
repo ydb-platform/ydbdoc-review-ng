@@ -3,14 +3,21 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
 from typing import NoReturn, Protocol
 
-from ydbdoc_review_ng.domain import GitSha, Mode
-from ydbdoc_review_ng.persistence import ContinuationCheckpoint, DailyBudgetExceeded, JobStatus
+from ydbdoc_review_ng.continuation import ContinuationState, SourceChangeInventory
+from ydbdoc_review_ng.domain import GitSha, Mode, RepoPath
+from ydbdoc_review_ng.persistence import (
+    ContinuationCheckpoint,
+    DailyBudgetExceeded,
+    JobStatus,
+    semantic_stop_error,
+)
 from ydbdoc_review_ng.ports import Clock
 from ydbdoc_review_ng.quality import QualityReviewResult, Verdict
 
@@ -26,6 +33,7 @@ class WorkflowStage(str, Enum):
     PUBLISH = "publish"
     REVIEW = "review"
     REPORT = "report"
+    CHECKPOINT = "checkpoint"
     TERMINAL_AUDIT = "terminal_audit"
 
 
@@ -36,6 +44,43 @@ class WorkflowError(RuntimeError):
         self.mode = mode
         self.stage = stage
         super().__init__(f"{mode.value} workflow failed during {stage.value}")
+
+
+@dataclass(frozen=True, slots=True)
+class CheckpointCapture:
+    source_pr: int
+    source_sha: GitSha
+    base_sha: GitSha
+    translation_branch: str
+    target_sha: GitSha | None
+    source_inventory: SourceChangeInventory
+    scope_target_paths: tuple[RepoPath, ...]
+    state: ContinuationState = field(repr=False)
+    translation_pr: int | None = None
+
+    def record(self, job_id: str, trigger_pr: int, created_at: datetime) -> ContinuationCheckpoint:
+        return ContinuationCheckpoint(
+            job_id,
+            job_id,
+            self.source_pr,
+            self.translation_pr or trigger_pr,
+            self.source_sha,
+            self.base_sha,
+            self.translation_branch,
+            self.target_sha,
+            self.source_inventory,
+            self.scope_target_paths,
+            self.state,
+            created_at,
+        )
+
+
+class SemanticCheckpointStop(RuntimeError):
+    """A supported semantic boundary with a validated continuation capture."""
+
+    def __init__(self, capture: CheckpointCapture) -> None:
+        self.capture = capture
+        super().__init__(f"semantic_stop:{capture.state.stage.value}")
 
 
 def _require_pr_number(value: object, type_name: str) -> None:
@@ -158,7 +203,15 @@ class WorkflowPersistencePort(Protocol):
         self, job_id: str, /, *, source_sha: str, target_sha: str | None
     ) -> None: ...
 
-    def save_checkpoint(self, checkpoint: ContinuationCheckpoint, /, *, now: datetime) -> None: ...
+    def save_checkpoint(
+        self, checkpoint: ContinuationCheckpoint, /, *, now: datetime
+    ) -> ContinuationCheckpoint: ...
+
+    def activate_checkpoint(
+        self, checkpoint: ContinuationCheckpoint, /, *, now: datetime
+    ) -> ContinuationCheckpoint: ...
+
+    def validate_checkpoint_job(self, checkpoint: ContinuationCheckpoint, /) -> None: ...
 
     def load_checkpoint(self, pr_number: int, /, *, now: datetime) -> ContinuationCheckpoint: ...
 
@@ -185,6 +238,10 @@ class ContentWorkflowPort(Protocol):
     def validate_candidate(
         self, snapshot: ImmutableRunSnapshot, candidate: WorkflowCandidate, /
     ) -> None: ...
+
+    def review_checkpoint(
+        self, snapshot: ImmutableRunSnapshot, review: QualityReviewResult, target_sha: GitSha, /
+    ) -> CheckpointCapture: ...
 
 
 class QualityReviewPort(Protocol):
@@ -260,6 +317,7 @@ class LinearWorkflows:
             target_sha=None,
         )
         final_sha: GitSha | None = None
+        semantic_terminal = False
         stage = WorkflowStage.AUTHORIZE
         try:
             authorization = self._source.authorize_translate(request)
@@ -279,11 +337,12 @@ class LinearWorkflows:
             self._content.validate_candidate(snapshot, candidate)
             stage = WorkflowStage.PUBLISH
             final_sha = self._publisher.publish(snapshot, candidate)
+            published_content = candidate.content
             stage = WorkflowStage.REVIEW
             repair_published = False
 
             def publish_repair(repaired_content: bytes) -> None:
-                nonlocal final_sha, repair_published, stage
+                nonlocal final_sha, repair_published, stage, published_content
                 if repair_published:
                     raise ValueError("T011 review invoked the repair callback more than once")
                 repaired = WorkflowCandidate(repaired_content, candidate.review_context)
@@ -291,6 +350,7 @@ class LinearWorkflows:
                 self._content.validate_candidate(snapshot, repaired)
                 stage = WorkflowStage.PUBLISH
                 final_sha = self._publisher.publish(snapshot, repaired)
+                published_content = repaired_content
                 repair_published = True
                 stage = WorkflowStage.REVIEW
 
@@ -301,6 +361,8 @@ class LinearWorkflows:
             )
             if review.repair_applied is not repair_published:
                 raise ValueError("T011 review returned an inconsistent repair result")
+            if review.final_candidate != published_content:
+                raise ValueError("review candidate differs from the published candidate")
             stage = WorkflowStage.REPORT
             self._reporter.update_current_pr(
                 mode=mode,
@@ -309,6 +371,13 @@ class LinearWorkflows:
                 commit_sha=final_sha,
                 review=review,
             )
+            if review.final.verdict is Verdict.RED and review.accepted_maps is not None:
+                stage = WorkflowStage.CHECKPOINT
+                capture = self._content.review_checkpoint(snapshot, review, final_sha)
+                self._complete_semantic_handoff(
+                    capture, job_id, request.pr_number, mode, audit_started_at
+                )
+                semantic_terminal = True
             result = WorkflowResult(
                 job_id,
                 mode,
@@ -316,9 +385,12 @@ class LinearWorkflows:
                 review.final.verdict,
                 review.repair_applied,
             )
+        except SemanticCheckpointStop as stop:
+            self._semantic_stop(stop, job_id, request.pr_number, mode, stage, audit_started_at)
         except Exception as error:  # noqa: BLE001 - ports may expose arbitrary safe boundaries.
             self._fail_job(job_id, mode, stage, error, audit_started_at, final_sha)
-        self._succeed_job(job_id, mode, audit_started_at, result.final_commit_sha)
+        if not semantic_terminal:
+            self._succeed_job(job_id, mode, audit_started_at, result.final_commit_sha)
         return result
 
     def doc_verify(self, request: VerifyWorkflowInput, /) -> WorkflowResult:
@@ -330,6 +402,7 @@ class LinearWorkflows:
             target_sha=request.target_sha,
         )
         final_sha: GitSha | None = request.target_sha
+        semantic_terminal = False
         stage = WorkflowStage.AUTHORIZE
         try:
             authorization = self._source.authorize_verify(request)
@@ -345,10 +418,11 @@ class LinearWorkflows:
             final_sha = snapshot.target_sha
             if final_sha is None:
                 raise ValueError("doc_verify snapshot has no target SHA")
+            published_content = candidate.content
             repair_published = False
 
             def publish_repair(repaired_content: bytes) -> None:
-                nonlocal final_sha, repair_published, stage
+                nonlocal final_sha, repair_published, stage, published_content
                 if repair_published:
                     raise ValueError("T011 review invoked the repair callback more than once")
                 repaired = WorkflowCandidate(repaired_content, candidate.review_context)
@@ -356,6 +430,7 @@ class LinearWorkflows:
                 self._content.validate_candidate(snapshot, repaired)
                 stage = WorkflowStage.PUBLISH
                 final_sha = self._publisher.publish(snapshot, repaired)
+                published_content = repaired_content
                 repair_published = True
                 stage = WorkflowStage.REVIEW
 
@@ -366,6 +441,8 @@ class LinearWorkflows:
             )
             if review.repair_applied is not repair_published:
                 raise ValueError("T011 review returned an inconsistent repair result")
+            if review.final_candidate != published_content:
+                raise ValueError("review candidate differs from the published candidate")
             stage = WorkflowStage.REPORT
             self._reporter.update_current_pr(
                 mode=mode,
@@ -374,6 +451,13 @@ class LinearWorkflows:
                 commit_sha=final_sha,
                 review=review,
             )
+            if review.final.verdict is Verdict.RED and review.accepted_maps is not None:
+                stage = WorkflowStage.CHECKPOINT
+                capture = self._content.review_checkpoint(snapshot, review, final_sha)
+                self._complete_semantic_handoff(
+                    capture, job_id, request.pr_number, mode, audit_started_at
+                )
+                semantic_terminal = True
             result = WorkflowResult(
                 job_id,
                 mode,
@@ -381,10 +465,70 @@ class LinearWorkflows:
                 review.final.verdict,
                 review.repair_applied,
             )
+        except SemanticCheckpointStop as stop:
+            self._semantic_stop(stop, job_id, request.pr_number, mode, stage, audit_started_at)
         except Exception as error:  # noqa: BLE001 - ports may expose arbitrary safe boundaries.
             self._fail_job(job_id, mode, stage, error, audit_started_at, final_sha)
-        self._succeed_job(job_id, mode, audit_started_at, result.final_commit_sha)
+        if not semantic_terminal:
+            self._succeed_job(job_id, mode, audit_started_at, result.final_commit_sha)
         return result
+
+    def _complete_semantic_handoff(
+        self,
+        capture: CheckpointCapture,
+        job_id: str,
+        trigger_pr: int,
+        mode: Mode,
+        created_at: datetime,
+    ) -> None:
+        checkpoint = capture.record(job_id, trigger_pr, created_at)
+        stage = WorkflowStage.CHECKPOINT
+        try:
+            pending = self._persistence.save_checkpoint(checkpoint, now=self._clock.now())
+            stage = WorkflowStage.TERMINAL_AUDIT
+            self._persistence.finish_job(
+                job_id,
+                JobStatus.FAILED,
+                error=semantic_stop_error(capture.state.stage),
+                finished_at=self._clock.now(),
+                target_sha=None if capture.target_sha is None else capture.target_sha.value,
+            )
+            stage = WorkflowStage.CHECKPOINT
+            self._persistence.activate_checkpoint(pending, now=self._clock.now())
+        except Exception:  # noqa: BLE001 - each cleanup remains independent of acknowledgement loss.
+            self._abandon_capture(checkpoint, mode, stage, created_at)
+            raise WorkflowError(mode, stage) from None
+
+    def _abandon_capture(
+        self,
+        checkpoint: ContinuationCheckpoint,
+        mode: Mode,
+        stage: WorkflowStage,
+        fallback_time: datetime,
+    ) -> None:
+        # Neither cleanup failure may prevent the other write or expose payloads.
+        with suppress(Exception):
+            self._persistence.close_checkpoint(checkpoint.continuation_id)
+        with suppress(Exception):
+            self._record_failed_terminal(
+                checkpoint.job_id,
+                mode,
+                safe_error=f"{stage.value}_failed",
+                fallback_time=fallback_time,
+                target_sha=checkpoint.target_sha,
+            )
+
+    def _semantic_stop(
+        self,
+        stop: SemanticCheckpointStop,
+        job_id: str,
+        trigger_pr: int,
+        mode: Mode,
+        stage: WorkflowStage,
+        started_at: datetime,
+    ) -> NoReturn:
+        self._complete_semantic_handoff(stop.capture, job_id, trigger_pr, mode, started_at)
+        raise WorkflowError(mode, stage) from None
 
     def _start_job(
         self,

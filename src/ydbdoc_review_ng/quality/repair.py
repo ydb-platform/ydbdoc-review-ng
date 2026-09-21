@@ -6,6 +6,7 @@ import json
 from collections.abc import Callable
 from typing import Protocol, cast
 
+from ydbdoc_review_ng.continuation import AcceptedMap
 from ydbdoc_review_ng.domain import Locale, ModelRole, RepoPath
 from ydbdoc_review_ng.models import ModelCallResult, ModelRequest
 from ydbdoc_review_ng.models.types import FrozenJson
@@ -273,11 +274,21 @@ def review_translation(
     target_locale: Locale,
     before_final_critic: Callable[[bytes], None] | None = None,
     allow_repair: bool = True,
+    accepted_map: AcceptedMap | None = None,
 ) -> QualityReviewResult:
     """Review the actual candidate and apply no more than one source-only repair."""
-    target_translations = _derive_target_translations(
-        source, source_plan, translation_request, target, target_path
-    )
+    if accepted_map is None:
+        target_translations = _derive_target_translations(
+            source, source_plan, translation_request, target, target_path
+        )
+    else:
+        target_translations = accepted_map.as_dict()
+        if (
+            accepted_map.target_path != target_path
+            or assemble_candidate(source, source_plan, translation_request, target_translations)
+            != target
+        ):
+            raise QualityInputError
     primary = _invoke_critic(
         executor,
         model=model,
@@ -291,7 +302,17 @@ def review_translation(
     )
     repair_findings, repair_ids = _safe_repair_findings(primary.findings, source_plan, target)
     if not repair_ids or not allow_repair:
-        return QualityReviewResult(target, None, target, primary, primary, False, False, None)
+        return QualityReviewResult(
+            target,
+            None,
+            target,
+            primary,
+            primary,
+            False,
+            False,
+            None,
+            (AcceptedMap(target_path, tuple(sorted(target_translations.items()))),),
+        )
 
     repair_request, subset = _repair_request(
         model=model,
@@ -308,7 +329,7 @@ def review_translation(
     repair_error: RepairErrorReason | None = None
     repaired_candidate: bytes | None = None
     if not repair_response.success or repair_response.text is None:
-        repair_error = RepairErrorReason.MODEL_CALL_FAILED
+        raise QualityExecutionError("repair")
     else:
         try:
             repaired_values = parse_translation_response(repair_response.text, subset)
@@ -317,6 +338,7 @@ def review_translation(
             repaired_candidate = assemble_candidate(
                 source, source_plan, translation_request, merged
             )
+            target_translations = merged
         except ResponseError:
             repair_error = RepairErrorReason.INVALID_RESPONSE
         except (AssemblyError, UnicodeError):
@@ -344,4 +366,5 @@ def review_translation(
         True,
         repaired_candidate is not None,
         repair_error,
+        (AcceptedMap(target_path, tuple(sorted(target_translations.items()))),),
     )

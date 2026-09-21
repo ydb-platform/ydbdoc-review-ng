@@ -8,6 +8,7 @@ from ydbdoc_review_ng.persistence.ydb import (
     PersistenceError,
     YdbExecutor,
     YdbPersistence,
+    semantic_stop_error,
 )
 
 __all__ = [
@@ -18,4 +19,5 @@ __all__ = [
     "PersistenceError",
     "YdbExecutor",
     "YdbPersistence",
+    "semantic_stop_error",
 ]

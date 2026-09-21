@@ -24,14 +24,28 @@ class CheckpointExecutor:
 
     def __init__(self) -> None:
         self.rows: dict[str, dict[str, object]] = {}
+        self.jobs = {
+            "original-job": {"job_id": "original-job", "source_sha": "a" * 40, "target_sha": None}
+        }
         self.calls: list[tuple[str, Mapping[str, object]]] = []
 
     def execute(self, statement: str, parameters: Mapping[str, object], /):
         self.calls.append((statement, parameters))
+        if "/jobs`" in statement:
+            if "SELECT" in statement:
+                row = self.jobs.get(parameters["job_id"])
+                return [] if row is None else [row]
+            self.jobs.setdefault(parameters["job_id"], {}).update(parameters)
+            return []
         if "UPSERT" in statement:
             self.rows[str(parameters["continuation_id"])] = dict(parameters)
         elif "UPDATE" in statement:
-            self.rows[str(parameters["continuation_id"])]["status"] = "closed"
+            row = self.rows[str(parameters["continuation_id"])]
+            if "SET status = 'open'" in statement:
+                if all(row.get(key) == value for key, value in parameters.items()):
+                    row["status"] = "open"
+            else:
+                row["status"] = "closed"
         elif "SELECT" in statement:
             if "continuation_id" in parameters:
                 row = self.rows.get(str(parameters["continuation_id"]))
@@ -61,11 +75,92 @@ def checkpoint():
     )
 
 
+def save_semantic(store, saved, *, now):
+    pending = store.save_checkpoint(saved, now=now)
+    store.finish_job(
+        saved.job_id,
+        ydb.JobStatus.FAILED,
+        error=ydb.semantic_stop_error(saved.state.stage),
+        finished_at=now,
+        target_sha=None if saved.target_sha is None else saved.target_sha.value,
+    )
+    return store.activate_checkpoint(pending, now=now)
+
+
+@pytest.mark.parametrize("stage", list(ContinuationStage))
+def test_capture_requires_pending_then_acknowledged_semantic_job_and_activation(stage):
+    executor = CheckpointExecutor()
+    store = YdbPersistence(executor)
+    saved = checkpoint() if stage is ContinuationStage.DIRECTION else selected_checkpoint(stage)
+    pending = store.save_checkpoint(saved, now=NOW)
+    assert pending.status.value == "pending"
+    with pytest.raises(ydb.PersistenceError):
+        store.load_checkpoint(42, now=NOW)
+    with pytest.raises(ydb.PersistenceError):
+        store.activate_checkpoint(pending, now=NOW)
+    store.finish_job(
+        saved.job_id,
+        ydb.JobStatus.FAILED,
+        error=ydb.semantic_stop_error(stage),
+        finished_at=NOW,
+        target_sha=None if saved.target_sha is None else saved.target_sha.value,
+    )
+    with pytest.raises(ydb.PersistenceError):
+        store.load_checkpoint(42, now=NOW)
+    with pytest.raises(ydb.PersistenceError):
+        store.validate_checkpoint_job(pending)
+    opened = store.activate_checkpoint(pending, now=NOW)
+    assert opened.status.value == "open"
+    assert opened.created_at == saved.created_at
+    assert opened.expires_at == saved.expires_at
+    assert store.load_checkpoint(42, now=NOW) == opened
+    store.validate_checkpoint_job(opened)
+    for error in ("prepare_failed", "checkpoint_failed", "continuable_wrong", None):
+        executor.jobs[saved.job_id]["error"] = error
+        with pytest.raises(ydb.PersistenceError):
+            store.load_checkpoint(42, now=NOW)
+        with pytest.raises(ydb.PersistenceError):
+            store.validate_checkpoint_job(opened)
+
+
+def test_open_row_rejects_a_semantic_marker_for_a_different_stage():
+    executor = CheckpointExecutor()
+    store = YdbPersistence(executor)
+    opened = save_semantic(store, selected_checkpoint(), now=NOW)
+    executor.jobs[opened.job_id]["error"] = ydb.semantic_stop_error(ContinuationStage.DIRECTION)
+    with pytest.raises(ydb.PersistenceError):
+        store.load_checkpoint(42, now=NOW)
+
+
+def test_activation_checks_exact_pending_record_and_never_refreshes_expiry():
+    executor = CheckpointExecutor()
+    store = YdbPersistence(executor)
+    first = save_semantic(store, checkpoint(), now=NOW)
+    later = NOW + timedelta(days=5)
+    pending = store.save_checkpoint(replace(selected_checkpoint(), created_at=later), now=later)
+    assert pending.created_at == first.created_at
+    assert executor.rows[pending.continuation_id]["status"] == "pending"
+    with pytest.raises(ydb.PersistenceError):
+        store.load_checkpoint(42, now=later)
+    store.finish_job(
+        pending.job_id,
+        ydb.JobStatus.FAILED,
+        error=ydb.semantic_stop_error(pending.state.stage),
+        finished_at=later,
+    )
+    with pytest.raises(ydb.PersistenceError):
+        store.activate_checkpoint(replace(pending, trigger_pr=999), now=later)
+    reopened = store.activate_checkpoint(pending, now=later)
+    assert reopened.expires_at == first.expires_at
+    with pytest.raises(ydb.PersistenceError):
+        store.activate_checkpoint(pending, now=first.expires_at)
+
+
 def test_save_load_close_checkpoint_for_source_and_translation_pr() -> None:
     executor = CheckpointExecutor()
     store = YdbPersistence(executor)
     original = checkpoint()
-    store.save_checkpoint(original, now=NOW)
+    save_semantic(store, original, now=NOW)
     assert store.load_checkpoint(42, now=NOW) == original
     assert store.load_checkpoint(52, now=NOW) == original
     row = executor.rows["checkpoint-1"]
@@ -83,7 +178,7 @@ def test_save_load_close_checkpoint_for_source_and_translation_pr() -> None:
 def test_later_semantic_stop_keeps_original_creation_and_expiry() -> None:
     executor = CheckpointExecutor()
     store = YdbPersistence(executor)
-    store.save_checkpoint(checkpoint(), now=NOW)
+    save_semantic(store, checkpoint(), now=NOW)
     later = NOW + timedelta(days=5)
     pending = ContinuationState(
         1,
@@ -95,7 +190,8 @@ def test_later_semantic_stop_keeps_original_creation_and_expiry() -> None:
         (),
         None,
     )
-    store.save_checkpoint(
+    save_semantic(
+        store,
         replace(
             checkpoint(),
             created_at=later,
@@ -119,7 +215,7 @@ def test_later_semantic_stop_keeps_original_creation_and_expiry() -> None:
 def test_load_rejects_unusable_physically_present_rows(corruption: str) -> None:
     executor = CheckpointExecutor()
     store = YdbPersistence(executor)
-    store.save_checkpoint(checkpoint(), now=NOW)
+    save_semantic(store, checkpoint(), now=NOW)
     row = executor.rows["checkpoint-1"]
     if corruption == "closed":
         row["status"] = "closed"
@@ -141,7 +237,7 @@ def test_closed_or_expired_lineage_cannot_be_reopened_or_extended() -> None:
     executor = CheckpointExecutor()
     store = YdbPersistence(executor)
     original = checkpoint()
-    store.save_checkpoint(original, now=NOW)
+    save_semantic(store, original, now=NOW)
     later = NOW + timedelta(days=14)
     with pytest.raises(ydb.PersistenceError):
         store.save_checkpoint(replace(original, created_at=later), now=later)
@@ -154,8 +250,8 @@ def test_later_stop_can_associate_translation_pr_without_changing_lineage() -> N
     executor = CheckpointExecutor()
     store = YdbPersistence(executor)
     original = replace(checkpoint(), trigger_pr=42)
-    store.save_checkpoint(original, now=NOW)
-    store.save_checkpoint(replace(original, trigger_pr=52), now=NOW + timedelta(hours=1))
+    save_semantic(store, original, now=NOW)
+    save_semantic(store, replace(original, trigger_pr=52), now=NOW + timedelta(hours=1))
     restored = store.load_checkpoint(52, now=NOW + timedelta(hours=1))
     assert restored.job_id == "original-job"
     assert restored.source_pr == 42
@@ -184,7 +280,7 @@ def test_checkpoint_inventory_is_required_and_cannot_change_within_lineage() -> 
             ]
         ),
     )
-    store.save_checkpoint(original, now=NOW)
+    save_semantic(store, original, now=NOW)
     row = executor.rows["checkpoint-1"]
     assert isinstance(row["source_inventory"], bytes)
     assert store.load_checkpoint(42, now=NOW).source_inventory == original.source_inventory
@@ -240,11 +336,11 @@ def test_checkpoint_scope_selection_requires_paths_for_selected_stages(stage):
 def test_scope_selection_is_frozen_after_direction_has_been_resolved():
     executor = CheckpointExecutor()
     store = YdbPersistence(executor)
-    store.save_checkpoint(checkpoint(), now=NOW)
+    save_semantic(store, checkpoint(), now=NOW)
     selected = selected_checkpoint()
-    store.save_checkpoint(selected, now=NOW)
+    save_semantic(store, selected, now=NOW)
     assert store.load_checkpoint(42, now=NOW) == selected
-    store.save_checkpoint(selected_checkpoint(ContinuationStage.REVIEW), now=NOW)
+    save_semantic(store, selected_checkpoint(ContinuationStage.REVIEW), now=NOW)
     changed = replace(selected, scope_target_paths=(RepoPath("en/a.md"), RepoPath("en/noop.md")))
     with pytest.raises(ydb.PersistenceError, match="lineage mismatch"):
         store.save_checkpoint(changed, now=NOW)
@@ -256,7 +352,7 @@ def test_scope_selection_is_frozen_after_direction_has_been_resolved():
 def test_persisted_scope_selection_corruption_fails_closed_on_load(wire):
     executor = CheckpointExecutor()
     store = YdbPersistence(executor)
-    store.save_checkpoint(selected_checkpoint(), now=NOW)
+    save_semantic(store, selected_checkpoint(), now=NOW)
     row = executor.rows["checkpoint-1"]
     if wire is None:
         del row["scope_target_paths"]

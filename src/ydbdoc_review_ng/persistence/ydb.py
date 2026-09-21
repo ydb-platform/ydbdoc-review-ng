@@ -7,6 +7,7 @@ transactions, retries, and workflow sequencing belong outside this module.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
@@ -59,8 +60,18 @@ class JobStatus(str, Enum):
 
 
 class CheckpointStatus(str, Enum):
+    PENDING = "pending"
     OPEN = "open"
     CLOSED = "closed"
+
+
+def semantic_stop_error(stage: ContinuationStage) -> str:
+    """The only audit errors that authorize a semantic continuation handoff."""
+    return {
+        ContinuationStage.DIRECTION: "continuable_direction",
+        ContinuationStage.TRANSLATION: "continuable_translation",
+        ContinuationStage.REVIEW: "continuable_review",
+    }[stage]
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,8 +119,10 @@ class ContinuationCheckpoint:
             raise PersistenceError("review checkpoint requires target SHA")
         if (self.state.stage is ContinuationStage.DIRECTION) != (not self.scope_target_paths):
             raise PersistenceError("continuation scope selection incompatible with stage")
-        referenced = {item.target_path for item in self.state.accepted_maps} | set(
-            self.state.pending_paths
+        referenced = (
+            {item.target_path for item in self.state.accepted_maps}
+            | set(self.state.pending_paths)
+            | set(self.state.review_paths)
         )
         if not referenced.issubset(self.scope_target_paths):
             raise PersistenceError("continuation scope selection omits state paths")
@@ -208,8 +221,10 @@ class YdbPersistence:
             {},
         )
 
-    def save_checkpoint(self, checkpoint: ContinuationCheckpoint, /, *, now: datetime) -> None:
-        """Save or replace one semantic stop, retaining the persisted lineage age."""
+    def save_checkpoint(
+        self, checkpoint: ContinuationCheckpoint, /, *, now: datetime
+    ) -> ContinuationCheckpoint:
+        """Stage a non-resumable semantic stop without refreshing its lineage age."""
         rows = self._execute(
             "checkpoint lookup",
             f"SELECT * FROM `{self._table('continuations')}` WHERE continuation_id = $continuation_id;",
@@ -217,7 +232,7 @@ class YdbPersistence:
         )
         if rows:
             previous = self._checkpoint(rows[0])
-            self._require_open(previous, now)
+            self._require_live(previous, now)
             if (
                 previous.state.stage is not ContinuationStage.DIRECTION
                 and previous.scope_target_paths != checkpoint.scope_target_paths
@@ -234,7 +249,8 @@ class YdbPersistence:
                 if getattr(previous, name) != getattr(checkpoint, name):
                     raise PersistenceError("continuation lineage mismatch")
             checkpoint = replace(checkpoint, created_at=previous.created_at)
-        self._require_open(checkpoint, now)
+        self._require_live(checkpoint, now)
+        checkpoint = replace(checkpoint, status=CheckpointStatus.PENDING)
         self._execute(
             "checkpoint save",
             f"""UPSERT INTO `{self._table("continuations")}`
@@ -244,29 +260,99 @@ class YdbPersistence:
                 VALUES ($continuation_id, $job_id, $source_pr, $trigger_pr, $source_sha,
                  $base_sha, $translation_branch, $target_sha, $stage, $source_inventory,
                  $scope_target_paths, $state, $status, $created_at);""",
-            {
-                "continuation_id": checkpoint.continuation_id,
-                "job_id": checkpoint.job_id,
-                "source_pr": checkpoint.source_pr,
-                "trigger_pr": checkpoint.trigger_pr,
-                "source_sha": checkpoint.source_sha.value,
-                "base_sha": checkpoint.base_sha.value,
-                "translation_branch": checkpoint.translation_branch,
-                "target_sha": None
-                if checkpoint.target_sha is None
-                else checkpoint.target_sha.value,
-                "stage": checkpoint.state.stage.value,
-                "source_inventory": encode_source_inventory(checkpoint.source_inventory).encode(
-                    "utf-8"
-                ),
-                "scope_target_paths": encode_scope_target_paths(
-                    checkpoint.scope_target_paths
-                ).encode("utf-8"),
-                "state": encode_state(checkpoint.state).encode("utf-8"),
-                "status": checkpoint.status.value,
-                "created_at": checkpoint.created_at,
-            },
+            self._checkpoint_values(checkpoint),
         )
+        return checkpoint
+
+    @staticmethod
+    def _checkpoint_values(checkpoint: ContinuationCheckpoint) -> dict[str, object]:
+        return {
+            "continuation_id": checkpoint.continuation_id,
+            "job_id": checkpoint.job_id,
+            "source_pr": checkpoint.source_pr,
+            "trigger_pr": checkpoint.trigger_pr,
+            "source_sha": checkpoint.source_sha.value,
+            "base_sha": checkpoint.base_sha.value,
+            "translation_branch": checkpoint.translation_branch,
+            "target_sha": None if checkpoint.target_sha is None else checkpoint.target_sha.value,
+            "stage": checkpoint.state.stage.value,
+            "source_inventory": encode_source_inventory(checkpoint.source_inventory).encode(
+                "utf-8"
+            ),
+            "scope_target_paths": encode_scope_target_paths(checkpoint.scope_target_paths).encode(
+                "utf-8"
+            ),
+            "state": encode_state(checkpoint.state).encode("utf-8"),
+            "status": checkpoint.status.value,
+            "created_at": checkpoint.created_at,
+        }
+
+    def activate_checkpoint(
+        self, checkpoint: ContinuationCheckpoint, /, *, now: datetime
+    ) -> ContinuationCheckpoint:
+        """Open this exact pending stop after its semantic terminal audit was acknowledged."""
+        pending = replace(checkpoint, status=CheckpointStatus.PENDING)
+        opened = replace(checkpoint, status=CheckpointStatus.OPEN)
+        current = self._checkpoint_by_id(checkpoint.continuation_id)
+        self._require_live(current, now)
+        if current not in (pending, opened):
+            raise PersistenceError("checkpoint activation mismatch")
+        self._validate_job(current)
+        if current == pending:
+            # A lost acknowledgement succeeds only when exact read-back proves
+            # that this guarded activation and the semantic audit committed.
+            with suppress(PersistenceError):
+                self._execute(
+                    "checkpoint activation",
+                    f"""UPDATE `{self._table("continuations")}` SET status = 'open'
+                        WHERE continuation_id = $continuation_id AND status = $status
+                        AND job_id = $job_id AND source_pr = $source_pr AND trigger_pr = $trigger_pr
+                        AND source_sha = $source_sha AND base_sha = $base_sha
+                        AND translation_branch = $translation_branch AND created_at = $created_at
+                        AND (target_sha = $target_sha OR (target_sha IS NULL AND $target_sha IS NULL))
+                        AND stage = $stage AND state = $state
+                        AND source_inventory = $source_inventory
+                        AND scope_target_paths = $scope_target_paths;""",
+                    self._checkpoint_values(pending),
+                )
+        actual = self._checkpoint_by_id(checkpoint.continuation_id)
+        if actual != opened:
+            raise PersistenceError("checkpoint activation unconfirmed")
+        self._require_open(actual, now)
+        self.validate_checkpoint_job(actual)
+        return actual
+
+    def _checkpoint_by_id(self, continuation_id: str) -> ContinuationCheckpoint:
+        rows = self._execute(
+            "checkpoint lookup",
+            f"SELECT * FROM `{self._table('continuations')}` WHERE continuation_id = $continuation_id;",
+            {"continuation_id": continuation_id},
+        )
+        if len(rows) != 1:
+            raise PersistenceError("continuation checkpoint missing or ambiguous")
+        return self._checkpoint(rows[0])
+
+    def validate_checkpoint_job(self, checkpoint: ContinuationCheckpoint, /) -> None:
+        """Reject non-open records or an original audit without the exact semantic marker."""
+        if checkpoint.status is not CheckpointStatus.OPEN:
+            raise PersistenceError("continuation checkpoint is not open")
+        self._validate_job(checkpoint)
+
+    def _validate_job(self, checkpoint: ContinuationCheckpoint) -> None:
+        rows = self._execute(
+            "checkpoint job lookup",
+            f"SELECT * FROM `{self._table('jobs')}` WHERE job_id = $job_id;",
+            {"job_id": checkpoint.job_id},
+        )
+        expected = {
+            "job_id": checkpoint.job_id,
+            "status": JobStatus.FAILED.value,
+            "error": semantic_stop_error(checkpoint.state.stage),
+            "source_sha": checkpoint.source_sha.value,
+            "target_sha": None if checkpoint.target_sha is None else checkpoint.target_sha.value,
+        }
+        if len(rows) != 1 or any(rows[0].get(key) != value for key, value in expected.items()):
+            raise PersistenceError("continuation original job is not a matching semantic stop")
 
     def load_checkpoint(self, pr_number: int, /, *, now: datetime) -> ContinuationCheckpoint:
         rows = self._execute(
@@ -280,6 +366,7 @@ class YdbPersistence:
             raise PersistenceError("continuation checkpoint missing or ambiguous")
         checkpoint = applicable[0]
         self._require_open(checkpoint, now)
+        self.validate_checkpoint_job(checkpoint)
         return checkpoint
 
     def close_checkpoint(self, continuation_id: str, /) -> None:
@@ -291,9 +378,15 @@ class YdbPersistence:
 
     @staticmethod
     def _require_open(checkpoint: ContinuationCheckpoint, now: datetime) -> None:
+        YdbPersistence._require_live(checkpoint, now)
+        if checkpoint.status is not CheckpointStatus.OPEN:
+            raise PersistenceError("continuation checkpoint is not open")
+
+    @staticmethod
+    def _require_live(checkpoint: ContinuationCheckpoint, now: datetime) -> None:
         if (
             now.utcoffset() is None
-            or checkpoint.status is not CheckpointStatus.OPEN
+            or checkpoint.status is CheckpointStatus.CLOSED
             or not (checkpoint.created_at <= now < checkpoint.expires_at)
         ):
             raise PersistenceError("continuation checkpoint closed or expired")

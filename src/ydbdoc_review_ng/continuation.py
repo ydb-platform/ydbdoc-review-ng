@@ -318,7 +318,6 @@ class ContinuationState:
             or pending
             or not review
             or self.candidate_sha256 is None
-            or not set(review).issubset(set(accepted_paths))
         ):
             raise _fail()
 

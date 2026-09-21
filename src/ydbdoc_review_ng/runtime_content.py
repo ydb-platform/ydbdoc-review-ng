@@ -7,11 +7,19 @@ import json
 import posixpath
 import re
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, cast
 
 from ydbdoc_review_ng.application import ImmutableRunSnapshot, WorkflowCandidate
-from ydbdoc_review_ng.continuation import AcceptedMap, SourceChangeInventory
+from ydbdoc_review_ng.application.workflows import CheckpointCapture, SemanticCheckpointStop
+from ydbdoc_review_ng.continuation import (
+    AcceptedMap,
+    ContinuationStage,
+    ContinuationState,
+    SourceChangeInventory,
+    candidate_sha256,
+    checkpoint_scope_sha256,
+)
 from ydbdoc_review_ng.dependencies import DependencyLink, RedirectCatalog
 from ydbdoc_review_ng.direction import (
     DIRECTION_UNDETERMINED_ACTION,
@@ -24,7 +32,7 @@ from ydbdoc_review_ng.direction import (
     DirectionSelectionState,
     select_direction,
 )
-from ydbdoc_review_ng.domain import ModelRole, RepoPath, SnapshotRef
+from ydbdoc_review_ng.domain import GitSha, Mode, ModelRole, RepoPath, SnapshotRef
 from ydbdoc_review_ng.locales import (
     ChangedFileKind,
     ChangedFileMetadata,
@@ -53,6 +61,8 @@ from ydbdoc_review_ng.scope import (
     freeze_scope_manifest,
 )
 from ydbdoc_review_ng.translation import (
+    AssemblyError,
+    ResponseError,
     TranslationRequest,
     assemble_candidate,
     build_translation_request,
@@ -106,6 +116,10 @@ class FrozenSourcePlans:
     manifest: ScopeManifest | None
     documents: tuple[Document, ...]
     fixed_files: tuple[tuple[str, bytes | None], ...]
+
+
+class InvalidTranslationResponse(RuntimeError):
+    """A received document response failed the strict map/assembly contract."""
 
 
 class MarkdownDependencies:
@@ -219,6 +233,7 @@ class RuntimeContent:
         self.documents: tuple[Document, ...] = ()
         self.entries: tuple[ScopeEntry, ...] = ()
         self.accepted_maps: tuple[AcceptedMap, ...] = ()
+        self.plans: FrozenSourcePlans | None = None
         self.publisher: GitPublicationAdapter
 
     def prepare_source(
@@ -292,6 +307,7 @@ class RuntimeContent:
         /,
         *,
         direction: DirectionSelectionResult | None = None,
+        review_documents: bool = False,
     ) -> FrozenSourcePlans:
         """Freeze source plans, optionally using an already restored direction decision."""
         snapshots = preparation.snapshots
@@ -305,19 +321,35 @@ class RuntimeContent:
                 self.source.source_pr,
                 DIRECTION_UNDETERMINED_WARNING + "\n" + DIRECTION_UNDETERMINED_ACTION,
             )
-            raise RuntimeBoundaryError("direction_undetermined")
+            state = ContinuationState(1, ContinuationStage.DIRECTION, None, None, (), (), (), None)
+            raise SemanticCheckpointStop(self._capture(preparation, state))
         selection = freeze_scope_manifest(preparation.potential, direction)
         self.entries = () if selection.manifest is None else selection.manifest.entries
         files: dict[str, bytes | None] = {}
+        metadata_preparation = replace(
+            preparation, metadata_snapshot=snapshots.translation_base_snapshot
+        )
         if translate:
             for entry in self.entries:
-                self._metadata(preparation, entry, files)
+                self._metadata(metadata_preparation, entry, files)
         else:
             missing_metadata: dict[str, bytes | None] = {}
             for entry in self.entries:
                 self._metadata(preparation, entry, missing_metadata, verify_noop=True)
             if missing_metadata:
                 raise RuntimeBoundaryError("verification_metadata_mismatch")
+            # A verify checkpoint must reproduce the same complete file set as
+            # translation replay, including metadata generated from the pinned base.
+            for entry in self.entries:
+                self._metadata(metadata_preparation, entry, files)
+            for metadata_path, expected in files.items():
+                if (
+                    self.source.github.read_bytes(
+                        preparation.metadata_snapshot, RepoPath(metadata_path)
+                    )
+                    != expected
+                ):
+                    raise RuntimeBoundaryError("verification_metadata_mismatch")
         documents = []
         target_snapshot = SnapshotRef(
             snapshots.source_snapshot.repository, preparation.metadata_snapshot.commit_sha
@@ -346,6 +378,7 @@ class RuntimeContent:
                     FileOperation.SKIP_TARGET_TOMBSTONE,
                 }
                 or translate
+                and not review_documents
                 and entry.operation is FileOperation.NOOP_TARGET_ALREADY_RENAMED
             ):
                 continue
@@ -385,9 +418,10 @@ class RuntimeContent:
                 raise RuntimeBoundaryError("verification_target_missing")
             files[path.value] = target
         self.documents = tuple(documents)
-        return FrozenSourcePlans(
+        self.plans = FrozenSourcePlans(
             preparation, selection.manifest, self.documents, tuple(sorted(files.items()))
         )
+        return self.plans
 
     def _rename_target_preimage(
         self, entry: ScopeEntry, inventory: SourceChangeInventory
@@ -446,16 +480,34 @@ class RuntimeContent:
 
     def prepare_translation(self, snapshot: ImmutableRunSnapshot, /) -> WorkflowCandidate:
         plans = self.select_source(self.prepare_source(snapshot))
-        accepted = []
+        accepted: list[AcceptedMap] = []
         self.accepted_maps = ()
-        for document in plans.documents:
-            if document.entry.operation is FileOperation.RENAME_TARGET:
-                continue
-            accepted.append(self.translate_document(document))
+        documents = tuple(
+            doc for doc in plans.documents if doc.entry.operation is not FileOperation.RENAME_TARGET
+        )
+        for index, document in enumerate(documents):
+            try:
+                accepted.append(self.translate_document(document))
+            except InvalidTranslationResponse:
+                assert plans.manifest is not None
+                state = ContinuationState(
+                    1,
+                    ContinuationStage.TRANSLATION,
+                    plans.manifest.direction,
+                    checkpoint_scope_sha256(plans.manifest, plans.preparation.inventory),
+                    self.accepted_maps,
+                    tuple(doc.entry.pair.target_path for doc in documents[index:]),
+                    (),
+                    None,
+                )
+                raise SemanticCheckpointStop(
+                    self._capture(plans.preparation, state, plans)
+                ) from None
             self.accepted_maps = tuple(sorted(accepted, key=lambda item: item.target_path.value))
         return self.assemble(plans, self.accepted_maps)
 
     def load_verification_candidate(self, snapshot: ImmutableRunSnapshot, /) -> WorkflowCandidate:
+        self.accepted_maps = ()
         plans = self.select_source(self.prepare_source(snapshot, translate=False))
         return WorkflowCandidate(pack(dict(plans.fixed_files)), plans.documents)
 
@@ -485,8 +537,11 @@ class RuntimeContent:
         )
         if not result.success or result.text is None:
             raise RuntimeBoundaryError("translation_model_failed")
-        values = parse_translation_response(result.text, request)
-        assemble_candidate(document.source, document.plan, request, values)
+        try:
+            values = parse_translation_response(result.text, request)
+            assemble_candidate(document.source, document.plan, request, values)
+        except (ResponseError, AssemblyError, UnicodeError):
+            raise InvalidTranslationResponse("translation_response_invalid") from None
         return AcceptedMap(entry.pair.target_path, tuple(sorted(values.items())))
 
     def assemble(
@@ -501,13 +556,15 @@ class RuntimeContent:
             for document in plans.documents
             if document.entry.operation is not FileOperation.RENAME_TARGET
         )
-        if len(values) != len(maps) or set(values) != {
-            document.entry.pair.target_path for document in documents
-        }:
+        required = {document.entry.pair.target_path for document in documents}
+        allowed = {document.entry.pair.target_path for document in plans.documents}
+        if len(values) != len(maps) or not required <= set(values) <= allowed:
             raise RuntimeBoundaryError("candidate_map_paths_mismatch")
         files = dict(plans.fixed_files)
-        for document in documents:
+        for document in plans.documents:
             path = document.entry.pair.target_path
+            if path not in values:
+                continue
             files[path.value] = assemble_candidate(
                 document.source,
                 document.plan,
@@ -566,6 +623,8 @@ class RuntimeContent:
         repaired = False
         attempted = False
         repair_error = None
+        accepted: list[AcceptedMap] = []
+        previous = {item.target_path: item for item in self.accepted_maps}
         for document in self.documents:
             path = document.entry.pair.target_path
             target = files[path.value]
@@ -588,7 +647,15 @@ class RuntimeContent:
                 target_locale=document.entry.pair.target_locale,
                 before_final_critic=publish,
                 allow_repair=not attempted,
+                accepted_map=previous.get(path),
             )
+            if (
+                document.entry.operation is not FileOperation.RENAME_TARGET
+                or review.repair_applied
+                or review.final_candidate != document.entry.rename_from_target_content
+            ):
+                assert review.accepted_maps is not None
+                accepted.extend(review.accepted_maps)
             reviews.append(review)
             attempted |= review.repair_attempted
             repaired |= review.repair_applied
@@ -607,4 +674,62 @@ class RuntimeContent:
             attempted,
             repaired,
             repair_error,
+            tuple(sorted(accepted, key=lambda item: item.target_path.value)),
         )
+
+    def _capture(
+        self,
+        preparation: FrozenPreparation,
+        state: ContinuationState,
+        plans: FrozenSourcePlans | None = None,
+        target_sha: GitSha | None = None,
+    ) -> CheckpointCapture:
+        return CheckpointCapture(
+            self.source.source_pr,
+            preparation.snapshot.source_sha,
+            preparation.snapshots.translation_base_snapshot.commit_sha,
+            preparation.snapshot.branch,
+            target_sha
+            if target_sha is not None
+            else self.source.github.head(preparation.snapshot.branch),
+            preparation.inventory,
+            ()
+            if plans is None or plans.manifest is None
+            else tuple(entry.pair.target_path for entry in plans.manifest.entries),
+            state,
+            self.publisher.pr_number,
+        )
+
+    def review_checkpoint(
+        self, snapshot: ImmutableRunSnapshot, review: QualityReviewResult, target_sha: GitSha, /
+    ) -> CheckpointCapture:
+        plans = self.plans
+        if snapshot.mode is Mode.DOC_TRANSLATE and self.publisher.noop:
+            raise RuntimeBoundaryError("review_checkpoint_unreported")
+        if plans is None or plans.manifest is None or review.accepted_maps is None:
+            raise RuntimeBoundaryError("review_checkpoint_missing_scope")
+        if self.source.github.head(snapshot.branch) != target_sha:
+            raise RuntimeBoundaryError("review_checkpoint_head_mismatch")
+        published = SnapshotRef(plans.preparation.snapshots.source_snapshot.repository, target_sha)
+        for path, content in unpack(review.final_candidate).items():
+            if self.source.github.read_bytes(published, RepoPath(path)) != content:
+                raise RuntimeBoundaryError("review_checkpoint_candidate_mismatch")
+        review_paths = tuple(
+            sorted(
+                {RepoPath(item.target_path) for item in review.final.findings},
+                key=lambda path: path.value,
+            )
+        )
+        if not set(review_paths).issubset(doc.entry.pair.target_path for doc in plans.documents):
+            raise RuntimeBoundaryError("review_checkpoint_path_mismatch")
+        state = ContinuationState(
+            1,
+            ContinuationStage.REVIEW,
+            plans.manifest.direction,
+            checkpoint_scope_sha256(plans.manifest, plans.preparation.inventory),
+            review.accepted_maps,
+            (),
+            review_paths,
+            candidate_sha256(review.final_candidate),
+        )
+        return self._capture(plans.preparation, state, plans, target_sha)
