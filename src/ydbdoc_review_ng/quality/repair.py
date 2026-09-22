@@ -144,6 +144,8 @@ def _invoke_critic(
     target_locale: Locale,
     requested_ids: tuple[str, ...],
     final: bool,
+    operator_context: str | None = None,
+    before_model_call: Callable[[], None] | None = None,
 ) -> CriticResult:
     request = build_critic_request(
         model=model,
@@ -154,7 +156,10 @@ def _invoke_critic(
         target_locale=target_locale,
         requested_ids=requested_ids,
         final=final,
+        operator_context=operator_context,
     )
+    if before_model_call is not None:
+        before_model_call()
     response = executor.invoke(request)
     if not response.success or response.text is None:
         raise QualityExecutionError("final_critic" if final else "critic")
@@ -211,6 +216,7 @@ def _repair_request(
     translation_request: TranslationRequest,
     findings: tuple[Finding, ...],
     field_ids: tuple[str, ...],
+    operator_context: str | None = None,
 ) -> tuple[ModelRequest, TranslationRequest]:
     allowed = set(field_ids)
     fields = tuple(field for field in translation_request.fields if field.field_id in allowed)
@@ -251,6 +257,8 @@ def _repair_request(
         f"Problems: {json.dumps(problems, ensure_ascii=False)}\n"
         f"Allowed fields: {json.dumps(allowed_fields, ensure_ascii=False)}"
     )
+    if operator_context is not None:
+        prompt += "\n<operator-context>\n" + operator_context + "</operator-context>"
     properties = {field_id: {"type": "string"} for field_id in subset.requested_ids}
     schema = {
         "type": "object",
@@ -275,13 +283,17 @@ def review_translation(
     before_final_critic: Callable[[bytes], None] | None = None,
     allow_repair: bool = True,
     accepted_map: AcceptedMap | None = None,
+    full_repair: bool = False,
+    operator_context: str | None = None,
+    before_model_call: Callable[[], None] | None = None,
+    before_repaired_map: Callable[[AcceptedMap], None] | None = None,
 ) -> QualityReviewResult:
     """Review the actual candidate and apply no more than one source-only repair."""
-    if accepted_map is None:
+    if accepted_map is None and not full_repair:
         target_translations = _derive_target_translations(
             source, source_plan, translation_request, target, target_path
         )
-    else:
+    elif accepted_map is not None:
         target_translations = accepted_map.as_dict()
         if (
             accepted_map.target_path != target_path
@@ -289,6 +301,15 @@ def review_translation(
             != target
         ):
             raise QualityInputError
+    else:
+        # A deterministic pinned rename has no accepted map. Its bytes are
+        # review context only; a repair must supply a complete new source map.
+        target_translations = {}
+    accepted_maps: tuple[AcceptedMap, ...] = (
+        (AcceptedMap(target_path, tuple(sorted(target_translations.items()))),)
+        if accepted_map is not None or not full_repair
+        else ()
+    )
     primary = _invoke_critic(
         executor,
         model=model,
@@ -299,6 +320,8 @@ def review_translation(
         target_locale=target_locale,
         requested_ids=translation_request.requested_ids,
         final=False,
+        operator_context=operator_context,
+        before_model_call=before_model_call,
     )
     repair_findings, repair_ids = _safe_repair_findings(primary.findings, source_plan, target)
     if not repair_ids or not allow_repair:
@@ -311,7 +334,7 @@ def review_translation(
             False,
             False,
             None,
-            (AcceptedMap(target_path, tuple(sorted(target_translations.items()))),),
+            accepted_maps,
         )
 
     repair_request, subset = _repair_request(
@@ -323,8 +346,11 @@ def review_translation(
         target_locale=target_locale,
         translation_request=translation_request,
         findings=repair_findings,
-        field_ids=repair_ids,
+        field_ids=translation_request.requested_ids if full_repair else repair_ids,
+        operator_context=operator_context,
     )
+    if before_model_call is not None:
+        before_model_call()
     repair_response = executor.invoke(repair_request)
     repair_error: RepairErrorReason | None = None
     repaired_candidate: bytes | None = None
@@ -333,17 +359,20 @@ def review_translation(
     else:
         try:
             repaired_values = parse_translation_response(repair_response.text, subset)
-            merged = dict(target_translations)
+            merged = {} if full_repair else dict(target_translations)
             merged.update(repaired_values)
             repaired_candidate = assemble_candidate(
                 source, source_plan, translation_request, merged
             )
             target_translations = merged
+            accepted_maps = (AcceptedMap(target_path, tuple(sorted(merged.items()))),)
         except ResponseError:
             repair_error = RepairErrorReason.INVALID_RESPONSE
         except (AssemblyError, UnicodeError):
             repair_error = RepairErrorReason.ASSEMBLY_FAILED
     final_candidate = repaired_candidate if repaired_candidate is not None else target
+    if repaired_candidate is not None and before_repaired_map is not None:
+        before_repaired_map(accepted_maps[0])
     if repaired_candidate is not None and before_final_critic is not None:
         before_final_critic(repaired_candidate)
     final = _invoke_critic(
@@ -356,6 +385,8 @@ def review_translation(
         target_locale=target_locale,
         requested_ids=translation_request.requested_ids,
         final=True,
+        operator_context=operator_context,
+        before_model_call=before_model_call,
     )
     return QualityReviewResult(
         target,
@@ -366,5 +397,5 @@ def review_translation(
         True,
         repaired_candidate is not None,
         repair_error,
-        (AcceptedMap(target_path, tuple(sorted(target_translations.items()))),),
+        accepted_maps,
     )

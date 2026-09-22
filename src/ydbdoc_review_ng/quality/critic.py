@@ -106,6 +106,7 @@ def build_critic_request(
     target_locale: Locale,
     requested_ids: tuple[str, ...],
     final: bool = False,
+    operator_context: str | None = None,
 ) -> ModelRequest:
     if type(source) is not bytes or type(target) is not bytes:
         raise TypeError("source and target must be exact bytes")
@@ -127,6 +128,8 @@ def build_critic_request(
         f"{target_text}"
         "</final-target>"
     )
+    if operator_context is not None:
+        prompt += "\n<operator-context>\n" + operator_context + "</operator-context>"
     role = ModelRole.FINAL_CRITIC if final else ModelRole.CRITIC
     schema = cast(FrozenJson, critic_schema(target_path, requested_ids))
     return ModelRequest(role, model, prompt, schema)

@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from ydbdoc_review_ng.continuation import AcceptedMap
 from ydbdoc_review_ng.domain import GitSha, Locale, RepoPath, RepositoryId, SnapshotRef
 from ydbdoc_review_ng.models import AttemptError, ModelCallResult, ModelRequest
 from ydbdoc_review_ng.models.types import mutable_json
@@ -118,6 +119,68 @@ def test_green_uses_one_critic_and_does_not_attempt_repair() -> None:
     assert result.repaired_candidate is None
     assert [call.role.value for call in executor.calls] == ["critic"]
     assert PATH.value in executor.calls[0].prompt
+
+
+@pytest.mark.parametrize("invalid_placeholder", [False, True])
+def test_full_document_repair_restores_source_fragments_before_exposing_map(invalid_placeholder):
+    plan, request, accepted, target = prepared()
+    repaired = {
+        request.fields[0].field_id: "Установка базы данных YDB",
+        request.fields[1].field_id: accepted[request.fields[1].field_id].replace(
+            "до начала", "до начала работы"
+        ),
+    }
+    if invalid_placeholder:
+        repaired[request.fields[1].field_id] += " [[LINK_9999]]"
+    executor = FakeExecutor(
+        critic_json(
+            "RED",
+            [
+                finding(
+                    repairable=True,
+                    snippet="Установка",
+                    line=1,
+                    field_ids=[request.fields[0].field_id],
+                )
+            ],
+        ),
+        json.dumps(repaired, ensure_ascii=False),
+        critic_json("GREEN", []),
+    )
+    published_maps = []
+    result = review_translation(
+        executor,
+        model="yandexgpt-5.1/latest",
+        source=SOURCE,
+        source_plan=plan,
+        translation_request=request,
+        target=target,
+        target_path=PATH,
+        source_locale=Locale.EN,
+        target_locale=Locale.RU,
+        accepted_map=AcceptedMap(PATH, tuple(sorted(accepted.items()))),
+        full_repair=True,
+        operator_context="Private guidance",
+        before_repaired_map=published_maps.append,
+    )
+    assert set(mutable_json(executor.calls[1].schema)["properties"]) == set(request.requested_ids)
+    assert [call.role.value for call in executor.calls] == ["critic", "repair", "final_critic"]
+    assert all("Private guidance" in call.prompt for call in executor.calls)
+    if invalid_placeholder:
+        assert result.repair_error is RepairErrorReason.ASSEMBLY_FAILED
+        assert result.final_candidate == target
+        assert published_maps == []
+        assert result.accepted_maps == (AcceptedMap(PATH, tuple(sorted(accepted.items()))),)
+    else:
+        assert result.repair_applied
+        assert (
+            result.final_candidate
+            == (
+                "# Установка базы данных YDB\n\n"
+                "Прочитайте [руководство](/docs/guide) до начала работы.\n"
+            ).encode()
+        )
+        assert published_maps == [AcceptedMap(PATH, tuple(sorted(repaired.items())))]
 
 
 def test_repair_transport_failure_is_terminal_before_final_critic() -> None:

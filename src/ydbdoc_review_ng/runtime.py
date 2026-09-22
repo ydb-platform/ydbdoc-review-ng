@@ -323,6 +323,9 @@ class RuntimeReporter:
             ),
             lambda: self.source.github.checks(commit_sha),
             verification_context=self.source.context,
+            current_head=(
+                (lambda: self.source.github.head(branch)) if mode is Mode.DOC_CONTINUE else None
+            ),
         )
         reporter.update_current_pr(
             mode=mode, pr_number=pr_number, branch=branch, commit_sha=commit_sha, review=review

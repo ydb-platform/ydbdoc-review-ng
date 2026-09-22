@@ -277,6 +277,8 @@ class GitHubBackend:
     def push(self, context: PublicationContext, sha: GitSha, /) -> None:
         current = self.head(context.branch)
         if current is None:
+            if context.branch_must_exist:
+                raise RuntimeBoundaryError("head_disappeared")
             self.request(
                 "POST", "/git/refs", {"ref": "refs/heads/" + context.branch, "sha": sha.value}
             )

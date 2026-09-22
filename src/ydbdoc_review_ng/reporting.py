@@ -122,12 +122,14 @@ class QAReporter:
         checks: Callable[[], tuple[CheckResult, ...]],
         *,
         verification_context: PublicationContext | None = None,
+        current_head: Callable[[], GitSha | None] | None = None,
     ) -> None:
         self._backend = backend
         self._publisher = publisher
         self._report_context = report_context
         self._checks = checks
         self._verification_context = verification_context
+        self._current_head = current_head
 
     def update_current_pr(
         self,
@@ -153,6 +155,8 @@ class QAReporter:
             body = render_report(review, commit_sha, self._report_context(), self._checks())
             body += "\n" + QA_MARKER
             if self._publisher.context is not None and not self._publisher.noop:
+                if self._current_head is not None and self._current_head() != commit_sha:
+                    raise PublicationError("report_head_changed")
                 number = self._publisher.ensure_pr(commit_sha)
             else:
                 number = self._backend.find_pr(context.repository, branch, context.base)
@@ -166,9 +170,15 @@ class QAReporter:
                 ),
                 None,
             )
+            if self._current_head is not None and self._current_head() != commit_sha:
+                raise PublicationError("report_head_changed")
             if existing is None:
                 self._backend.create_comment(number, body)
             else:
                 self._backend.update_comment(number, existing.id, body)
+            # The SHA-labelled comment may have been written during a ref race.
+            # Do not acknowledge reporting success or allow checkpoint handoff.
+            if self._current_head is not None and self._current_head() != commit_sha:
+                raise PublicationError("report_head_changed")
         except Exception:  # noqa: BLE001 - backend exceptions can contain credentials.
             raise PublicationError("report_failed") from None

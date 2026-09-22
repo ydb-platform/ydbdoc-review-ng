@@ -25,6 +25,7 @@ class PublicationContext:
     base: str
     source_base: str
     current_head: GitSha
+    branch_must_exist: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,7 +157,9 @@ class GitPublicationAdapter:
             or type(context.current_head) is not GitSha
         ):
             raise PublicationError("repository_or_base_mismatch")
-        return context
+        return replace(
+            context, branch_must_exist=context.branch_must_exist or snapshot.target_sha is not None
+        )
 
     def validate_candidate(
         self, snapshot: ImmutableRunSnapshot, candidate: WorkflowCandidate, /
@@ -192,7 +195,7 @@ class GitPublicationAdapter:
             if type(sha) is not GitSha:
                 raise PublicationError("invalid_commit_sha")
             self._backend.push(context, sha)
-            self.context = replace(context, current_head=sha)
+            self.context = replace(context, current_head=sha, branch_must_exist=True)
             self._published_snapshot = snapshot
             return sha
         except Exception:  # noqa: BLE001 - backend exceptions can contain credentials.

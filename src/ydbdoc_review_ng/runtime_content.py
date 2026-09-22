@@ -244,6 +244,8 @@ class RuntimeContent:
         self.entries: tuple[ScopeEntry, ...] = ()
         self.accepted_maps: tuple[AcceptedMap, ...] = ()
         self.plans: FrozenSourcePlans | None = None
+        self.review_paths: tuple[RepoPath, ...] | None = None
+        self.review_operator_context: str | None = None
         self.publisher: GitPublicationAdapter
 
     def prepare_source(
@@ -510,6 +512,27 @@ class RuntimeContent:
         operator_context: str,
     ) -> WorkflowCandidate:
         plans = replay.plans
+        if checkpoint.state.stage is ContinuationStage.REVIEW:
+            if plans is None:
+                raise RuntimeBoundaryError("continue_review_plans_missing")
+            candidate = self.assemble(plans, replay.accepted_maps)
+            if candidate_sha256(candidate.content) != checkpoint.state.candidate_sha256:
+                raise RuntimeBoundaryError("continue_review_candidate_mismatch")
+            # Source reconstruction and its hash are checked before reading the
+            # exact published candidate. Target never supplies assembly fragments.
+            if self.source.github.head(checkpoint.translation_branch) != checkpoint.target_sha:
+                raise RuntimeBoundaryError("continue_translation_head_mismatch")
+            assert checkpoint.target_sha is not None
+            published = SnapshotRef(
+                plans.preparation.snapshots.source_snapshot.repository, checkpoint.target_sha
+            )
+            for path, expected in unpack(candidate.content).items():
+                if self.source.github.read_bytes(published, RepoPath(path)) != expected:
+                    raise RuntimeBoundaryError("continue_review_candidate_mismatch")
+            self.accepted_maps = replay.accepted_maps
+            self.review_paths = checkpoint.state.review_paths
+            self.review_operator_context = operator_context
+            return candidate
         if checkpoint.state.stage is ContinuationStage.DIRECTION:
             plans = self.select_source(replay.preparation, operator_context=operator_context)
             documents = tuple(
@@ -685,9 +708,20 @@ class RuntimeContent:
         repaired = False
         attempted = False
         repair_error = None
-        accepted: list[AcceptedMap] = []
         previous = {item.target_path: item for item in self.accepted_maps}
-        for document in self.documents:
+        selective = self.review_paths is not None
+        accepted = dict(previous) if selective else {}
+        documents = self.documents
+        if self.review_paths is not None:
+            by_path = {doc.entry.pair.target_path: doc for doc in documents}
+            documents = tuple(by_path[path] for path in self.review_paths)
+
+        def check_head() -> None:
+            context = self.publisher.context
+            if context is None or self.source.github.head(snapshot.branch) != context.current_head:
+                raise RuntimeBoundaryError("continue_translation_head_mismatch")
+
+        for document in documents:
             path = document.entry.pair.target_path
             target = files[path.value]
             assert target is not None
@@ -696,6 +730,16 @@ class RuntimeContent:
                 files[path.value] = value
                 if before_final_critic is not None:
                     before_final_critic(pack(files))
+
+            def publish_map(value: AcceptedMap) -> None:
+                assert self.plans is not None
+                accepted[value.target_path] = value
+                maps = tuple(sorted(accepted.values(), key=lambda value: value.target_path.value))
+                rebuilt = self.assemble(self.plans, maps)
+                if before_final_critic is not None:
+                    before_final_critic(rebuilt.content)
+                files.clear()
+                files.update(unpack(rebuilt.content))
 
             review = review_translation(
                 self.models,
@@ -707,9 +751,13 @@ class RuntimeContent:
                 target_path=path,
                 source_locale=document.entry.pair.source_locale,
                 target_locale=document.entry.pair.target_locale,
-                before_final_critic=publish,
+                before_final_critic=None if selective else publish,
                 allow_repair=not attempted,
                 accepted_map=previous.get(path),
+                full_repair=selective,
+                operator_context=self.review_operator_context,
+                before_model_call=check_head if selective else None,
+                before_repaired_map=publish_map if selective else None,
             )
             if (
                 document.entry.operation is not FileOperation.RENAME_TARGET
@@ -717,7 +765,7 @@ class RuntimeContent:
                 or review.final_candidate != document.entry.rename_from_target_content
             ):
                 assert review.accepted_maps is not None
-                accepted.extend(review.accepted_maps)
+                accepted.update((item.target_path, item) for item in review.accepted_maps)
             reviews.append(review)
             attempted |= review.repair_attempted
             repaired |= review.repair_applied
@@ -736,7 +784,7 @@ class RuntimeContent:
             attempted,
             repaired,
             repair_error,
-            tuple(sorted(accepted, key=lambda item: item.target_path.value)),
+            tuple(sorted(accepted.values(), key=lambda item: item.target_path.value)),
         )
 
     def _capture(
@@ -779,11 +827,11 @@ class RuntimeContent:
         for path, content in unpack(review.final_candidate).items():
             if self.source.github.read_bytes(published, RepoPath(path)) != content:
                 raise RuntimeBoundaryError("review_checkpoint_candidate_mismatch")
-        review_paths = tuple(
-            sorted(
-                {RepoPath(item.target_path) for item in review.final.findings},
-                key=lambda path: path.value,
-            )
+        unresolved = {RepoPath(item.target_path) for item in review.final.findings}
+        review_paths = (
+            tuple(path for path in self.review_paths if path in unresolved)
+            if self.review_paths is not None
+            else tuple(sorted(unresolved, key=lambda path: path.value))
         )
         if not set(review_paths).issubset(doc.entry.pair.target_path for doc in plans.documents):
             raise RuntimeBoundaryError("review_checkpoint_path_mismatch")

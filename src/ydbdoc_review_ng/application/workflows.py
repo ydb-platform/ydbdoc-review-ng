@@ -11,7 +11,6 @@ from enum import Enum
 from typing import TYPE_CHECKING, NoReturn, Protocol
 
 from ydbdoc_review_ng.continuation import (
-    ContinuationStage,
     ContinuationState,
     SourceChangeInventory,
 )
@@ -370,8 +369,6 @@ class LinearWorkflows:
             )
             checkpoint = admission.checkpoint
             self._persistence.validate_checkpoint_job(checkpoint)
-            if checkpoint.state.stage is ContinuationStage.REVIEW:
-                raise ValueError("review continuation is not implemented")
             stage = WorkflowStage.SNAPSHOT
             replay = self._content.replay_continuation(checkpoint)
             snapshot = replay.preparation.snapshot
