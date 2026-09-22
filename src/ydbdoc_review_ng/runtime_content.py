@@ -71,12 +71,13 @@ from ydbdoc_review_ng.translation import (
     validate_translation_values,
     verify_protected_fragments,
 )
-from ydbdoc_review_ng.translation.assembly import placeholder_like_tokens
 
 if TYPE_CHECKING:
     from ydbdoc_review_ng.persistence import ContinuationCheckpoint
     from ydbdoc_review_ng.runtime import RecordedModels, RuntimeSource
     from ydbdoc_review_ng.runtime_continue import ContinueReplay
+
+_DIAGNOSTIC_PLACEHOLDER = re.compile(r"\[\[[A-Z_]+_[0-9]+\]\]")
 
 
 def pack(files: Mapping[str, bytes | None]) -> bytes:
@@ -143,7 +144,7 @@ def _corrective_translation_request(
         "order. "
     )
     if rejected_value is not None:
-        returned = placeholder_like_tokens(rejected_value)
+        returned = tuple(_DIAGNOSTIC_PLACEHOLDER.findall(rejected_value))
         if returned != required_placeholders:
             returned_counts = Counter(returned)
             missing = []
