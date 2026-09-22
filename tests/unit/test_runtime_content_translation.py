@@ -249,6 +249,33 @@ def test_local_map_rejection_uses_safe_generic_correction(rejected: str) -> None
     assert corrective.schema == models.calls[0].schema
 
 
+@pytest.mark.parametrize("unexpected", ["[[_URL_9999]]", "[[URL_99999]]"])
+def test_placeholder_like_rejection_names_unexpected_token(unexpected: str) -> None:
+    document = document_for(b"# See guide.md.\n")
+    field = document.request.fields[0]
+
+    class CorrectedWhenNamedModels:
+        def __init__(self) -> None:
+            self.calls: list[ModelRequest] = []
+
+        def invoke(self, request: ModelRequest, /) -> ModelCallResult:
+            self.calls.append(request)
+            value = field.text if unexpected in request.prompt else field.text + " " + unexpected
+            return ModelCallResult(json.dumps({field.field_id: value}), None, ())
+
+    models = CorrectedWhenNamedModels()
+
+    accepted = content_with(models).translate_document(document)
+
+    assert accepted.as_dict() == {field.field_id: field.text}
+    assert len(models.calls) == 2
+    assert models.calls[0] == initial_request_for(document)
+    correction = models.calls[1].prompt.removeprefix(models.calls[0].prompt)
+    assert 'Required placeholder sequence: ["[[PATH_0001]]"]' in correction
+    assert "Missing placeholders: []" in correction
+    assert f'Unexpected placeholders: ["{unexpected}"]' in correction
+
+
 def test_provider_failure_is_not_semantically_retried() -> None:
     document = document_for(b"# Source heading\n")
     models = ScriptedModels([ModelCallResult(None, AttemptError.TRANSPORT, ())])

@@ -71,6 +71,7 @@ from ydbdoc_review_ng.translation import (
     validate_translation_values,
     verify_protected_fragments,
 )
+from ydbdoc_review_ng.translation.assembly import placeholder_like_tokens
 
 if TYPE_CHECKING:
     from ydbdoc_review_ng.persistence import ContinuationCheckpoint
@@ -142,9 +143,7 @@ def _corrective_translation_request(
         "order. "
     )
     if rejected_value is not None:
-        returned = tuple(
-            re.findall(r"\[\[[A-Z][A-Z0-9_]*_[0-9]{4}\]\]", rejected_value)
-        )
+        returned = placeholder_like_tokens(rejected_value)
         if returned != required_placeholders:
             returned_counts = Counter(returned)
             missing = []

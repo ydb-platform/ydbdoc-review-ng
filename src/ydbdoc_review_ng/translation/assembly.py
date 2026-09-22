@@ -46,13 +46,18 @@ class ProtectedMismatch(ValueError):
         super().__init__(f"protected_fragment_mismatch:field_position={field_position}")
 
 
+def placeholder_like_tokens(value: str, /) -> tuple[str, ...]:
+    """Extract exactly the placeholder-like forms considered by strict validation."""
+    return tuple(_PLACEHOLDER_LIKE.findall(value))
+
+
 def _validated_value(value: str, request_field: object) -> bytes:
     from ydbdoc_review_ng.translation.contract import TranslationField
 
     assert type(request_field) is TranslationField
     expected = {item.token: item for item in request_field.placeholders}
-    found = _TOKEN.findall(value)
-    if Counter(found) != Counter(expected.keys()) or _PLACEHOLDER_LIKE.findall(value) != found:
+    found = tuple(_TOKEN.findall(value))
+    if Counter(found) != Counter(expected.keys()) or placeholder_like_tokens(value) != found:
         raise AssemblyError(AssemblyErrorReason.PLACEHOLDER_MISMATCH)
     stack: list[int] = []
     for token in found:
