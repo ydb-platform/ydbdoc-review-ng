@@ -741,6 +741,19 @@ def test_syntactically_identifiable_paths_remain_protected(path: bytes) -> None:
     ] == [path]
 
 
+@pytest.mark.parametrize("suffix", [b".", b"...", b",", b";", b"?", b"!", b").", b"].", b"}."])
+def test_extension_path_excludes_trailing_sentence_punctuation(suffix: bytes) -> None:
+    source = b"Open docs/a.md" + suffix + b"\n"
+    plan = build(source)
+
+    assert [
+        source[region.span.start : region.span.end]
+        for field in fields_of(plan)
+        for region in field.protected_regions
+        if region.kind is ProtectedKind.PATH
+    ] == [b"docs/a.md"]
+
+
 def test_url_and_link_image_destinations_remain_protected() -> None:
     source = b"Visit https://example.test/a/b and [![guide](docs/core)](docs/outer).\n"
     plan = build(source)

@@ -735,9 +735,12 @@ def _inline_regions(
             continue
         match = _PATH.match(data, cursor)
         if match is not None:
-            raw_path = match.group()
+            end = match.end()
+            while end > match.start() and data[end - 1] == 46:
+                end -= 1
+            raw_path = data[match.start() : end]
             before = data[cursor - 1] if cursor else None
-            after = data[match.end()] if match.end() < len(data) else None
+            after = data[end] if end < len(data) else None
             leading_boundary = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-/"
             trailing_boundary = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-/"
             explicit = raw_path.startswith((b"/", b"./", b"../"))
@@ -751,11 +754,11 @@ def _inline_regions(
                 append(
                     ProtectedRegion(
                         ProtectedKind.PATH,
-                        ByteSpan(span.start + match.start(), span.start + match.end()),
+                        ByteSpan(span.start + match.start(), span.start + end),
                         None,
                     )
                 )
-                cursor = match.end()
+                cursor = end
                 continue
         match = _IDENTIFIER.match(data, cursor)
         if match is not None:

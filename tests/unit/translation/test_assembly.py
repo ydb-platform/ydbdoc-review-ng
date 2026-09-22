@@ -388,6 +388,33 @@ def test_live_slash_joined_prose_translation_verifies() -> None:
     )
 
 
+def test_sentence_final_extension_path_rejects_model_mutation() -> None:
+    source = b"Open docs/a.md.\n"
+    plan, request = prepared(source)
+
+    with pytest.raises(AssemblyError) as caught:
+        assemble_candidate(
+            source,
+            plan,
+            request,
+            {request.requested_ids[0]: "Open docs/evil.md."},
+        )
+    assert caught.value.reason is AssemblyErrorReason.PLACEHOLDER_MISMATCH
+
+
+def test_sentence_final_extension_path_rejects_manual_mutation() -> None:
+    source = b"Open docs/a.md.\n"
+    target = b"Open docs/evil.md.\n"
+
+    with pytest.raises(ProtectedMismatch):
+        verify_protected_fragments(
+            source,
+            build_markdown_plan(SNAPSHOT, PATH, source),
+            target,
+            build_markdown_plan(SNAPSHOT, PATH, target),
+        )
+
+
 def test_assembly_preserves_fenced_code_and_comment_syntax_around_translated_comments() -> None:
     source = b"```cpp\nint x; // explain x\n/* explain y */\n```\n"
     plan, request = prepared(source)
