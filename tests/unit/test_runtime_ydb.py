@@ -133,3 +133,27 @@ def test_create_runtime_shuts_down_its_owned_ydb_executor_once(monkeypatch) -> N
     runtime.shutdown()
 
     assert stopped == ["executor"]
+
+
+def test_create_runtime_composes_distinct_github_read_and_mutation_credentials(monkeypatch) -> None:
+    import ydbdoc_review_ng.runtime as runtime_module
+
+    credentials = []
+
+    def github_http(read_token, mutation_token):
+        credentials.append((read_token, mutation_token))
+        return lambda method, path, payload: None
+
+    executor = SimpleNamespace(execute=lambda statement, parameters: [], close=lambda: None)
+    monkeypatch.setattr(runtime_module, "GitHubHTTP", github_http)
+
+    runtime = runtime_module.create_runtime(
+        environment={
+            "YDBDOC_GITHUB_READ_TOKEN": "read-token",
+            "YDB_GH_TOKEN": "mutation-token",
+        },
+        ydb_executor=executor,
+    )
+
+    assert credentials == [("read-token", "mutation-token")]
+    runtime.shutdown()

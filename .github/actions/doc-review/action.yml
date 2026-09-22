@@ -56,6 +56,7 @@ runs:
         SOURCE_SHA: ${{ inputs.source-sha }}
         TARGET_SHA: ${{ inputs.target-sha }}
         BUDGET_RUB: ${{ inputs.budget-rub }}
+        YDBDOC_GITHUB_READ_TOKEN: ${{ github.token }}
         YDBDOC_RUNTIME_FACTORY: ydbdoc_review_ng.runtime:create_runtime
       run: |
         # Credentials remain environment references, never shell arguments.

@@ -60,6 +60,19 @@ def test_action_executes_exact_mode_arguments(mode, inputs, argv):
     assert result.stdout.splitlines() == ["-m", "ydbdoc_review_ng.cli", *argv]
 
 
+def test_action_exports_builtin_github_token_only_as_dedicated_read_credential():
+    action_path = ROOT / ".github/actions/doc-review/action.yml"
+    action_text = action_path.read_text()
+    action = yaml.safe_load(action_text)
+    runtime_step = next(
+        step for step in action["runs"]["steps"] if "-m ydbdoc_review_ng.cli" in step.get("run", "")
+    )
+
+    assert runtime_step["env"]["YDBDOC_GITHUB_READ_TOKEN"] == "${{ github.token }}"
+    assert "${{ github.token }}" not in runtime_step["run"]
+    assert action_text.count("${{ github.token }}") == 1
+
+
 @pytest.mark.parametrize(
     ("mode", "inputs"),
     [

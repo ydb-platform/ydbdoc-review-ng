@@ -158,7 +158,7 @@ def test_incomplete_github_page_is_rejected_without_pagination(page, monkeypatch
         return Response()
 
     monkeypatch.setattr("urllib.request.urlopen", urlopen)
-    http = GitHubHTTP("test-token")
+    http = GitHubHTTP("test-token", "test-token")
 
     def transport(method, path, payload):
         if page == "comments" and "/events?" in path:

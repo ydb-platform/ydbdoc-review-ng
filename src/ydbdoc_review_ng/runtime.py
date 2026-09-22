@@ -392,7 +392,11 @@ def create_runtime(
         executor = ydb_executor
     persistence = YdbPersistence(executor)
     github = GitHubBackend(
-        github_transport or GitHubHTTP(env.get("YDB_GH_TOKEN") or env.get("GH_TOKEN", ""))
+        github_transport
+        or GitHubHTTP(
+            env.get("YDBDOC_GITHUB_READ_TOKEN", ""),
+            env.get("YDB_GH_TOKEN") or env.get("GH_TOKEN", ""),
+        )
     )
     models = RecordedModels(env, persistence, model_transport or UrllibTransport())
     source = RuntimeSource(env, github)

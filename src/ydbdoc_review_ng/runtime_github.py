@@ -104,18 +104,20 @@ def _translation_provenance(body: str) -> TranslationProvenance | None:
 
 
 class GitHubHTTP:
-    def __init__(self, token: str) -> None:
-        self._token = token
+    def __init__(self, read_token: str, mutation_token: str) -> None:
+        self._read_token = read_token
+        self._mutation_token = mutation_token
 
     def __call__(self, method: str, path: str, payload: object) -> Any:
-        if not self._token:
+        token = self._read_token if method == "GET" else self._mutation_token
+        if not token:
             raise RuntimeBoundaryError("github_credentials_missing")
         request = urllib.request.Request(
             "https://api.github.com" + path,
             data=None if payload is None else json.dumps(payload).encode(),
             method=method,
             headers={
-                "Authorization": "Bearer " + self._token,
+                "Authorization": "Bearer " + token,
                 "Accept": "application/vnd.github+json",
                 "X-GitHub-Api-Version": "2022-11-28",
                 "Content-Type": "application/json",
