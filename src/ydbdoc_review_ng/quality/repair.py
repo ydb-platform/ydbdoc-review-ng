@@ -208,12 +208,11 @@ def _safe_repair_findings(
 def _repair_request(
     *,
     model: str,
-    source: bytes,
-    target: bytes,
     target_path: RepoPath,
     source_locale: Locale,
     target_locale: Locale,
     translation_request: TranslationRequest,
+    current_translations: dict[str, str],
     findings: tuple[Finding, ...],
     field_ids: tuple[str, ...],
     operator_context: str | None = None,
@@ -232,14 +231,16 @@ def _repair_request(
         }
         for finding in findings
     ]
-    allowed_fields = [
-        {
+    allowed_fields: list[dict[str, object]] = []
+    for field in fields:
+        allowed_field: dict[str, object] = {
             "field_id": field.field_id,
             "source_field_text": field.text,
             "placeholders": [item.token for item in field.placeholders],
         }
-        for field in fields
-    ]
+        if field.field_id in current_translations:
+            allowed_field["current_translated_value"] = current_translations[field.field_id]
+        allowed_fields.append(allowed_field)
     prompt = (
         "Repair only the allowed translated fields for the listed problems. Return one strict "
         "JSON object mapping every allowed field_id to its complete corrected string. Preserve "
@@ -248,12 +249,6 @@ def _repair_request(
         "URLs, paths, anchors, code, or placeholders.\n"
         f"Direction: {source_locale.value} -> {target_locale.value}\n"
         f"Target path: {target_path.value}\n"
-        "<authoritative-source>\n"
-        f"{source.decode('utf-8')}"
-        "</authoritative-source>\n"
-        "<actual-target-context>\n"
-        f"{target.decode('utf-8')}"
-        "</actual-target-context>\n"
         f"Problems: {json.dumps(problems, ensure_ascii=False)}\n"
         f"Allowed fields: {json.dumps(allowed_fields, ensure_ascii=False)}"
     )
@@ -339,12 +334,11 @@ def review_translation(
 
     repair_request, subset = _repair_request(
         model=model,
-        source=source,
-        target=target,
         target_path=target_path,
         source_locale=source_locale,
         target_locale=target_locale,
         translation_request=translation_request,
+        current_translations=target_translations,
         findings=repair_findings,
         field_ids=translation_request.requested_ids if full_repair else repair_ids,
         operator_context=operator_context,

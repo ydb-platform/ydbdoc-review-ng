@@ -164,7 +164,18 @@ def test_full_document_repair_restores_source_fragments_before_exposing_map(inva
         operator_context="Private guidance",
         before_repaired_map=published_maps.append,
     )
+    repair_prompt = executor.calls[1].prompt
     assert set(mutable_json(executor.calls[1].schema)["properties"]) == set(request.requested_ids)
+    assert SOURCE.decode() not in repair_prompt
+    assert target.decode() not in repair_prompt
+    assert all(field.field_id in repair_prompt for field in request.fields)
+    assert all(field.text in repair_prompt for field in request.fields)
+    assert all(value in repair_prompt for value in accepted.values())
+    assert all(
+        placeholder.token in repair_prompt
+        for field in request.fields
+        for placeholder in field.placeholders
+    )
     assert [call.role.value for call in executor.calls] == ["critic", "repair", "final_critic"]
     assert all("Private guidance" in call.prompt for call in executor.calls)
     if invalid_placeholder:
@@ -338,6 +349,84 @@ def test_repair_derives_current_field_values_from_actual_target() -> None:
     assert "Прочитайте полностью" in result.final_candidate.decode()
 
 
+def test_field_repair_prompt_contains_only_selected_field_context() -> None:
+    source_sentinel = ("SOURCE-OUTSIDE-SELECTED-FIELD " * 500).strip()
+    target_sentinel = ("TARGET-OUTSIDE-SELECTED-FIELD " * 500).strip()
+    source = f"{source_sentinel}\n\nRepair [this field](/docs/selected).\n".encode()
+    plan = build_markdown_plan(SNAPSHOT, SOURCE_PATH, source)
+    request = build_translation_request(source, plan)
+    assert len(request.fields) == 2
+    selected = request.fields[1]
+    current_translation = selected.text.replace("Repair", "Исправьте").replace(
+        "this field", "это поле"
+    )
+    repaired_translation = current_translation.replace("Исправьте", "Точно исправьте")
+    target = assemble_candidate(
+        source,
+        plan,
+        request,
+        {
+            request.fields[0].field_id: target_sentinel,
+            selected.field_id: current_translation,
+        },
+    )
+    executor = FakeExecutor(
+        critic_json(
+            "RED",
+            [
+                finding(
+                    repairable=True,
+                    snippet="Исправьте",
+                    line=3,
+                    field_ids=[selected.field_id],
+                )
+            ],
+        ),
+        json.dumps({selected.field_id: repaired_translation}, ensure_ascii=False),
+        critic_json("GREEN", []),
+    )
+
+    result = review_translation(
+        executor,
+        model="model",
+        source=source,
+        source_plan=plan,
+        translation_request=request,
+        target=target,
+        target_path=PATH,
+        source_locale=Locale.EN,
+        target_locale=Locale.RU,
+        operator_context="Use the operator's exact terminology.",
+    )
+
+    critic_prompt = executor.calls[0].prompt
+    repair_request = executor.calls[1]
+    repair_prompt = repair_request.prompt
+    repair_schema = mutable_json(repair_request.schema)
+    assert result.repair_applied
+    assert source.decode() in critic_prompt
+    assert target.decode() in critic_prompt
+    assert selected.field_id in repair_prompt
+    assert selected.text in repair_prompt
+    assert current_translation in repair_prompt
+    assert all(item.token in repair_prompt for item in selected.placeholders)
+    assert "Перевод пропускает обязательное условие." in repair_prompt
+    assert "Добавить пропущенное условие без изменения URL." in repair_prompt
+    assert PATH.value in repair_prompt
+    assert "en -> ru" in repair_prompt
+    assert "Use the operator's exact terminology." in repair_prompt
+    assert source_sentinel not in repair_prompt
+    assert target_sentinel not in repair_prompt
+    assert source.decode() not in repair_prompt
+    assert target.decode() not in repair_prompt
+    assert repair_schema == {
+        "type": "object",
+        "properties": {selected.field_id: {"type": "string"}},
+        "required": [selected.field_id],
+        "additionalProperties": False,
+    }
+
+
 def test_t017_n04_repair_preserves_logical_escaped_title_in_untouched_field() -> None:
     source = b'---\ntitle: "An \\"escaped\\" title"\ndescription: "Old description"\n---\n'
     plan = build_markdown_plan(SNAPSHOT, SOURCE_PATH, source)
@@ -430,7 +519,7 @@ def test_mixed_findings_repair_only_locally_safe_mapped_fields() -> None:
     assert type(schema) is dict
     assert schema["required"] == [safe_id]
     assert unsafe_id not in repair_request.prompt
-    assert SOURCE.decode() in repair_request.prompt
+    assert SOURCE.decode() not in repair_request.prompt
     assert "Прочитайте" in repair_request.prompt
     assert "Перевод пропускает обязательное условие." in repair_request.prompt
     assert request.fields[1].text in repair_request.prompt
