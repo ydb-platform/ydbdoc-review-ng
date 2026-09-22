@@ -225,7 +225,7 @@ def test_public_continue_restores_protected_link_delete_rename_and_pinned_metada
     services.snapshots[services.translated][EN + "old.md"] = b"# Wrong current counterpart\n"
     result = services.resume()
     assert result.verdict is Verdict.GREEN
-    assert services.roles == ["translate", "critic", "critic", "critic"]
+    assert services.roles == ["translate", "translate", "critic", "critic", "critic"]
     assert services.files[EN + "b.md"] == source_b.replace(b"Source", b"Resumed")
     assert services.files[EN + "moved.md"] == b"# Whole pinned translation\n"
     assert EN + "old.md" not in services.files and EN + "deleted.md" not in services.files

@@ -5,6 +5,7 @@ from ydbdoc_review_ng.translation.assembly import (
     AssemblyErrorReason,
     ProtectedMismatch,
     assemble_candidate,
+    validate_translation_values,
     verify_protected_fragments,
 )
 from ydbdoc_review_ng.translation.contract import (
@@ -29,5 +30,6 @@ __all__ = [
     "assemble_candidate",
     "build_translation_request",
     "parse_translation_response",
+    "validate_translation_values",
     "verify_protected_fragments",
 ]

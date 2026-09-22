@@ -71,6 +71,20 @@ def _validated_value(value: str, request_field: object) -> bytes:
     return restored.encode("utf-8")
 
 
+def validate_translation_values(
+    request: TranslationRequest, translations: dict[str, str], /
+) -> None:
+    """Validate an exact response map and every field-local protected placeholder."""
+    if type(request) is not TranslationRequest:
+        raise AssemblyError(AssemblyErrorReason.RESPONSE_FIELDS_MISMATCH)
+    if type(translations) is not dict or set(translations) != set(request.requested_ids):
+        raise AssemblyError(AssemblyErrorReason.RESPONSE_FIELDS_MISMATCH)
+    if any(type(key) is not str or type(value) is not str for key, value in translations.items()):
+        raise AssemblyError(AssemblyErrorReason.RESPONSE_FIELDS_MISMATCH)
+    for item in request.fields:
+        _validated_value(translations[item.field_id], item)
+
+
 def _protected_signature(data: bytes, plan: SourcePlan, position: int) -> tuple[object, ...]:
     field = fields_of(plan)[position]
     singles: list[tuple[str, bytes]] = []
@@ -221,10 +235,7 @@ def assemble_candidate(
         source, plan
     ):
         raise AssemblyError(AssemblyErrorReason.RESPONSE_FIELDS_MISMATCH)
-    if type(translations) is not dict or set(translations) != set(request.requested_ids):
-        raise AssemblyError(AssemblyErrorReason.RESPONSE_FIELDS_MISMATCH)
-    if any(type(key) is not str or type(value) is not str for key, value in translations.items()):
-        raise AssemblyError(AssemblyErrorReason.RESPONSE_FIELDS_MISMATCH)
+    validate_translation_values(request, translations)
     frontmatter_ids = {
         field.field_id.value
         for block in plan.blocks
