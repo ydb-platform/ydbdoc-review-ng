@@ -1190,6 +1190,7 @@ def test_runtime_uses_deployed_ydb_service_account_and_defaults(monkeypatch):
     from ydbdoc_review_ng.runtime_ydb import DEFAULT_YDB_DATABASE, DEFAULT_YDB_ENDPOINT
 
     captured = []
+    shutdowns = []
 
     class CapturingExecutor:
         def __init__(self, endpoint, database, token, service_account_key):
@@ -1198,10 +1199,16 @@ def test_runtime_uses_deployed_ydb_service_account_and_defaults(monkeypatch):
         def execute(self, statement, parameters):
             return []
 
+        def close(self):
+            shutdowns.append("executor")
+
     monkeypatch.setattr(runtime_module, "SDKExecutor", CapturingExecutor)
-    create_runtime(environment={"YDB_SA_KEY": '{"id":"sa"}'})
+    runtime = create_runtime(environment={"YDB_SA_KEY": '{"id":"sa"}'})
 
     assert captured == [(DEFAULT_YDB_ENDPOINT, DEFAULT_YDB_DATABASE, "", '{"id":"sa"}')]
+    runtime.shutdown()
+    runtime.shutdown()
+    assert shutdowns == ["executor"]
 
 
 def test_model_repair_is_published_before_final_critic_and_only_then_pr():
