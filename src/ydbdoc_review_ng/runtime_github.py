@@ -109,7 +109,7 @@ class GitHubHTTP:
         self._mutation_token = mutation_token
 
     def __call__(self, method: str, path: str, payload: object) -> Any:
-        token = self._read_token if method == "GET" else self._mutation_token
+        token = self._read_token if method == "GET" and path != "/user" else self._mutation_token
         if not token:
             raise RuntimeBoundaryError("github_credentials_missing")
         request = urllib.request.Request(
