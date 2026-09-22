@@ -664,11 +664,15 @@ def test_critic_parser_rejects_repair_ids_on_unrepairable_finding() -> None:
     assert caught.value.reason is CriticResponseErrorReason.INVALID_FINDING
 
 
-def test_critic_parser_accepts_empty_ids_when_repair_fields_exist() -> None:
+@pytest.mark.parametrize("repairable", [False, True])
+def test_critic_parser_accepts_empty_ids_when_repair_fields_exist(repairable: bool) -> None:
     _plan, request, _values, _target = prepared()
 
     result = parse_critic_response(
-        critic_json("RED", [finding(repairable=False, snippet="Прочитайте", line=3)]),
+        critic_json(
+            "RED",
+            [finding(repairable=repairable, snippet="Прочитайте", line=3, field_ids=[])],
+        ),
         target_path=PATH,
         requested_ids=request.requested_ids,
     )
