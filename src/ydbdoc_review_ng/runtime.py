@@ -8,17 +8,19 @@ from __future__ import annotations
 
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import cast
 
 from ydbdoc_review_ng.application import (
     AuthorizedRun,
+    ContinueWorkflowInput,
     ImmutableRunSnapshot,
     LinearWorkflows,
     TranslateWorkflowInput,
     VerifyWorkflowInput,
+    WorkflowResult,
 )
 from ydbdoc_review_ng.continuation import SourceChangeInventory, normalize_source_inventory
 from ydbdoc_review_ng.domain import GitSha, Mode, RepositoryId, SnapshotRef
@@ -332,23 +334,58 @@ class RuntimeReporter:
         )
 
 
+class Runtime:
+    """One workflow dispatcher with deterministic shutdown for owned resources."""
+
+    __slots__ = ("_shutdown", "_shutdown_complete", "_workflows")
+
+    def __init__(
+        self, workflows: LinearWorkflows, shutdown: Callable[[], None] | None = None, /
+    ) -> None:
+        self._workflows = workflows
+        self._shutdown = shutdown
+        self._shutdown_complete = False
+
+    def doc_translate(self, request: TranslateWorkflowInput, /) -> WorkflowResult:
+        return self._workflows.doc_translate(request)
+
+    def doc_verify(self, request: VerifyWorkflowInput, /) -> WorkflowResult:
+        return self._workflows.doc_verify(request)
+
+    def doc_continue(self, request: ContinueWorkflowInput, /) -> WorkflowResult:
+        return self._workflows.doc_continue(request)
+
+    def shutdown(self) -> None:
+        if self._shutdown_complete:
+            return
+        self._shutdown_complete = True
+        if self._shutdown is not None:
+            self._shutdown()
+
+
 def create_runtime(
     *,
     environment: Mapping[str, str] | None = None,
     ydb_executor: YdbExecutor | None = None,
     github_transport: JsonTransport | None = None,
     model_transport: HttpTransport | None = None,
-) -> LinearWorkflows:
+) -> Runtime:
     """One job's real composition; optional arguments replace only external I/O."""
     from ydbdoc_review_ng.runtime_content import RuntimeContent
 
     env = dict(os.environ if environment is None else environment)
-    executor = ydb_executor or SDKExecutor(
-        env.get("YDB_ENDPOINT") or env.get("YDBDOC_YDB_ENDPOINT") or DEFAULT_YDB_ENDPOINT,
-        env.get("YDB_DATABASE") or env.get("YDBDOC_YDB_DATABASE") or DEFAULT_YDB_DATABASE,
-        env.get("YDB_TOKEN", ""),
-        env.get("YDB_SA_KEY", ""),
-    )
+    shutdown = None
+    if ydb_executor is None:
+        owned_executor = SDKExecutor(
+            env.get("YDB_ENDPOINT") or env.get("YDBDOC_YDB_ENDPOINT") or DEFAULT_YDB_ENDPOINT,
+            env.get("YDB_DATABASE") or env.get("YDBDOC_YDB_DATABASE") or DEFAULT_YDB_DATABASE,
+            env.get("YDB_TOKEN", ""),
+            env.get("YDB_SA_KEY", ""),
+        )
+        executor: YdbExecutor = owned_executor
+        shutdown = owned_executor.close
+    else:
+        executor = ydb_executor
     persistence = YdbPersistence(executor)
     github = GitHubBackend(
         github_transport or GitHubHTTP(env.get("YDB_GH_TOKEN") or env.get("GH_TOKEN", ""))
@@ -358,13 +395,16 @@ def create_runtime(
     content = RuntimeContent(source, models, env)
     publisher = GitPublicationAdapter(github, content.publication_plan, content.validate_plan)
     content.publisher = publisher
-    return LinearWorkflows(
-        clock=SystemClock(),
-        persistence=persistence,
-        source=source,
-        content=content,
-        reviewer=content,
-        publisher=publisher,
-        reporter=RuntimeReporter(source, publisher, models),
-        bind_models=models.bind_job,
+    return Runtime(
+        LinearWorkflows(
+            clock=SystemClock(),
+            persistence=persistence,
+            source=source,
+            content=content,
+            reviewer=content,
+            publisher=publisher,
+            reporter=RuntimeReporter(source, publisher, models),
+            bind_models=models.bind_job,
+        ),
+        shutdown,
     )

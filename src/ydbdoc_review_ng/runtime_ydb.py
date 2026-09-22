@@ -19,7 +19,7 @@ def parameter_types(parameters: Mapping[str, object]) -> dict[str, str]:
         "source_pr": "Uint64",
         "trigger_pr": "Uint64",
         "source_sha": "Utf8?",
-        "job_id": "Utf8?",
+        "job_id": "Utf8",
         "consumed_by_job_id": "Utf8?",
         "state": "String",
         "source_inventory": "String",
@@ -46,6 +46,19 @@ class SDKExecutor:
         self._service_account_key = service_account_key
         self._pool: Any = None
         self._driver: Any = None
+
+    def close(self) -> None:
+        pool, self._pool = self._pool, None
+        driver, self._driver = self._driver, None
+        try:
+            try:
+                if pool is not None:
+                    pool.stop()
+            finally:
+                if driver is not None:
+                    driver.stop()
+        except Exception:  # noqa: BLE001 - SDK diagnostics may contain credentials.
+            raise PersistenceError("YDB shutdown failed") from None
 
     def execute(
         self, statement: str, parameters: Mapping[str, object], /

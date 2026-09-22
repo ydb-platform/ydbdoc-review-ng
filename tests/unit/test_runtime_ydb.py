@@ -5,11 +5,11 @@ from types import SimpleNamespace
 from ydbdoc_review_ng.runtime_ydb import SDKExecutor, parameter_types
 
 
-def test_continuation_and_job_parameters_have_explicit_sdk_types() -> None:
+def test_non_null_job_and_continuation_parameters_have_explicit_sdk_types() -> None:
     assert parameter_types(
         {
             "source_sha": None,
-            "job_id": None,
+            "job_id": "job-1",
             "source_pr": 42,
             "trigger_pr": 52,
             "state": b"{}",
@@ -19,7 +19,7 @@ def test_continuation_and_job_parameters_have_explicit_sdk_types() -> None:
         }
     ) == {
         "source_sha": "Utf8?",
-        "job_id": "Utf8?",
+        "job_id": "Utf8",
         "source_pr": "Uint64",
         "trigger_pr": "Uint64",
         "state": "String",
@@ -50,3 +50,52 @@ def test_sdk_naive_utc_timestamp_is_returned_as_aware_utc(monkeypatch) -> None:
         }
     ]
     assert rows[0]["created_at"] is naive
+
+
+def test_sdk_executor_stops_pool_and_driver_once(monkeypatch) -> None:
+    stopped = []
+    pool = SimpleNamespace(
+        execute_with_retries=lambda query, params: [],
+        stop=lambda: stopped.append("pool"),
+    )
+    driver = SimpleNamespace(
+        wait=lambda **kwargs: None,
+        stop=lambda: stopped.append("driver"),
+    )
+    sdk = SimpleNamespace(
+        Driver=lambda **kwargs: driver,
+        QuerySessionPool=lambda supplied: pool,
+        AccessTokenCredentials=lambda token: object(),
+    )
+    monkeypatch.setitem(sys.modules, "ydb", sdk)
+    executor = SDKExecutor("grpcs://example.test", "/database", "secret")
+    executor.execute("SELECT 1", {})
+
+    executor.close()
+    executor.close()
+
+    assert stopped == ["pool", "driver"]
+
+
+def test_create_runtime_shuts_down_its_owned_ydb_executor_once(monkeypatch) -> None:
+    import ydbdoc_review_ng.runtime as runtime_module
+
+    stopped = []
+
+    class Executor:
+        def __init__(self, endpoint, database, token, service_account_key):
+            pass
+
+        def execute(self, statement, parameters):
+            return []
+
+        def close(self):
+            stopped.append("executor")
+
+    monkeypatch.setattr(runtime_module, "SDKExecutor", Executor)
+    runtime = runtime_module.create_runtime(environment={})
+
+    runtime.shutdown()
+    runtime.shutdown()
+
+    assert stopped == ["executor"]

@@ -132,6 +132,59 @@ def test_t017_f13_quota_message_is_exact_while_arbitrary_errors_stay_redacted(ca
     assert "private-token" not in error
 
 
+@pytest.mark.parametrize(
+    ("outcome", "expected_status", "expected_error"),
+    [
+        ("success", 0, ""),
+        ("red", 1, ""),
+        ("budget", 1, "квота на сегодня исчерпана, попробуйте позже\n"),
+        ("failure", 1, "Workflow failed; inspect the job audit\n"),
+    ],
+)
+def test_cli_shuts_down_runtime_after_every_workflow_outcome(
+    outcome, expected_status, expected_error, capsys
+):
+    class ClosingDispatcher(Dispatcher):
+        def __init__(self):
+            super().__init__()
+            self.shutdowns = 0
+
+        def doc_translate(self, request):
+            super().doc_translate(request)
+            if outcome == "red":
+                return WorkflowResult(
+                    "job-1", Mode.DOC_TRANSLATE, GitSha(TARGET), Verdict.RED, False
+                )
+            if outcome == "budget":
+                raise DailyBudgetExceeded
+            if outcome == "failure":
+                raise RuntimeError(PRIVATE_ARGUMENT)
+            return None
+
+        def shutdown(self):
+            self.shutdowns += 1
+
+    dispatcher = ClosingDispatcher()
+
+    assert main(VALID_ARGUMENTS["translate"], dispatcher=dispatcher) == expected_status
+    assert dispatcher.shutdowns == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == expected_error
+    assert PRIVATE_ARGUMENT not in captured.err
+
+
+def test_cli_hides_shutdown_failures_without_changing_success(capsys) -> None:
+    class BrokenShutdownDispatcher(Dispatcher):
+        def shutdown(self):
+            raise RuntimeError(PRIVATE_ARGUMENT)
+
+    assert main(VALID_ARGUMENTS["translate"], dispatcher=BrokenShutdownDispatcher()) == 0
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+
+
 def test_cli_dispatches_exact_workflow_inputs():
     dispatcher = Dispatcher()
     assert (

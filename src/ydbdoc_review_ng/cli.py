@@ -5,6 +5,7 @@ import importlib
 import os
 import sys
 from collections.abc import Callable, Sequence
+from contextlib import suppress
 from decimal import Decimal
 from typing import TYPE_CHECKING, NoReturn, Protocol, cast
 
@@ -103,6 +104,11 @@ def main(
     except Exception:  # noqa: BLE001 - workflow/transport diagnostics stay in audit.
         print("Workflow failed; inspect the job audit", file=sys.stderr)
         return 1
+    finally:
+        with suppress(Exception):
+            shutdown = getattr(runtime, "shutdown", None)
+            if callable(shutdown):
+                shutdown()
     return 0
 
 
