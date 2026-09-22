@@ -736,8 +736,13 @@ def _inline_regions(
         match = _PATH.match(data, cursor)
         if match is not None:
             end = match.end()
-            while end > match.start() and data[end - 1] == 46:
-                end -= 1
+            terminal_start = data.rfind(b"/", match.start(), end) + 1
+            terminal = data[terminal_start:end]
+            if terminal and not terminal.strip(b"."):
+                end -= max(len(terminal) - 2, 0)
+            else:
+                while end > match.start() and data[end - 1] == 46:
+                    end -= 1
             raw_path = data[match.start() : end]
             before = data[cursor - 1] if cursor else None
             after = data[end] if end < len(data) else None

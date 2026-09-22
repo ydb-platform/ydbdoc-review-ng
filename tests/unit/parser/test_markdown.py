@@ -754,6 +754,29 @@ def test_extension_path_excludes_trailing_sentence_punctuation(suffix: bytes) ->
     ] == [b"docs/a.md"]
 
 
+@pytest.mark.parametrize(
+    ("candidate", "path"),
+    [
+        (b"/docs/.", b"/docs/."),
+        (b"/docs/..", b"/docs/.."),
+        (b"/docs/...", b"/docs/.."),
+        (b"../docs/.", b"../docs/."),
+        (b"../docs/..", b"../docs/.."),
+        (b"../docs/...", b"../docs/.."),
+    ],
+)
+def test_terminal_dot_path_components_remain_protected(candidate: bytes, path: bytes) -> None:
+    source = b"Open " + candidate + b"\n"
+    plan = build(source)
+
+    assert [
+        source[region.span.start : region.span.end]
+        for field in fields_of(plan)
+        for region in field.protected_regions
+        if region.kind is ProtectedKind.PATH
+    ] == [path]
+
+
 def test_url_and_link_image_destinations_remain_protected() -> None:
     source = b"Visit https://example.test/a/b and [![guide](docs/core)](docs/outer).\n"
     plan = build(source)

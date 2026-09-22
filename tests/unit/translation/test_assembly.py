@@ -415,6 +415,43 @@ def test_sentence_final_extension_path_rejects_manual_mutation() -> None:
         )
 
 
+@pytest.mark.parametrize("path", [b"/docs/..", b"../docs/.."])
+def test_terminal_parent_path_component_is_source_owned_during_assembly(path: bytes) -> None:
+    source = b"Open " + path + b" now.\n"
+    plan, request = prepared(source)
+    field = request.fields[0]
+
+    attempted_mutation = field.text.replace(".. now", ". now")
+    assert (
+        assemble_candidate(
+            source,
+            plan,
+            request,
+            {field.field_id: attempted_mutation},
+        )
+        == source
+    )
+
+
+@pytest.mark.parametrize(
+    ("source_path", "target_path"),
+    [(b"/docs/..", b"/docs/."), (b"../docs/..", b"../docs/.")],
+)
+def test_terminal_parent_path_component_rejects_manual_mutation(
+    source_path: bytes, target_path: bytes
+) -> None:
+    source = b"Open " + source_path + b" now.\n"
+    target = b"Open " + target_path + b" now.\n"
+
+    with pytest.raises(ProtectedMismatch):
+        verify_protected_fragments(
+            source,
+            build_markdown_plan(SNAPSHOT, PATH, source),
+            target,
+            build_markdown_plan(SNAPSHOT, PATH, target),
+        )
+
+
 def test_assembly_preserves_fenced_code_and_comment_syntax_around_translated_comments() -> None:
     source = b"```cpp\nint x; // explain x\n/* explain y */\n```\n"
     plan, request = prepared(source)
