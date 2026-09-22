@@ -608,20 +608,26 @@ class RuntimeContent:
                 )
                 if operator_context is not None:
                     prompt += "\n\nOperator context:\n" + operator_context
-                result = self.models.invoke(
-                    ModelRequest(
-                        ModelRole.TRANSLATE,
-                        self.model,
-                        prompt,
-                        cast(FrozenJson, schema),
-                        8000,
-                    )
+                model_request = ModelRequest(
+                    ModelRole.TRANSLATE,
+                    self.model,
+                    prompt,
+                    cast(FrozenJson, schema),
+                    8000,
                 )
-                if not result.success or result.text is None:
-                    raise RuntimeBoundaryError("translation_model_failed")
-                field_values = parse_translation_response(result.text, field_request)
-                validate_translation_values(field_request, field_values)
-                values.update(field_values)
+                for attempt in (1, 2):
+                    result = self.models.invoke(model_request)
+                    if not result.success or result.text is None:
+                        raise RuntimeBoundaryError("translation_model_failed")
+                    try:
+                        field_values = parse_translation_response(result.text, field_request)
+                        validate_translation_values(field_request, field_values)
+                    except (ResponseError, AssemblyError, UnicodeError):
+                        if attempt == 2:
+                            raise
+                    else:
+                        values.update(field_values)
+                        break
             assemble_candidate(document.source, document.plan, request, values)
         except (ResponseError, AssemblyError, UnicodeError):
             raise InvalidTranslationResponse("translation_response_invalid") from None

@@ -108,12 +108,61 @@ def test_translate_document_calls_model_once_per_field_then_returns_complete_map
     )
 
 
-def test_invalid_field_stops_before_merge_or_another_model_call() -> None:
+def test_translate_document_retries_one_locally_invalid_field_then_continues() -> None:
+    document = document_for(b"# See https://safe.example/path\n\nSource paragraph.\n")
+    first, second = document.request.fields
+    first_translation = first.text.replace("See", "Read")
+    models = ScriptedModels(
+        [
+            json.dumps({first.field_id: "See [[URL_9999]]"}),
+            json.dumps({first.field_id: first_translation}),
+            json.dumps({second.field_id: "Translated paragraph."}),
+        ]
+    )
+
+    accepted = content_with(models).translate_document(document)
+
+    assert accepted == AcceptedMap(
+        TARGET_PATH,
+        tuple(
+            sorted(
+                (
+                    (first.field_id, first_translation),
+                    (second.field_id, "Translated paragraph."),
+                )
+            )
+        ),
+    )
+    assert (
+        assemble_candidate(
+            document.source,
+            document.plan,
+            document.request,
+            accepted.as_dict(),
+        )
+        == b"# Read https://safe.example/path\n\nTranslated paragraph.\n"
+    )
+    assert len(models.calls) == 3
+    assert models.calls[0] == models.calls[1]
+    for call, field in zip(models.calls, (first, first, second), strict=True):
+        assert json.loads(call.prompt.split("\nFields: ", 1)[1]) == {
+            field.field_id: field.text
+        }
+        assert mutable_json(call.schema) == {
+            "type": "object",
+            "properties": {field.field_id: {"type": "string"}},
+            "required": [field.field_id],
+            "additionalProperties": False,
+        }
+
+
+def test_two_invalid_field_responses_stop_without_next_field_or_partial_map() -> None:
     document = document_for(b"# See https://safe.example/path\n\nSource paragraph.\n")
     first, second = document.request.fields
     models = ScriptedModels(
         [
             json.dumps({first.field_id: "See [[URL_9999]]"}),
+            json.dumps({first.field_id: "See [[URL_9998]]"}),
             json.dumps({second.field_id: "Translated paragraph."}),
         ]
     )
@@ -122,7 +171,8 @@ def test_invalid_field_stops_before_merge_or_another_model_call() -> None:
     with pytest.raises(InvalidTranslationResponse, match="translation_response_invalid"):
         content.translate_document(document)
 
-    assert len(models.calls) == 1
+    assert len(models.calls) == 2
+    assert models.calls[0] == models.calls[1]
     assert content.accepted_maps == ()
 
 

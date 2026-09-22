@@ -374,7 +374,7 @@ def test_repeated_pending_failure_preserves_maps_and_pending_order():
     with pytest.raises(application.WorkflowError):
         services.resume()
     following = services.checkpoint()
-    assert services.roles == ["translate", "translate"]
+    assert services.roles == ["translate", "translate", "translate"]
     assert following.state.accepted_maps[0] == saved.state.accepted_maps[0]
     assert set(following.state.accepted_maps[1].as_dict().values()) == {"Resumed b"}
     assert [path.value for path in following.state.pending_paths] == [EN + "c.md"]
@@ -680,7 +680,7 @@ def test_replacement_preserves_exactly_one_logical_checkpoint_after_boundary_fai
     assert eligible.created_at == saved.created_at
     assert eligible.expires_at == saved.expires_at
     assert eligible.state.accepted_maps == saved.state.accepted_maps
-    assert services.roles == ["translate"] and services.commits == 0
+    assert services.roles == ["translate", "translate"] and services.commits == 0
     assert services.rows[saved.continuation_id]["consumed_by_job_id"] == consuming_job
     if fault == "activate_before":
         assert services.rows[consuming_job]["status"] == "pending"

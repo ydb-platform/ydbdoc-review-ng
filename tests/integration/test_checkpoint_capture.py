@@ -204,9 +204,13 @@ class CaptureServices(RuntimeServices):
         if self.failure == role or self.failure == "final_critic" and self.critics == 2:
             raise TimeoutError("transport failed")
         text = json.dumps(values)
-        if self.stop == "translation" and role == "translate" and self.translations == 2:
+        if self.stop == "translation" and role == "translate" and self.translations in {2, 3}:
             text = '{"wrong-field": "response received"}'
-        if self.stop == "translation_assembly" and role == "translate" and self.translations == 2:
+        if (
+            self.stop == "translation_assembly"
+            and role == "translate"
+            and self.translations in {2, 3}
+        ):
             text = json.dumps(dict.fromkeys(schema["properties"], "[[LINK_9999]]"))
         return HttpResponse(
             200,
@@ -262,7 +266,7 @@ def test_direction_stop_is_strict_and_warns_before_saving():
 
 
 @pytest.mark.parametrize("stop", ["translation", "translation_assembly"])
-def test_invalid_second_response_preserves_first_map_and_pending_order(stop):
+def test_two_invalid_current_field_responses_preserve_first_map_and_pending_order(stop):
     services = CaptureServices(stop=stop)
     services.changes.append({"status": "removed", "filename": "ydb/docs/ru/core/z.md"})
     for files in [services.files, *services.snapshots.values()]:
@@ -281,7 +285,7 @@ def test_invalid_second_response_preserves_first_map_and_pending_order(stop):
     assert checkpoint.scope_target_paths == tuple(
         RepoPath(f"ydb/docs/en/core/{n}.md") for n in ("a", "b", "c", "z")
     )
-    assert services.roles == ["translate", "translate"]
+    assert services.roles == ["translate", "translate", "translate"]
     assert services.commits == 0 and services.audit[-1]["status"] == "failed"
 
 
@@ -506,7 +510,7 @@ def test_lost_terminal_ack_and_failed_close_cannot_be_resumed():
     services = LostTerminalAck(stop="translation")
     with pytest.raises((WorkflowError, PersistenceError)):
         services.translate()
-    assert services.roles == ["translate", "translate"]
+    assert services.roles == ["translate", "translate", "translate"]
     assert services.rows  # The real checkpoint write reached storage.
     with pytest.raises(PersistenceError):
         services.checkpoint()
