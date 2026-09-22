@@ -157,7 +157,7 @@ def test_start_and_terminal_finish_write_a_job_audit_record() -> None:
     store.finish_job(job_id, JobStatus.FAILED, error="validation_failed", finished_at=finished_at)
 
     started = executor.calls[0][1]
-    finished = executor.calls[1][1]
+    finish_statement, finished = executor.calls[1]
     assert started["mode"] == "doc_translate"
     assert started["pr_number"] == 50123
     assert started["source_sha"] == "a" * 40
@@ -170,9 +170,12 @@ def test_start_and_terminal_finish_write_a_job_audit_record() -> None:
         "error": "validation_failed",
         "finished_at": finished_at,
     }
+    assert finish_statement == """UPDATE `ydbdoc_review/jobs`
+                SET finished_at = $finished_at, status = $status, error = $error
+                WHERE job_id = $job_id;"""
 
 
-def test_t017_f10_terminal_success_upserts_final_target_sha() -> None:
+def test_t017_f10_terminal_success_updates_final_target_sha() -> None:
     executor = FakeExecutor()
     store = YdbPersistence(executor)
     final_sha = "f" * 40
@@ -186,8 +189,17 @@ def test_t017_f10_terminal_success_upserts_final_target_sha() -> None:
     )
 
     statement, parameters = executor.calls[0]
-    assert "target_sha" in statement
-    assert parameters["target_sha"] == final_sha
+    assert statement == """UPDATE `ydbdoc_review/jobs`
+                SET target_sha = $target_sha, finished_at = $finished_at,
+                    status = $status, error = $error
+                WHERE job_id = $job_id;"""
+    assert parameters == {
+        "job_id": "job-1",
+        "status": "succeeded",
+        "error": None,
+        "finished_at": datetime(2026, 9, 21, 9, 5, tzinfo=UTC),
+        "target_sha": final_sha,
+    }
 
 
 def test_attempt_recorder_stores_exact_response_and_known_nonzero_decimal_cost() -> None:

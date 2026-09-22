@@ -666,14 +666,15 @@ class YdbPersistence:
             "finished_at": finished_at,
         }
         if target_sha is None:
-            statement = f"""UPSERT INTO `{self._table("jobs")}`
-                (job_id, finished_at, status, error)
-                VALUES ($job_id, $finished_at, $status, $error);"""
+            statement = f"""UPDATE `{self._table("jobs")}`
+                SET finished_at = $finished_at, status = $status, error = $error
+                WHERE job_id = $job_id;"""
         else:
             parameters["target_sha"] = target_sha
-            statement = f"""UPSERT INTO `{self._table("jobs")}`
-                (job_id, target_sha, finished_at, status, error)
-                VALUES ($job_id, $target_sha, $finished_at, $status, $error);"""
+            statement = f"""UPDATE `{self._table("jobs")}`
+                SET target_sha = $target_sha, finished_at = $finished_at,
+                    status = $status, error = $error
+                WHERE job_id = $job_id;"""
         self._execute("job finish", statement, parameters)
 
     def finish_job_reconciled(
