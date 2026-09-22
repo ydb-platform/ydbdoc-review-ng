@@ -2,6 +2,8 @@ import sys
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
+import pytest
+
 from ydbdoc_review_ng.runtime_ydb import SDKExecutor, parameter_types
 
 
@@ -50,6 +52,38 @@ def test_sdk_naive_utc_timestamp_is_returned_as_aware_utc(monkeypatch) -> None:
         }
     ]
     assert rows[0]["created_at"] is naive
+
+
+@pytest.mark.parametrize(
+    ("job_id", "declaration", "value_type"),
+    [
+        ("job-1", "DECLARE $job_id AS Utf8;", "Utf8"),
+        (None, "DECLARE $job_id AS Utf8?;", "Optional<Utf8>"),
+    ],
+)
+def test_sdk_executor_binds_job_id_by_nullability(
+    monkeypatch, job_id, declaration, value_type
+) -> None:
+    calls = []
+    pool = SimpleNamespace(
+        execute_with_retries=lambda query, params: calls.append((query, params)) or []
+    )
+    sdk = SimpleNamespace(
+        Driver=lambda **kwargs: SimpleNamespace(wait=lambda **kwargs: None),
+        QuerySessionPool=lambda driver: pool,
+        AccessTokenCredentials=lambda token: object(),
+        PrimitiveType=SimpleNamespace(Utf8="Utf8"),
+        OptionalType=lambda item: f"Optional<{item}>",
+        TypedValue=lambda value, item_type: (value, item_type),
+    )
+    monkeypatch.setitem(sys.modules, "ydb", sdk)
+
+    SDKExecutor("grpcs://example.test", "/database", "secret").execute(
+        "SELECT $job_id", {"job_id": job_id}
+    )
+
+    assert declaration in calls[0][0]
+    assert calls[0][1] == {"$job_id": (job_id, value_type)}
 
 
 def test_sdk_executor_stops_pool_and_driver_once(monkeypatch) -> None:

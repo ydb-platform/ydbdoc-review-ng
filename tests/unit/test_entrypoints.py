@@ -175,11 +175,15 @@ def test_cli_shuts_down_runtime_after_every_workflow_outcome(
 
 
 def test_cli_hides_shutdown_failures_without_changing_success(capsys) -> None:
+    shutdowns = []
+
     class BrokenShutdownDispatcher(Dispatcher):
         def shutdown(self):
+            shutdowns.append("attempted")
             raise RuntimeError(PRIVATE_ARGUMENT)
 
     assert main(VALID_ARGUMENTS["translate"], dispatcher=BrokenShutdownDispatcher()) == 0
+    assert shutdowns == ["attempted"]
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err == ""
