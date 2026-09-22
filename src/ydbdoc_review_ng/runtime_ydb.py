@@ -18,7 +18,7 @@ def parameter_types(parameters: Mapping[str, object]) -> dict[str, str]:
         "pr_number": "Uint64",
         "source_pr": "Uint64",
         "trigger_pr": "Uint64",
-        "source_sha": "Utf8?",
+        "source_sha": "Utf8?" if parameters.get("source_sha") is None else "Utf8",
         "job_id": "Utf8?" if parameters.get("job_id") is None else "Utf8",
         "consumed_by_job_id": "Utf8?",
         "state": "String",

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import sys
 from collections.abc import Mapping
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 
@@ -13,8 +15,9 @@ from ydbdoc_review_ng.continuation import (
     normalize_source_inventory,
 )
 from ydbdoc_review_ng.direction import Direction
-from ydbdoc_review_ng.domain import ContentHash, GitSha, RepoPath
+from ydbdoc_review_ng.domain import ContentHash, GitSha, Mode, RepoPath
 from ydbdoc_review_ng.persistence import YdbPersistence, ydb
+from ydbdoc_review_ng.runtime_ydb import SDKExecutor
 
 NOW = datetime(2026, 9, 21, 9, tzinfo=UTC)
 
@@ -92,6 +95,41 @@ def save_semantic(store, saved, *, now):
         target_sha=None if saved.target_sha is None else saved.target_sha.value,
     )
     return store.activate_checkpoint(pending, now=now)
+
+
+def test_checkpoint_and_nullable_job_start_bind_source_sha_at_sdk_boundary(monkeypatch) -> None:
+    calls = []
+    pool = SimpleNamespace(
+        execute_with_retries=lambda query, params: calls.append((query, params)) or []
+    )
+    sdk = SimpleNamespace(
+        Driver=lambda **kwargs: SimpleNamespace(wait=lambda **kwargs: None),
+        QuerySessionPool=lambda driver: pool,
+        AccessTokenCredentials=lambda token: object(),
+        PrimitiveType=SimpleNamespace(
+            String="String", Timestamp="Timestamp", Uint64="Uint64", Utf8="Utf8"
+        ),
+        OptionalType=lambda item: f"Optional<{item}>",
+        TypedValue=lambda value, item_type: (value, item_type),
+    )
+    monkeypatch.setitem(sys.modules, "ydb", sdk)
+    store = YdbPersistence(SDKExecutor("grpcs://example.test", "/database", "secret"))
+
+    store.start_job(
+        Mode.DOC_CONTINUE,
+        pr_number=52,
+        source_sha=None,
+        target_sha=None,
+        started_at=NOW,
+    )
+    store.save_checkpoint(checkpoint(), now=NOW)
+
+    job_query, job_values = calls[0]
+    checkpoint_query, checkpoint_values = calls[2]
+    assert "DECLARE $source_sha AS Utf8?;" in job_query
+    assert job_values["$source_sha"] == (None, "Optional<Utf8>")
+    assert "DECLARE $source_sha AS Utf8;" in checkpoint_query
+    assert checkpoint_values["$source_sha"] == ("a" * 40, "Utf8")
 
 
 @pytest.mark.parametrize("stage", list(ContinuationStage))

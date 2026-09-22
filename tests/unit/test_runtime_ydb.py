@@ -7,6 +7,17 @@ import pytest
 from ydbdoc_review_ng.runtime_ydb import SDKExecutor, parameter_types
 
 
+@pytest.mark.parametrize(
+    ("source_sha", "expected_type"),
+    [
+        ("a" * 40, "Utf8"),
+        (None, "Utf8?"),
+    ],
+)
+def test_parameter_types_binds_source_sha_by_nullability(source_sha, expected_type) -> None:
+    assert parameter_types({"source_sha": source_sha}) == {"source_sha": expected_type}
+
+
 def test_non_null_job_and_continuation_parameters_have_explicit_sdk_types() -> None:
     assert parameter_types(
         {
