@@ -11,6 +11,64 @@ import pytest
 from _runtime_services import RuntimeServices
 
 
+def test_merged_source_uses_workflow_pinned_base_after_branch_advances() -> None:
+    from ydbdoc_review_ng.application import TranslateWorkflowInput
+    from ydbdoc_review_ng.domain import GitSha, RepositoryId, SnapshotRef
+    from ydbdoc_review_ng.repository import (
+        BaseBranch,
+        PullRequestState,
+        ResolvedRepositorySnapshots,
+    )
+    from ydbdoc_review_ng.runtime import RuntimeSource
+    from ydbdoc_review_ng.runtime_github import GitHubBackend
+
+    class MergedServices(RuntimeServices):
+        merge_commit = "c" * 40
+
+        def github(self, method, path, payload):
+            response = super().github(method, path, payload)
+            if path.endswith("/pulls/42"):
+                return {**response, "merged": True, "merge_commit_sha": self.merge_commit}
+            return response
+
+    services = MergedServices()
+    source = RuntimeSource(
+        {"GITHUB_ACTOR": "maintainer", "YDBDOC_ALLOWED_ACTORS": "maintainer"},
+        GitHubBackend(services.github),
+    )
+    request = TranslateWorkflowInput(42, GitSha(services.source), Decimal(10))
+    authorization = source.authorize_translate(request)
+
+    snapshot = source.snapshot_translate(authorization)
+
+    repository = RepositoryId("ydb-platform/ydb")
+    pinned_base = SnapshotRef(repository, GitSha(services.source))
+    provenance = SnapshotRef(repository, GitSha(services.merge_commit))
+    assert snapshot.source_sha == pinned_base.commit_sha
+    assert source.snapshots == ResolvedRepositorySnapshots(
+        PullRequestState.MERGED,
+        BaseBranch("main"),
+        provenance,
+        pinned_base,
+        pinned_base,
+        pinned_base,
+        pinned_base,
+        pinned_base,
+        provenance,
+    )
+    assert source.context.current_head == pinned_base.commit_sha
+    merge_base_with = source.snapshots.merge_base_with
+    assert merge_base_with is not None
+    assert GitSha(services.base) not in {
+        source.snapshots.source_snapshot.commit_sha,
+        source.snapshots.target_snapshot.commit_sha,
+        source.snapshots.scope_snapshot.commit_sha,
+        source.snapshots.translation_base_snapshot.commit_sha,
+        merge_base_with.commit_sha,
+        source.context.current_head,
+    }
+
+
 def test_shipped_composition_translates_then_verifies_current_pr_without_retranslation():
     from ydbdoc_review_ng.cli import main
     from ydbdoc_review_ng.runtime import create_runtime

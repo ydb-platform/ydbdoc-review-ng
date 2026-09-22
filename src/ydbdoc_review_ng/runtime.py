@@ -183,7 +183,7 @@ class RuntimeSource:
         original = SnapshotRef(
             repository, GitSha(pr["merge_commit_sha"] if merged else pr["head"]["sha"])
         )
-        source = base_snapshot if merged else original
+        source = SnapshotRef(repository, expected_source) if merged else original
         # Verify keeps the previously pinned authoritative source even if base advances.
         if authorization.mode is Mode.DOC_VERIFY:
             if not merged and original.commit_sha != expected_source:
@@ -217,7 +217,11 @@ class RuntimeSource:
         ):
             raise RuntimeBoundaryError("verification_head_mismatch")
         self.context = PublicationContext(
-            self.github.repository, authorization.branch, base.value, base.value, head or tip
+            self.github.repository,
+            authorization.branch,
+            base.value,
+            base.value,
+            head or (source.commit_sha if merged else tip),
         )
         self.metadata_snapshot = SnapshotRef(repository, self.context.current_head)
         self.source_pr = source_pr
