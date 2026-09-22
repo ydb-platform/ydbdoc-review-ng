@@ -361,6 +361,33 @@ def test_candidate_reparse_failure_is_typed() -> None:
     assert caught.value.reason is AssemblyErrorReason.CANDIDATE_REVALIDATION_FAILED
 
 
+def test_live_slash_joined_prose_translation_assembles() -> None:
+    source = "Принудительная блокировка/разблокировка пользователя\n".encode()
+    plan, request = prepared(source)
+
+    assert (
+        assemble_candidate(
+            source,
+            plan,
+            request,
+            {request.requested_ids[0]: "Forced user blocking/unblocking"},
+        )
+        == b"Forced user blocking/unblocking\n"
+    )
+
+
+def test_live_slash_joined_prose_translation_verifies() -> None:
+    source = "Принудительная блокировка/разблокировка пользователя\n".encode()
+    target = b"Forced user blocking/unblocking\n"
+
+    verify_protected_fragments(
+        source,
+        build_markdown_plan(SNAPSHOT, PATH, source),
+        target,
+        build_markdown_plan(SNAPSHOT, PATH, target),
+    )
+
+
 def test_assembly_preserves_fenced_code_and_comment_syntax_around_translated_comments() -> None:
     source = b"```cpp\nint x; // explain x\n/* explain y */\n```\n"
     plan, request = prepared(source)

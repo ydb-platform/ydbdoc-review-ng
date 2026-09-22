@@ -63,9 +63,10 @@ _FENCE = re.compile(rb"^ {0,3}(`{3,}|~{3,})([^\x00-\x08\x0b\x0c\x0e-\x1f\x7f]*)$
 _DELIMITER_CELL = re.compile(rb"^:?-{3,}:?$")
 _ANCHOR = re.compile(rb"\{#[A-Za-z0-9_.:-]+\}")
 _URL = re.compile(rb"[A-Za-z][A-Za-z0-9+.-]{1,31}://[^\s<>]+")
+_FILENAME = re.compile(rb"[A-Za-z0-9_-][A-Za-z0-9_.-]*\.[A-Za-z0-9][A-Za-z0-9_-]*")
 _PATH = re.compile(
     rb"(?:/|\./|\.\./)?[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+"
-    rb"|[A-Za-z0-9_-][A-Za-z0-9_.-]*\.[A-Za-z0-9][A-Za-z0-9_-]*"
+    rb"|" + _FILENAME.pattern
 )
 _IDENTIFIER = re.compile(rb"[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*")
 _URI_AUTOLINK = re.compile(rb"<[A-Za-z][A-Za-z0-9+.-]{1,31}:[\x21-\x3b\x3d\x3f-\x7e]+>")
@@ -734,12 +735,18 @@ def _inline_regions(
             continue
         match = _PATH.match(data, cursor)
         if match is not None:
+            raw_path = match.group()
             before = data[cursor - 1] if cursor else None
             after = data[match.end()] if match.end() < len(data) else None
             leading_boundary = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-/"
             trailing_boundary = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-/"
-            if (before is None or before not in leading_boundary) and (
-                after is None or after not in trailing_boundary
+            explicit = raw_path.startswith((b"/", b"./", b"../"))
+            hierarchical = raw_path.count(b"/") >= 2
+            filename = _FILENAME.fullmatch(raw_path.rsplit(b"/", 1)[-1]) is not None
+            if (
+                (explicit or hierarchical or filename)
+                and (before is None or before not in leading_boundary)
+                and (after is None or after not in trailing_boundary)
             ):
                 append(
                     ProtectedRegion(

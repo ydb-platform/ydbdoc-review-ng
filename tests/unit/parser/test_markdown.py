@@ -714,6 +714,47 @@ def test_exact_inline_regions(
     assert region_shape(source) == expected
 
 
+@pytest.mark.parametrize("phrase", [b"blocking/unblocking", b"input/output", b"read/write"])
+def test_bare_two_component_slash_prose_remains_translatable(phrase: bytes) -> None:
+    source = b"Choose " + phrase + b" behavior.\n"
+    plan = build(source)
+    fields = fields_of(plan)
+
+    assert len(fields) == 1
+    assert source[fields[0].span.start : fields[0].span.end] == source[:-1]
+    assert all(region.kind is not ProtectedKind.PATH for region in fields[0].protected_regions)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [b"/docs/core", b"./docs/core", b"../docs/core", b"docs/core/auth", b"docs/a.md", b"guide.md"],
+)
+def test_syntactically_identifiable_paths_remain_protected(path: bytes) -> None:
+    source = b"Open " + path + b" now.\n"
+    plan = build(source)
+
+    assert [
+        source[region.span.start : region.span.end]
+        for field in fields_of(plan)
+        for region in field.protected_regions
+        if region.kind is ProtectedKind.PATH
+    ] == [path]
+
+
+def test_url_and_link_image_destinations_remain_protected() -> None:
+    source = b"Visit https://example.test/a/b and [![guide](docs/core)](docs/outer).\n"
+    plan = build(source)
+
+    protected = [
+        (region.kind, source[region.span.start : region.span.end])
+        for field in fields_of(plan)
+        for region in field.protected_regions
+    ]
+    assert (ProtectedKind.URL, b"https://example.test/a/b") in protected
+    assert (ProtectedKind.IMAGE_CLOSE, b"](docs/core)") in protected
+    assert (ProtectedKind.LINK_CLOSE, b"](docs/outer)") in protected
+
+
 def test_heading_anchor_and_multiline_transition_regions() -> None:
     assert region_shape(b"# Hello {#id}\n") == [(ProtectedKind.EXPLICIT_ANCHOR, 8, 13, None)]
     assert region_shape(b"  First\n Second\n") == [
