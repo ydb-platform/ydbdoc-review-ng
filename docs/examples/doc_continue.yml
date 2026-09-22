@@ -1,0 +1,37 @@
+# Consumer template for ydb-platform/ydb, not an installed workflow in this tool.
+# After the final release gate, replace REVIEWED_1_1_0_COMMIT_SHA with the
+# reviewed immutable 40-hex action commit. Deployment is a separate operation.
+name: doc_continue
+on:
+  pull_request_target:
+    types: [labeled]
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+concurrency:
+  group: doc-continue-${{ github.repository }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+jobs:
+  doc_continue:
+    if: github.event.label.name == 'doc_continue'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      YDB_GH_TOKEN: ${{ secrets.YDB_GH_TOKEN }}
+      YDBDOC_ALLOWED_ACTORS: ${{ vars.YDBDOC_ALLOWED_ACTORS }}
+      YANDEX_API_KEY: ${{ secrets.YANDEX_API_KEY }}
+      YANDEX_FOLDER_ID: ${{ vars.YANDEX_FOLDER_ID }}
+      YDB_ENDPOINT: ${{ vars.YDB_ENDPOINT }}
+      YDB_DATABASE: ${{ vars.YDB_DATABASE }}
+      YDB_TOKEN: ${{ secrets.YDB_TOKEN }}
+      YDB_SA_KEY: ${{ secrets.YDB_SA_KEY }}
+      YDBDOC_MAX_DEPENDENCY_FILES_PER_ARTICLE: ${{ vars.YDBDOC_MAX_DEPENDENCY_FILES_PER_ARTICLE }}
+      YDBDOC_MAX_SOURCE_CHARACTERS: ${{ vars.YDBDOC_MAX_SOURCE_CHARACTERS }}
+    steps:
+      # Trusted runtime creates audit before checking the actual label actor
+      # and preceding allowed comment. No source/PR checkout or code execution.
+      - uses: ydb-platform/ydbdoc-review-ng/.github/actions/doc-review@REVIEWED_1_1_0_COMMIT_SHA
+        with:
+          mode: continue
+          pr: ${{ github.event.pull_request.number }}

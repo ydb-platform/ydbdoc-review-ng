@@ -21,10 +21,14 @@ source, запускает те же validators и critic, при необход
 repair commit в ту же branch, обновляет verdict и terminal job status. Budget
 gate у него отсутствует.
 
-В `v1.0.x` отдельного `doc_continue`, resumable state machine, soft-keep lattice
-и navigation overlay нет. Канонические требования задают для следующего релиза
-узкий continuation checkpoint только для трёх семантических остановок. Режим
-включается в новый action лишь после реализации и независимой приёмки.
+`doc_continue` в `1.1.0` создаёт audit, проверяет label actor и последний допустимый
+предшествующий `/ydbdoc continue` comment, затем загружает живой checkpoint.
+Replay читает только сохранённые source/base SHA и проверяет scope/field IDs
+и exact translation head. Три stage: direction retry, перевод pending документов
+с accepted maps и critic/одна repair только unresolved review paths. Source-only
+assembly и обычные проверки сохраняются. GREEN закрывает checkpoint; повторный
+semantic stop наследует первоначальный expiry. Infrastructure failure не является
+новым semantic checkpoint. Общей resumable state machine нет.
 
 ## Разделение ответственности
 
@@ -38,18 +42,20 @@ gate у него отсутствует.
 - Add source-TOC-reachable страницы добавляет target TOC entry без redirect;
   add вне source TOC не обязан менять TOC; rename обновляет target TOC path и
   создаёт прямой redirect old→new; ordinary edit не меняет ни TOC, ни redirects.
-- YDB хранит job и каждую начатую model attempt с request, response при наличии,
+- YDB хранит job, versioned continuation checkpoint и каждую начатую model attempt с request, response при наличии,
   status/error и cost. Job всегда завершается terminal status/error, включая
   ранние failures. TTL текстов составляет 14 дней.
 - Budget gate выполняется только перед новым `doc_translate`. Его дневной `SUM`
-  включает все известные costs обеих workflow и ролей, в том числе
+  включает все известные costs трёх workflow и ролей, в том числе
   `doc_verify` critic/repair; unknown cost не подменяется нулём. Gate идёт после
   authorization/snapshot и до любого model call, включая mixed-locale
   direction call.
 
 ## Совместимость
 
-`v1.0.x` фиксирует реализованные контракты `doc_translate` и `doc_verify`.
-Дополнительные гарантии можно сохранять, но они не расширяют future scope и не
-требуют новых подсистем. `doc_continue` становится частью нового action только
-после отдельной реализации и приёмки контракта из канонических требований.
+`v1.0.x` фиксирует входы `doc_translate` и `doc_verify`; `1.1.0` добавляет
+`continue --pr N` без source/target/budget override. Все режимы возвращают exit 1
+при RED. Action проверяет входы по mode до Python. Consumer label template
+находится в `docs/examples/doc_continue.yml`; repo-local dispatch workflows
+не подписаны на labels чужого репозитория. Реальное подключение consumer и
+публикация release tag выполняются отдельно после финальной приёмки.

@@ -25,7 +25,7 @@ def run_cli(*args: str) -> subprocess.CompletedProcess[str]:
 
 def test_distribution_metadata_and_src_package_discovery() -> None:
     distribution = importlib.metadata.distribution("ydbdoc-review-ng")
-    assert distribution.version == "1.0.1"
+    assert distribution.version == "1.1.0"
     entry_points = importlib.metadata.entry_points(group="console_scripts")
     matching = [entry.value for entry in entry_points if entry.name == "ydbdoc-review"]
     assert matching == ["ydbdoc_review_ng.cli:main"]
@@ -58,11 +58,11 @@ def test_cli_help_is_successful_on_stdout() -> None:
     result = run_cli("--help")
 
     assert result.returncode == 0
-    assert "{translate,verify}" in result.stdout
+    assert "{translate,verify,continue}" in result.stdout
     assert result.stderr == ""
 
 
-@pytest.mark.parametrize("args", [(), ("unknown",), ("continue",)])
+@pytest.mark.parametrize("args", [(), ("unknown",)])
 def test_cli_rejects_missing_or_unknown_mode(args: tuple[str, ...]) -> None:
     result = run_cli(*args)
 
@@ -71,16 +71,16 @@ def test_cli_rejects_missing_or_unknown_mode(args: tuple[str, ...]) -> None:
     assert "usage:" in result.stderr
 
 
-@pytest.mark.parametrize("mode", ["translate", "verify"])
+@pytest.mark.parametrize("mode", ["translate", "verify", "continue"])
 def test_valid_modes_require_explicit_workflow_inputs(mode: str) -> None:
     result = run_cli(mode)
 
     assert result.returncode == 2
     assert result.stdout == ""
-    assert "required" in result.stderr
+    assert result.stderr.endswith("Invalid workflow inputs\n")
 
 
-@pytest.mark.parametrize("argv", [["translate", "--help"], ["verify", "--help"], ["--help"]])
+@pytest.mark.parametrize("argv", [[mode, "--help"] for mode in ("translate", "verify", "continue")])
 def test_import_help_and_modes_avoid_application_side_effects(argv: list[str]) -> None:
     probe = r"""
 import builtins

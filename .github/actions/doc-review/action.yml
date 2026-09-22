@@ -1,15 +1,15 @@
 name: Documentation review
-description: Run the shipped translation or verification composition
+description: Run the shipped translation, verification or continuation composition
 inputs:
   mode:
-    description: translate or verify
+    description: translate, verify or continue
     required: true
   pr:
-    description: Source PR for translate, translation PR for verify
+    description: Source PR for translate, translation PR for verify, either for continue
     required: true
   source-sha:
     description: Immutable authoritative source SHA
-    required: true
+    required: false
   target-sha:
     description: Current translation head SHA for verify
     required: false
@@ -19,6 +19,30 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: Validate mode inputs
+      shell: bash
+      env:
+        MODE: ${{ inputs.mode }}
+        PR: ${{ inputs.pr }}
+        SOURCE_SHA: ${{ inputs.source-sha }}
+        TARGET_SHA: ${{ inputs.target-sha }}
+        BUDGET_RUB: ${{ inputs.budget-rub }}
+      run: |
+        [[ "$PR" =~ ^[0-9]+$ && "$PR" =~ [1-9] ]] || exit 2
+        case "$MODE" in
+          translate)
+            [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ && -z "$TARGET_SHA" ]] || exit 2
+            [[ "$BUDGET_RUB" =~ ^[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?$ ]] || exit 2
+            if [[ "$BUDGET_RUB" == -* && "${BUDGET_RUB%%[eE]*}" =~ [1-9] ]]; then exit 2; fi
+            ;;
+          verify)
+            [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ && "$TARGET_SHA" =~ ^[0-9a-f]{40}$ && -z "$BUDGET_RUB" ]] || exit 2
+            ;;
+          continue)
+            [[ -z "$SOURCE_SHA" && -z "$TARGET_SHA" && -z "$BUDGET_RUB" ]] || exit 2
+            ;;
+          *) exit 2 ;;
+        esac
     - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
       with:
         python-version: '3.11'
@@ -35,10 +59,11 @@ runs:
         YDBDOC_RUNTIME_FACTORY: ydbdoc_review_ng.runtime:create_runtime
       run: |
         # Credentials remain environment references, never shell arguments.
-        args=("$MODE" --pr "$PR" --source-sha "$SOURCE_SHA")
+        args=("$MODE" --pr "$PR")
         case "$MODE" in
-          translate) args+=(--budget-rub "$BUDGET_RUB") ;;
-          verify) args+=(--target-sha "$TARGET_SHA") ;;
+          translate) args+=(--source-sha "$SOURCE_SHA" --budget-rub "$BUDGET_RUB") ;;
+          verify) args+=(--source-sha "$SOURCE_SHA" --target-sha "$TARGET_SHA") ;;
+          continue) ;;
           *) exit 2 ;;
         esac
         python -m ydbdoc_review_ng.cli "${args[@]}"

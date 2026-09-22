@@ -3,7 +3,12 @@ from pathlib import Path
 
 import pytest
 
-from ydbdoc_review_ng.application import TranslateWorkflowInput, VerifyWorkflowInput, WorkflowResult
+from ydbdoc_review_ng.application import (
+    ContinueWorkflowInput,
+    TranslateWorkflowInput,
+    VerifyWorkflowInput,
+    WorkflowResult,
+)
 from ydbdoc_review_ng.cli import main
 from ydbdoc_review_ng.domain import GitSha, Mode
 from ydbdoc_review_ng.persistence import DailyBudgetExceeded
@@ -13,6 +18,12 @@ pytestmark = pytest.mark.unit
 SHA = "a" * 40
 TARGET = "b" * 40
 ROOT = Path(__file__).resolve().parents[2]
+PRIVATE_ARGUMENT = "PRIVATE_OPERATOR_CONTEXT_SENTINEL"
+VALID_ARGUMENTS = {
+    "translate": ["translate", "--pr", "42", "--source-sha", SHA, "--budget-rub", "5"],
+    "verify": ["verify", "--pr", "42", "--source-sha", SHA, "--target-sha", TARGET],
+    "continue": ["continue", "--pr", "42"],
+}
 
 
 class Dispatcher:
@@ -24,6 +35,62 @@ class Dispatcher:
 
     def doc_verify(self, request):
         self.requests.append(request)
+
+    def doc_continue(self, request):
+        self.requests.append(request)
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        [PRIVATE_ARGUMENT],
+        ["--unknown", PRIVATE_ARGUMENT],
+        *[args + ["--unknown", PRIVATE_ARGUMENT] for args in VALID_ARGUMENTS.values()],
+        *[[*args[:2], PRIVATE_ARGUMENT, *args[3:]] for args in VALID_ARGUMENTS.values()],
+        *[[*args[:2], "0", *args[3:]] for args in VALID_ARGUMENTS.values()],
+        *[
+            ["continue", "--pr", "42", flag, PRIVATE_ARGUMENT]
+            for flag in ("--source-sha", "--target-sha", "--budget-rub", "--context")
+        ],
+        ["translate", "--pr", "42", "--source-sha", PRIVATE_ARGUMENT, "--budget-rub", "5"],
+        ["verify", "--pr", "42", "--source-sha", PRIVATE_ARGUMENT, "--target-sha", TARGET],
+        ["verify", "--pr", "42", "--source-sha", SHA, "--target-sha", PRIVATE_ARGUMENT],
+        ["translate", "--pr", "42", "--source-sha", SHA, "--budget-rub", PRIVATE_ARGUMENT],
+        ["translate", "--pr", "42", "--source-sha", SHA, "--budget-rub", "NaN"],
+    ],
+)
+def test_malformed_cli_inputs_never_echo_argument_values_or_construct_runtime(args, capsys):
+    def forbidden():
+        pytest.fail("malformed inputs must not construct the runtime")
+
+    try:
+        status = main(args, factory=forbidden)
+    except SystemExit as error:
+        status = error.code
+    assert status == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert PRIVATE_ARGUMENT not in captured.err
+    assert captured.err.endswith("Invalid workflow inputs\n")
+    if captured.err != "Invalid workflow inputs\n":
+        assert captured.err.startswith("usage: ydbdoc-review ")
+
+
+@pytest.mark.parametrize("mode", VALID_ARGUMENTS)
+def test_redacted_parser_keeps_factory_and_workflow_failure_boundaries(mode, capsys):
+    def broken_factory():
+        raise RuntimeError(PRIVATE_ARGUMENT)
+
+    assert main(VALID_ARGUMENTS[mode], factory=broken_factory) == 2
+    assert capsys.readouterr().err == "Workflow runtime factory is missing or unavailable\n"
+
+    def broken_workflow(request):
+        raise RuntimeError(PRIVATE_ARGUMENT)
+
+    dispatcher = Dispatcher()
+    setattr(dispatcher, "doc_" + mode, broken_workflow)
+    assert main(VALID_ARGUMENTS[mode], dispatcher=dispatcher) == 1
+    assert capsys.readouterr().err == "Workflow failed; inspect the job audit\n"
 
 
 def test_t017_f02_red_doc_verify_result_returns_failing_cli_status() -> None:
@@ -87,13 +154,57 @@ def test_cli_dispatches_exact_workflow_inputs():
     ]
 
 
-@pytest.mark.parametrize("mode", ["continue", "unknown"])
-def test_removed_and_unknown_modes_never_dispatch(mode):
+@pytest.mark.parametrize("mode", ["unknown"])
+def test_unknown_modes_never_dispatch(mode):
     dispatcher = Dispatcher()
     with pytest.raises(SystemExit) as error:
         main([mode], dispatcher=dispatcher)
     assert error.value.code == 2
     assert dispatcher.requests == []
+
+
+def test_continue_dispatches_only_pr_after_validation():
+    dispatcher = Dispatcher()
+    assert main(["continue", "--pr", "42"], factory=lambda: dispatcher) == 0
+    assert dispatcher.requests == [ContinueWorkflowInput(42)]
+
+
+@pytest.mark.parametrize("flag", ["--source-sha", "--target-sha", "--budget-rub"])
+def test_continue_rejects_snapshot_and_budget_overrides_before_factory(flag):
+    def forbidden():
+        pytest.fail("invalid inputs must never construct the runtime")
+
+    with pytest.raises(SystemExit) as error:
+        main(["continue", "--pr", "42", flag, SHA], factory=forbidden)
+    assert error.value.code == 2
+
+
+@pytest.mark.parametrize("pr", ["0", "-1"])
+def test_continue_rejects_invalid_pr_before_factory(pr):
+    def forbidden():
+        pytest.fail("invalid PR must never construct the runtime")
+
+    assert main(["continue", "--pr", pr], factory=forbidden) == 2
+
+
+@pytest.mark.parametrize(
+    ("mode", "extra"),
+    [
+        ("translate", ["--source-sha", SHA, "--budget-rub", "5"]),
+        ("verify", ["--source-sha", SHA, "--target-sha", TARGET]),
+        ("continue", []),
+    ],
+)
+def test_every_red_workflow_result_is_a_failed_cli_run(mode, extra):
+    dispatcher = Dispatcher()
+    setattr(
+        dispatcher,
+        "doc_" + mode,
+        lambda request: WorkflowResult(
+            "job", Mode("doc_" + mode), GitSha(TARGET), Verdict.RED, False
+        ),
+    )
+    assert main([mode, "--pr", "42", *extra], dispatcher=dispatcher) == 1
 
 
 def test_missing_runtime_is_explicit_and_factory_errors_hide_secrets(monkeypatch, capsys):

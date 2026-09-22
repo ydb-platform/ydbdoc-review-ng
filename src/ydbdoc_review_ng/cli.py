@@ -6,26 +6,38 @@ import os
 import sys
 from collections.abc import Callable, Sequence
 from decimal import Decimal
-from typing import TYPE_CHECKING, Protocol, cast
+from typing import TYPE_CHECKING, NoReturn, Protocol, cast
 
 if TYPE_CHECKING:
-    from ydbdoc_review_ng.application import TranslateWorkflowInput, VerifyWorkflowInput
+    from ydbdoc_review_ng.application import (
+        ContinueWorkflowInput,
+        TranslateWorkflowInput,
+        VerifyWorkflowInput,
+    )
 
 
 class Dispatcher(Protocol):
     def doc_translate(self, request: TranslateWorkflowInput, /) -> object: ...
     def doc_verify(self, request: VerifyWorkflowInput, /) -> object: ...
+    def doc_continue(self, request: ContinueWorkflowInput, /) -> object: ...
 
 
 def _runtime_factory() -> Dispatcher:
-    """Load trusted deployment composition; no built-in live transport exists."""
+    """Load the explicitly selected trusted deployment composition."""
     module, name = os.environ["YDBDOC_RUNTIME_FACTORY"].split(":", 1)
     factory = cast(Callable[[], Dispatcher], getattr(importlib.import_module(module), name))
     return factory()
 
 
+class _SafeArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> NoReturn:
+        """Only parser-owned usage is public; argparse messages may contain argv values."""
+        self.print_usage(sys.stderr)
+        self.exit(2, "Invalid workflow inputs\n")
+
+
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="ydbdoc-review")
+    parser = _SafeArgumentParser(prog="ydbdoc-review")
     subcommands = parser.add_subparsers(dest="mode", required=True)
     for mode in ("translate", "verify"):
         command = subcommands.add_parser(mode)
@@ -35,6 +47,8 @@ def _parser() -> argparse.ArgumentParser:
             command.add_argument("--budget-rub", required=True)
         else:
             command.add_argument("--target-sha", required=True)
+    continuation = subcommands.add_parser("continue", allow_abbrev=False)
+    continuation.add_argument("--pr", type=int, required=True)
     return parser
 
 
@@ -46,6 +60,7 @@ def main(
 ) -> int:
     args = _parser().parse_args(argv)
     from ydbdoc_review_ng.application import (
+        ContinueWorkflowInput,
         TranslateWorkflowInput,
         VerifyWorkflowInput,
         WorkflowResult,
@@ -55,14 +70,16 @@ def main(
     from ydbdoc_review_ng.quality import Verdict
 
     try:
-        request: TranslateWorkflowInput | VerifyWorkflowInput
+        request: TranslateWorkflowInput | VerifyWorkflowInput | ContinueWorkflowInput
         if args.mode == "translate":
             budget = Decimal(args.budget_rub)
             if not budget.is_finite():
                 raise ValueError("invalid budget")
             request = TranslateWorkflowInput(args.pr, GitSha(args.source_sha), budget)
-        else:
+        elif args.mode == "verify":
             request = VerifyWorkflowInput(args.pr, GitSha(args.source_sha), GitSha(args.target_sha))
+        else:
+            request = ContinueWorkflowInput(args.pr)
     except Exception:  # noqa: BLE001 - input diagnostics must not echo raw values.
         print("Invalid workflow inputs", file=sys.stderr)
         return 2
@@ -73,11 +90,13 @@ def main(
         return 2
     try:
         if isinstance(request, TranslateWorkflowInput):
-            runtime.doc_translate(request)
-        else:
+            result = runtime.doc_translate(request)
+        elif isinstance(request, VerifyWorkflowInput):
             result = runtime.doc_verify(request)
-            if type(result) is WorkflowResult and result.verdict is Verdict.RED:
-                return 1
+        else:
+            result = runtime.doc_continue(request)
+        if type(result) is WorkflowResult and result.verdict is Verdict.RED:
+            return 1
     except DailyBudgetExceeded:
         print(DailyBudgetExceeded.user_message, file=sys.stderr)
         return 1

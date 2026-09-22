@@ -152,3 +152,104 @@ class RuntimeServices:
             ).encode(),
             Decimal("0.01"),
         )
+
+
+class InstalledContinueServices(RuntimeServices):
+    """The same HTTP/YDB boundaries with a review checkpoint for installed smoke."""
+
+    def __init__(self):
+        super().__init__()
+        self.jobs = {}
+        self.checkpoints = {}
+        self.stop_review = False
+        self.continuing = False
+
+    def execute(self, statement, parameters):
+        if "/jobs`" in statement:
+            if "SELECT" in statement:
+                row = self.jobs.get(parameters["job_id"])
+                return [] if row is None else [row]
+            self.jobs.setdefault(parameters["job_id"], {}).update(parameters)
+        if "/continuations`" in statement:
+            if "UPSERT" in statement:
+                self.checkpoints[parameters["continuation_id"]] = dict(parameters)
+            elif "UPDATE" in statement:
+                row = self.checkpoints[parameters["continuation_id"]]
+                if "SET consumed_by_job_id" in statement:
+                    assert all(
+                        row.get(key) == value
+                        for key, value in parameters.items()
+                        if key != "new_consumed_by_job_id"
+                    )
+                    row["consumed_by_job_id"] = parameters["new_consumed_by_job_id"]
+                elif "SET status = 'open'" in statement:
+                    assert all(row.get(key) == value for key, value in parameters.items())
+                    row["status"] = "open"
+                else:
+                    row["status"] = "closed"
+            elif "continuation_id" in parameters:
+                row = self.checkpoints.get(parameters["continuation_id"])
+                return [] if row is None else [row]
+            else:
+                return list(self.checkpoints.values())
+            return []
+        return super().execute(statement, parameters)
+
+    def github(self, method, path, payload):
+        if path.endswith("/events?per_page=100"):
+            return [
+                {
+                    "id": 100,
+                    "event": "labeled",
+                    "label": {"name": "doc_continue"},
+                    "actor": {"login": "maintainer"},
+                    "created_at": "2026-09-21T11:00:00Z",
+                }
+            ]
+        response = super().github(method, path, payload)
+        if path.endswith("/pulls/42"):
+            response.update(number=42, body="")
+        if path.endswith("/pulls/43"):
+            response["number"] = 43
+        if self.continuing and method == "GET" and path.endswith("/comments?per_page=100"):
+            return [
+                {
+                    "id": 99,
+                    "user": {"login": "maintainer"},
+                    "created_at": "2026-09-21T10:00:00Z",
+                    "updated_at": "2026-09-21T10:00:00Z",
+                    "body": "/ydbdoc continue\nKeep the authoritative source meaning.\n",
+                }
+            ] + [
+                {
+                    **comment,
+                    "created_at": "2026-09-21T12:00:00Z",
+                    "updated_at": "2026-09-21T12:00:00Z",
+                }
+                for comment in response
+            ]
+        return response
+
+    def model(self, request):
+        from ydbdoc_review_ng.models import HttpResponse
+
+        response = super().model(request)
+        schema = json.loads(request.body)["jsonSchema"]["schema"]
+        if self.stop_review and "verdict" in schema["properties"]:
+            values = {
+                "verdict": "RED",
+                "findings": [
+                    {
+                        "repairable": False,
+                        "reason": "Meaning requires operator context.",
+                        "expected_correction": "Confirm the intended source meaning.",
+                        "searchable_snippet": "Translated",
+                        "target_path": "ydb/docs/en/core/page.md",
+                        "target_line": 1,
+                    }
+                ],
+            }
+            body = json.loads(response.body)
+            body["result"]["alternatives"][0]["message"]["text"] = json.dumps(values)
+            return HttpResponse(200, json.dumps(body).encode(), Decimal("0.01"))
+        return response

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 
@@ -8,6 +9,109 @@ import yaml
 
 pytestmark = pytest.mark.unit
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def run_action_inputs(mode, *, source="", target="", budget="", pr="42"):
+    action = yaml.safe_load((ROOT / ".github/actions/doc-review/action.yml").read_bytes())
+    steps = action["runs"]["steps"]
+    guards = [step for step in steps if step.get("name") == "Validate mode inputs"]
+    assert len(guards) == 1, "action must validate inputs before Python setup/install"
+    assert steps[0] == guards[0]
+    assert action["inputs"]["source-sha"]["required"] is False
+    script = (
+        guards[0]["run"]
+        + "\n"
+        + next(step["run"] for step in steps if "-m ydbdoc_review_ng.cli" in step.get("run", ""))
+    )
+    return subprocess.run(
+        ["bash", "-euc", 'python() { printf "%s\\n" "$@"; };\n' + script],
+        env={
+            "MODE": mode,
+            "PR": pr,
+            "SOURCE_SHA": source,
+            "TARGET_SHA": target,
+            "BUDGET_RUB": budget,
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+@pytest.mark.parametrize(
+    ("mode", "inputs", "argv"),
+    [
+        ("continue", {}, ["continue", "--pr", "42"]),
+        (
+            "translate",
+            {"source": "a" * 40, "budget": "1e-3"},
+            ["translate", "--pr", "42", "--source-sha", "a" * 40, "--budget-rub", "1e-3"],
+        ),
+        (
+            "verify",
+            {"source": "a" * 40, "target": "b" * 40},
+            ["verify", "--pr", "42", "--source-sha", "a" * 40, "--target-sha", "b" * 40],
+        ),
+    ],
+)
+def test_action_executes_exact_mode_arguments(mode, inputs, argv):
+    result = run_action_inputs(mode, **inputs)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["-m", "ydbdoc_review_ng.cli", *argv]
+
+
+@pytest.mark.parametrize(
+    ("mode", "inputs"),
+    [
+        ("continue", {"source": "a" * 40}),
+        ("continue", {"target": " "}),
+        ("continue", {"budget": "0"}),
+        ("continue", {"pr": "0"}),
+        ("unknown", {}),
+        ("translate", {"budget": "5"}),
+        ("translate", {"source": "a" * 40}),
+        ("translate", {"source": "a" * 40, "budget": "NaN"}),
+        ("translate", {"source": "a" * 40, "budget": "Infinity"}),
+        ("translate", {"source": "a" * 40, "budget": "-1"}),
+        ("translate", {"source": "a" * 40, "budget": "5", "target": "b" * 40}),
+        ("verify", {"source": "a" * 40}),
+        ("verify", {"target": "b" * 40}),
+        ("verify", {"source": "a" * 40, "target": "b" * 40, "budget": "0"}),
+    ],
+)
+def test_action_rejects_invalid_or_cross_mode_inputs_before_python(mode, inputs):
+    result = run_action_inputs(mode, **inputs)
+    assert result.returncode == 2
+    assert result.stdout == ""
+
+
+def test_consumer_template_requires_trusted_pin_and_pr_label_boundary():
+    template = (ROOT / "docs/examples/doc_continue.yml").read_text()
+    assert not (ROOT / ".github/workflows/doc_continue.yml").exists()
+    rendered = template.replace("REVIEWED_1_1_0_COMMIT_SHA", "a" * 40)
+    workflow = yaml.safe_load(rendered)
+    # PyYAML uses YAML 1.1, where an unquoted `on` is a boolean key.
+    assert workflow.get("on", workflow.get(True)) == {"pull_request_target": {"types": ["labeled"]}}
+    assert workflow["concurrency"] == {
+        "group": "doc-continue-${{ github.repository }}-${{ github.event.pull_request.number }}",
+        "cancel-in-progress": False,
+    }
+    job = workflow["jobs"]["doc_continue"]
+    assert "github.event.label.name == 'doc_continue'" in job["if"]
+    assert job["env"]["YDBDOC_ALLOWED_ACTORS"] == "${{ vars.YDBDOC_ALLOWED_ACTORS }}"
+    assert job["env"]["YDB_GH_TOKEN"] == "${{ secrets.YDB_GH_TOKEN }}"
+    assert job["env"]["YDB_SA_KEY"] == "${{ secrets.YDB_SA_KEY }}"
+    assert job["env"]["YANDEX_API_KEY"] == "${{ secrets.YANDEX_API_KEY }}"
+    steps = job["steps"]
+    assert len(steps) == 1  # Authorization and failed-job audit run inside the trusted runtime.
+    action = steps[0]
+    assert re.fullmatch(
+        r"ydb-platform/ydbdoc-review-ng/\.github/actions/doc-review@[0-9a-f]{40}", action["uses"]
+    )
+    assert action["with"] == {
+        "mode": "continue",
+        "pr": "${{ github.event.pull_request.number }}",
+    }
 
 
 def test_t017_f01_dispatch_uses_only_trusted_pinned_runtime_checkout() -> None:
