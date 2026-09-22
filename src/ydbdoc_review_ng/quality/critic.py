@@ -69,20 +69,12 @@ def critic_schema(target_path: RepoPath, requested_ids: tuple[str, ...], /) -> d
         finding_properties["field_ids"] = {
             "type": "array",
             "items": {"type": "string", "enum": list(requested_ids)},
-            "minItems": 1,
             "uniqueItems": True,
         }
     finding: dict[str, object] = {
         "type": "object",
         "properties": finding_properties,
-        "required": [
-            "repairable",
-            "reason",
-            "expected_correction",
-            "searchable_snippet",
-            "target_path",
-            "target_line",
-        ],
+        "required": list(finding_properties),
         "additionalProperties": False,
     }
     return {
@@ -112,13 +104,19 @@ def build_critic_request(
         raise TypeError("source and target must be exact bytes")
     source_text = source.decode("utf-8")
     target_text = target.decode("utf-8")
+    field_ids_instruction = (
+        "Always include field_ids in every finding. Use [] when no safe exact field mapping "
+        "exists.\n"
+        if requested_ids
+        else "Do not include field_ids because this document has no repairable fields.\n"
+    )
     prompt = (
         "Compare the authoritative source with the complete translated target. "
         "Check full meaning and accuracy, completeness, terminology, untranslated user-facing "
         "prose, and the purpose and workability of links in context. Do not rewrite URLs or "
         "paths, and do not implement or request a navigation resolver. Return only the strict "
-        "JSON result. Include field_ids only when the finding can be safely repaired in exactly "
-        "those fields.\n"
+        "JSON result. "
+        f"{field_ids_instruction}"
         f"Direction: {source_locale.value} -> {target_locale.value}\n"
         f"Target path: {target_path.value}\n"
         "<authoritative-source>\n"
@@ -177,7 +175,8 @@ def parse_critic_response(
         if not required.issubset(finding_keys):
             raise CriticResponseError(CriticResponseErrorReason.INVALID_FINDING)
         try:
-            item = _object(raw_finding, required, frozenset({"field_ids"}))
+            optional = frozenset({"field_ids"}) if requested_ids else frozenset()
+            item = _object(raw_finding, required, optional)
         except CriticResponseError as error:
             if error.reason is CriticResponseErrorReason.UNEXPECTED_FIELD:
                 raise
@@ -201,8 +200,6 @@ def parse_critic_response(
         if len(field_ids) != len(set(field_ids)) or any(
             value not in allowed_ids for value in field_ids
         ):
-            raise CriticResponseError(CriticResponseErrorReason.INVALID_FINDING)
-        if "field_ids" in item and not field_ids:
             raise CriticResponseError(CriticResponseErrorReason.INVALID_FINDING)
         if not item["repairable"] and field_ids:
             raise CriticResponseError(CriticResponseErrorReason.INVALID_FINDING)

@@ -616,6 +616,7 @@ def test_critic_parser_rejects_malformed_extra_duplicate_and_inconsistent_result
         {"target_path": "ydb/docs/ru/other.md"},
         {"target_line": True},
         {"field_ids": "not-a-list"},
+        {"field_ids": [1]},
         {"field_ids": ["unknown"]},
     ],
 )
@@ -663,6 +664,42 @@ def test_critic_parser_rejects_repair_ids_on_unrepairable_finding() -> None:
     assert caught.value.reason is CriticResponseErrorReason.INVALID_FINDING
 
 
+def test_critic_parser_accepts_empty_ids_when_repair_fields_exist() -> None:
+    _plan, request, _values, _target = prepared()
+
+    result = parse_critic_response(
+        critic_json("RED", [finding(repairable=False, snippet="Прочитайте", line=3)]),
+        target_path=PATH,
+        requested_ids=request.requested_ids,
+    )
+
+    assert result.findings[0].field_ids == ()
+
+
+def test_critic_parser_rejects_duplicate_repair_ids() -> None:
+    _plan, request, _values, _target = prepared()
+    field_id = request.requested_ids[0]
+
+    with pytest.raises(CriticResponseError) as caught:
+        parse_critic_response(
+            critic_json(
+                "RED",
+                [
+                    finding(
+                        repairable=True,
+                        snippet="Прочитайте",
+                        line=3,
+                        field_ids=[field_id, field_id],
+                    )
+                ],
+            ),
+            target_path=PATH,
+            requested_ids=request.requested_ids,
+        )
+
+    assert caught.value.reason is CriticResponseErrorReason.INVALID_FINDING
+
+
 def test_critic_request_contains_full_source_target_and_link_purpose_boundary() -> None:
     _plan, request, _values, target = prepared()
     built = build_critic_request(
@@ -685,6 +722,8 @@ def test_critic_request_contains_full_source_target_and_link_purpose_boundary() 
     assert "purpose and workability of links in context" in built.prompt
     assert "Do not rewrite URLs" in built.prompt
     assert "navigation resolver" in built.prompt
+    assert "Always include field_ids in every finding" in built.prompt
+    assert "Use [] when no safe exact field mapping exists" in built.prompt
     assert SOURCE.decode() not in repr(built)
     assert target.decode() not in repr(built)
 
@@ -710,6 +749,44 @@ def test_critic_schema_omits_field_ids_when_document_has_no_repairable_fields() 
     finding_properties = items["properties"]
     assert type(finding_properties) is dict
     assert "field_ids" not in finding_properties
+
+
+def test_critic_schema_requires_empty_or_mapped_field_ids_when_repair_fields_exist() -> None:
+    _plan, translation_request, _values, target = prepared()
+    request = build_critic_request(
+        model="model",
+        source=SOURCE,
+        target=target,
+        target_path=PATH,
+        source_locale=Locale.EN,
+        target_locale=Locale.RU,
+        requested_ids=translation_request.requested_ids,
+    )
+
+    schema = mutable_json(request.schema)
+    assert type(schema) is dict
+    findings = schema["properties"]["findings"]
+    assert type(findings) is dict
+    finding = findings["items"]
+    assert type(finding) is dict
+    assert "field_ids" in finding["required"]
+    field_ids = finding["properties"]["field_ids"]
+    assert type(field_ids) is dict
+    assert "minItems" not in field_ids
+
+
+def test_critic_parser_rejects_field_ids_without_repair_fields() -> None:
+    with pytest.raises(CriticResponseError) as caught:
+        parse_critic_response(
+            critic_json(
+                "RED",
+                [finding(repairable=False, snippet="protected", line=2, field_ids=[])],
+            ),
+            target_path=PATH,
+            requested_ids=(),
+        )
+
+    assert caught.value.reason is CriticResponseErrorReason.UNEXPECTED_FIELD
 
 
 def test_model_failure_and_malformed_critic_are_typed_and_non_echoing() -> None:
