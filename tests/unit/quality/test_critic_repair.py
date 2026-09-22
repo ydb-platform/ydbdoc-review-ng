@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 
 import pytest
 
@@ -75,7 +76,7 @@ def finding(
     repairable: bool,
     snippet: str,
     line: int,
-    field_ids: list[str] | None = None,
+    field_ids: Sequence[object] | None = None,
 ) -> dict[str, object]:
     value: dict[str, object] = {
         "repairable": repairable,
@@ -680,23 +681,82 @@ def test_critic_parser_accepts_empty_ids_when_repair_fields_exist(repairable: bo
     assert result.findings[0].field_ids == ()
 
 
-def test_critic_parser_rejects_duplicate_repair_ids() -> None:
+def test_critic_parser_canonicalizes_duplicate_repair_ids_in_first_occurrence_order() -> None:
     _plan, request, _values, _target = prepared()
-    field_id = request.requested_ids[0]
+    first_id, second_id = request.requested_ids
+
+    result = parse_critic_response(
+        critic_json(
+            "RED",
+            [
+                finding(
+                    repairable=True,
+                    snippet="Прочитайте",
+                    line=3,
+                    field_ids=[second_id, first_id, second_id],
+                ),
+                finding(
+                    repairable=True,
+                    snippet="Установка",
+                    line=1,
+                    field_ids=[first_id, first_id],
+                ),
+            ],
+        ),
+        target_path=PATH,
+        requested_ids=request.requested_ids,
+    )
+
+    assert tuple(finding.field_ids for finding in result.findings) == (
+        (second_id, first_id),
+        (first_id,),
+    )
+
+
+def test_critic_duplicate_ids_reach_one_ordered_repair() -> None:
+    _plan, request, values, _target = prepared()
+    second_id = request.requested_ids[1]
+    executor = FakeExecutor(
+        critic_json(
+            "RED",
+            [
+                finding(
+                    repairable=True,
+                    snippet="Прочитайте",
+                    line=3,
+                    field_ids=[second_id, second_id],
+                )
+            ],
+        ),
+        json.dumps({second_id: values[second_id]}),
+        critic_json("GREEN", []),
+    )
+
+    result = review(executor)
+
+    repair_schema = mutable_json(executor.calls[1].schema)
+    assert result.repair_applied
+    assert result.primary.findings[0].field_ids == (second_id,)
+    assert repair_schema["required"] == [second_id]
+    assert [call.role.value for call in executor.calls] == ["critic", "repair", "final_critic"]
+
+
+@pytest.mark.parametrize(
+    "field_ids",
+    [
+        ["unknown", "unknown"],
+        [1, 1],
+    ],
+)
+def test_critic_parser_still_rejects_invalid_duplicate_repair_ids(
+    field_ids: list[object],
+) -> None:
+    _plan, request, _values, _target = prepared()
+    item = finding(repairable=True, snippet="Прочитайте", line=3, field_ids=field_ids)
 
     with pytest.raises(CriticResponseError) as caught:
         parse_critic_response(
-            critic_json(
-                "RED",
-                [
-                    finding(
-                        repairable=True,
-                        snippet="Прочитайте",
-                        line=3,
-                        field_ids=[field_id, field_id],
-                    )
-                ],
-            ),
+            critic_json("RED", [item]),
             target_path=PATH,
             requested_ids=request.requested_ids,
         )
@@ -728,6 +788,7 @@ def test_critic_request_contains_full_source_target_and_link_purpose_boundary() 
     assert "navigation resolver" in built.prompt
     assert "Always include field_ids in every finding" in built.prompt
     assert "Use [] when no safe exact field mapping exists" in built.prompt
+    assert "List each field ID at most once" in built.prompt
     assert SOURCE.decode() not in repr(built)
     assert target.decode() not in repr(built)
 
@@ -777,6 +838,7 @@ def test_critic_schema_requires_empty_or_mapped_field_ids_when_repair_fields_exi
     field_ids = finding["properties"]["field_ids"]
     assert type(field_ids) is dict
     assert "minItems" not in field_ids
+    assert field_ids["uniqueItems"] is True
 
 
 def test_critic_parser_rejects_field_ids_without_repair_fields() -> None:

@@ -116,6 +116,7 @@ def build_critic_request(
         "prose, and the purpose and workability of links in context. Do not rewrite URLs or "
         "paths, and do not implement or request a navigation resolver. Return only the strict "
         "JSON result. "
+        "List each field ID at most once. "
         f"{field_ids_instruction}"
         f"Direction: {source_locale.value} -> {target_locale.value}\n"
         f"Target path: {target_path.value}\n"
@@ -196,10 +197,8 @@ def parse_critic_response(
         raw_ids = item.get("field_ids", [])
         if type(raw_ids) is not list or any(type(field_id) is not str for field_id in raw_ids):
             raise CriticResponseError(CriticResponseErrorReason.INVALID_FINDING)
-        field_ids = cast(list[str], raw_ids)
-        if len(field_ids) != len(set(field_ids)) or any(
-            value not in allowed_ids for value in field_ids
-        ):
+        field_ids = list(dict.fromkeys(cast(list[str], raw_ids)))
+        if any(value not in allowed_ids for value in field_ids):
             raise CriticResponseError(CriticResponseErrorReason.INVALID_FINDING)
         if not item["repairable"] and field_ids:
             raise CriticResponseError(CriticResponseErrorReason.INVALID_FINDING)
