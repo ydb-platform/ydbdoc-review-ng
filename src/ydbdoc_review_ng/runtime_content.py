@@ -6,6 +6,7 @@ import base64
 import json
 import posixpath
 import re
+from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, cast
@@ -43,7 +44,7 @@ from ydbdoc_review_ng.locales import (
     paired_markdown_path,
 )
 from ydbdoc_review_ng.models import ModelRequest
-from ydbdoc_review_ng.models.types import FrozenJson
+from ydbdoc_review_ng.models.types import FrozenJson, mutable_json
 from ydbdoc_review_ng.parser.markdown import build_markdown_plan
 from ydbdoc_review_ng.plan import ProtectedKind, SourcePlan, fields_of
 from ydbdoc_review_ng.publication import FileChange, GitPublicationAdapter, PublicationPlan
@@ -123,6 +124,54 @@ class FrozenSourcePlans:
 
 class InvalidTranslationResponse(RuntimeError):
     """A received document response failed the strict map/assembly contract."""
+
+
+def _corrective_translation_request(
+    request: ModelRequest,
+    required_placeholders: tuple[str, ...],
+    rejected_value: str | None,
+    /,
+) -> ModelRequest:
+    required = json.dumps(required_placeholders)
+    correction = (
+        "\n\nCorrection context:\n"
+        "Previous provider-successful response failed local validation. "
+        "Return exactly the requested field ID using the unchanged one-field JSON schema. "
+        f"Required placeholder sequence: {required}. "
+        "Include every required protected placeholder exactly once and in the authoritative "
+        "order. "
+    )
+    if rejected_value is not None:
+        returned = tuple(
+            re.findall(r"\[\[[A-Z][A-Z0-9_]*_[0-9]{4}\]\]", rejected_value)
+        )
+        if returned != required_placeholders:
+            returned_counts = Counter(returned)
+            missing = []
+            for token in required_placeholders:
+                if returned_counts[token]:
+                    returned_counts[token] -= 1
+                else:
+                    missing.append(token)
+            required_counts = Counter(required_placeholders)
+            unexpected = []
+            for token in returned:
+                if required_counts[token]:
+                    required_counts[token] -= 1
+                else:
+                    unexpected.append(token)
+            correction += (
+                f"Missing placeholders: {json.dumps(missing)}. "
+                f"Unexpected placeholders: {json.dumps(unexpected)}. "
+            )
+    correction += "Do not invent placeholder contents."
+    return ModelRequest(
+        request.role,
+        request.model,
+        request.prompt + correction,
+        cast(FrozenJson, mutable_json(request.schema)),
+        request.max_tokens,
+    )
 
 
 class MarkdownDependencies:
@@ -619,12 +668,19 @@ class RuntimeContent:
                     result = self.models.invoke(model_request)
                     if not result.success or result.text is None:
                         raise RuntimeBoundaryError("translation_model_failed")
+                    rejected_value = None
                     try:
                         field_values = parse_translation_response(result.text, field_request)
+                        rejected_value = field_values[item.field_id]
                         validate_translation_values(field_request, field_values)
                     except (ResponseError, AssemblyError, UnicodeError):
                         if attempt == 2:
                             raise
+                        model_request = _corrective_translation_request(
+                            model_request,
+                            tuple(placeholder.token for placeholder in item.placeholders),
+                            rejected_value,
+                        )
                     else:
                         values.update(field_values)
                         break

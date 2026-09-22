@@ -286,6 +286,9 @@ def test_two_invalid_current_field_responses_preserve_first_map_and_pending_orde
         RepoPath(f"ydb/docs/en/core/{n}.md") for n in ("a", "b", "c", "z")
     )
     assert services.roles == ["translate", "translate", "translate"]
+    attempts = [row for row in services.audit if "attempt_id" in row]
+    assert len(attempts) == 3
+    assert sum(row["cost_rub"] for row in attempts) == Decimal("0.03")
     assert services.commits == 0 and services.audit[-1]["status"] == "failed"
 
 
