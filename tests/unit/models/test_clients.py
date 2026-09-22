@@ -207,6 +207,31 @@ def test_openai_payload_headers_and_full_model_uri_are_exact() -> None:
     assert result.attempts[0].response_role == "assistant"
 
 
+def test_yandex_clients_use_validated_default_request_timeout() -> None:
+    native_transport = FakeTransport(native_response())
+    openai_transport = FakeTransport(openai_response())
+
+    native_client(native_transport, []).invoke(request())
+    openai_client(openai_transport, []).invoke(request("deepseek-v4-flash/latest"))
+
+    assert native_transport.requests[0].timeout_seconds == 180.0
+    assert openai_transport.requests[0].timeout_seconds == 180.0
+
+
+def test_yandex_client_preserves_explicit_request_timeout() -> None:
+    transport = FakeTransport(native_response())
+    client = NativeYandexClient(
+        YandexCredentials(SECRET, FOLDER),
+        transport,
+        lambda _attempt: None,
+        timeout_seconds=12.5,
+    )
+
+    client.invoke(request())
+
+    assert transport.requests[0].timeout_seconds == 12.5
+
+
 def test_success_preserves_roles_models_usage_raw_response_and_decimal_cost() -> None:
     response = native_response()
     transport = FakeTransport(response)

@@ -248,7 +248,7 @@ class _BaseYandexClient:
         pricing: CostCalculator | None = None,
         execution: ExecutionConfig | None = None,
         now: Callable[[], datetime] | None = None,
-        timeout_seconds: float = 60.0,
+        timeout_seconds: float = 180.0,
     ) -> None:
         self.credentials = credentials
         self._transport = transport
