@@ -17,6 +17,7 @@ from ydbdoc_review_ng.domain import GitSha, RepoPath, SnapshotRef
 from ydbdoc_review_ng.errors import SafeDiagnosticError
 from ydbdoc_review_ng.publication import PublicationContext, PublicationPlan
 from ydbdoc_review_ng.reporting import CheckResult, Comment
+from ydbdoc_review_ng.trace import traced
 
 JsonTransport = Callable[[str, str, object], Any]
 
@@ -110,32 +111,38 @@ class GitHubHTTP:
         self._mutation_token = mutation_token
 
     def __call__(self, method: str, path: str, payload: object) -> Any:
-        token = self._read_token if method == "GET" and path != "/user" else self._mutation_token
-        if not token:
-            raise RuntimeBoundaryError("github_credentials_missing")
-        request = urllib.request.Request(
-            "https://api.github.com" + path,
-            data=None if payload is None else json.dumps(payload).encode(),
-            method=method,
-            headers={
-                "Authorization": "Bearer " + token,
-                "Accept": "application/vnd.github+json",
-                "X-GitHub-Api-Version": "2022-11-28",
-                "Content-Type": "application/json",
-            },
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=60) as response:
-                # Do not silently publish a truncated scope or duplicate a comment.
-                if 'rel="next"' in response.headers.get("Link", ""):
-                    raise RuntimeBoundaryError("github_result_exceeds_single_page")
-                return json.loads(response.read())
-        except urllib.error.HTTPError as error:
-            if error.code == 404 and method == "GET":
-                return None
-            raise RuntimeBoundaryError("github_request_failed") from None
-        except (OSError, ValueError):
-            raise RuntimeBoundaryError("github_request_failed") from None
+        endpoint = path.split("?", 1)[0]
+        with traced("github", "request", method=method, endpoint=endpoint):
+            token = (
+                self._read_token
+                if method == "GET" and path != "/user"
+                else self._mutation_token
+            )
+            if not token:
+                raise RuntimeBoundaryError("github_credentials_missing")
+            request = urllib.request.Request(
+                "https://api.github.com" + path,
+                data=None if payload is None else json.dumps(payload).encode(),
+                method=method,
+                headers={
+                    "Authorization": "Bearer " + token,
+                    "Accept": "application/vnd.github+json",
+                    "X-GitHub-Api-Version": "2022-11-28",
+                    "Content-Type": "application/json",
+                },
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=60) as response:
+                    # Do not silently publish a truncated scope or duplicate a comment.
+                    if 'rel="next"' in response.headers.get("Link", ""):
+                        raise RuntimeBoundaryError("github_result_exceeds_single_page")
+                    return json.loads(response.read())
+            except urllib.error.HTTPError as error:
+                if error.code == 404 and method == "GET":
+                    return None
+                raise RuntimeBoundaryError("github_request_failed") from None
+            except (OSError, ValueError):
+                raise RuntimeBoundaryError("github_request_failed") from None
 
 
 class GitHubBackend:

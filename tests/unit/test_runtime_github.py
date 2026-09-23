@@ -57,7 +57,7 @@ def test_translation_pr_title_names_the_authoritative_source_pr() -> None:
     ],
 )
 def test_github_http_routes_reads_and_mutations_to_distinct_credentials(
-    method, expected_token, monkeypatch
+    method, expected_token, monkeypatch, capsys
 ) -> None:
     requests = []
 
@@ -72,6 +72,16 @@ def test_github_http_routes_reads_and_mutations_to_distinct_credentials(
     assert result == {"ok": True}
     assert len(requests) == 1
     assert requests[0].get_header("Authorization") == f"Bearer {expected_token}"
+    output = capsys.readouterr().err
+    events = [
+        json.loads(line.removeprefix("YDBDOC_TRACE ")) for line in output.splitlines()
+    ]
+    assert [(event["status"], event["method"], event["endpoint"]) for event in events] == [
+        ("start", method, "/resource"),
+        ("ok", method, "/resource"),
+    ]
+    assert "read-token" not in output
+    assert "mutation-token" not in output
 
 
 @pytest.mark.parametrize(

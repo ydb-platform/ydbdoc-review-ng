@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -42,6 +43,45 @@ class EchoingExecutor:
         self, _statement: str, parameters: Mapping[str, object], /
     ) -> list[Mapping[str, object]]:
         raise RuntimeError(f"YDB rejected bound parameters: {parameters!r}")
+
+
+def test_ydb_operations_trace_start_success_and_failure_without_parameters(capsys) -> None:
+    now = datetime(2026, 9, 23, tzinfo=UTC)
+    YdbPersistence(FakeExecutor()).start_job(
+        Mode.DOC_TRANSLATE,
+        pr_number=50858,
+        source_sha="a" * 40,
+        target_sha=None,
+        started_at=now,
+    )
+    success = [
+        json.loads(line.removeprefix("YDBDOC_TRACE "))
+        for line in capsys.readouterr().err.splitlines()
+    ]
+    assert [(event["operation"], event["status"]) for event in success] == [
+        ("job_start", "start"),
+        ("job_start", "ok"),
+    ]
+
+    with pytest.raises(PersistenceError):
+        YdbPersistence(EchoingExecutor()).start_job(
+            Mode.DOC_TRANSLATE,
+            pr_number=50858,
+            source_sha="PRIVATE_SOURCE_SHA",
+            target_sha=None,
+            started_at=now,
+        )
+    failure_output = capsys.readouterr().err
+    failure = [
+        json.loads(line.removeprefix("YDBDOC_TRACE "))
+        for line in failure_output.splitlines()
+    ]
+    assert [(event["operation"], event["status"]) for event in failure] == [
+        ("job_start", "start"),
+        ("job_start", "fail"),
+    ]
+    assert failure[-1]["error_type"] == "RuntimeError"
+    assert "PRIVATE_SOURCE_SHA" not in failure_output
 
 
 def attempt(

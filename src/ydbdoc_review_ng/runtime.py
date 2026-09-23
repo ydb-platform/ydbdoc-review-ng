@@ -48,6 +48,7 @@ from ydbdoc_review_ng.runtime_github import (
     RuntimeBoundaryError,
 )
 from ydbdoc_review_ng.runtime_ydb import DEFAULT_YDB_DATABASE, DEFAULT_YDB_ENDPOINT, SDKExecutor
+from ydbdoc_review_ng.trace import traced, write_trace
 
 _YANDEXGPT_5_1_TOKEN_RUB = Decimal("0.0012")
 _PRODUCTION_PRICING = PerModelPricing(
@@ -100,7 +101,21 @@ class RecordedModels:
             self.record,
             pricing=_PRODUCTION_PRICING,
         )
-        return client.invoke(request)
+        details: dict[str, object] = {
+            "model_role": request.role.value,
+            "article": None if request.target_path is None else request.target_path.value,
+        }
+        with traced("model", "invoke", **details):
+            result = client.invoke(request)
+        write_trace(
+            "model",
+            "result",
+            "ok" if result.success and result.text is not None else "fail",
+            **details,
+            attempts_total=len(result.attempts),
+            code=None if result.failure is None else result.failure.value,
+        )
+        return result
 
 
 class RuntimeSource:

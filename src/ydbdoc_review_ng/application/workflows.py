@@ -24,6 +24,7 @@ from ydbdoc_review_ng.persistence import (
 )
 from ydbdoc_review_ng.ports import Clock
 from ydbdoc_review_ng.quality import QualityReviewResult, Verdict
+from ydbdoc_review_ng.trace import write_trace
 
 if TYPE_CHECKING:
     from ydbdoc_review_ng.runtime_continue import (
@@ -815,6 +816,16 @@ class LinearWorkflows:
     ) -> NoReturn:
         is_quota = stage is WorkflowStage.BUDGET and isinstance(error, DailyBudgetExceeded)
         diagnostic = error if isinstance(error, SafeDiagnosticError) else None
+        write_trace(
+            "workflow",
+            "failure",
+            "fail",
+            job_id=job_id,
+            mode=mode.value,
+            stage=stage.value,
+            code=diagnostic.code if diagnostic is not None else "unexpected_exception",
+            error_type=type(error).__name__,
+        )
         safe_error = DailyBudgetExceeded.user_message if is_quota else f"{stage.value}_failed"
         self._record_failed_terminal(
             job_id,

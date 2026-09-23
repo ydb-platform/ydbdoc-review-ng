@@ -157,6 +157,37 @@ def test_translate_document_calls_model_once_per_field_then_returns_complete_map
     )
 
 
+def test_translate_document_traces_field_progress_without_document_text(capsys) -> None:
+    document = document_for(b"# PRIVATE SOURCE HEADING\n\nPRIVATE SOURCE PARAGRAPH.\n")
+    translations = ("PRIVATE TRANSLATED HEADING", "PRIVATE TRANSLATED PARAGRAPH.")
+    models = ScriptedModels(
+        [
+            json.dumps({field.field_id: value})
+            for field, value in zip(document.request.fields, translations, strict=True)
+        ]
+    )
+
+    content_with(models).translate_document(document)
+
+    output = capsys.readouterr().err
+    events = [
+        json.loads(line.removeprefix("YDBDOC_TRACE ")) for line in output.splitlines()
+    ]
+    assert [
+        (event["operation"], event["status"], event["field_index"])
+        for event in events
+    ] == [
+        ("field", "start", 1),
+        ("field", "ok", 1),
+        ("field", "start", 2),
+        ("field", "ok", 2),
+    ]
+    assert all(event["article"] == TARGET_PATH.value for event in events)
+    assert all(event["fields_total"] == 2 for event in events)
+    assert "PRIVATE SOURCE" not in output
+    assert "PRIVATE TRANSLATED" not in output
+
+
 def test_translate_document_retries_one_locally_invalid_field_then_continues() -> None:
     document = document_for(
         b"# Use foo::bar, bar::baz, baz::qux, qux::zap, zap::zip, guide.md.\n\n"

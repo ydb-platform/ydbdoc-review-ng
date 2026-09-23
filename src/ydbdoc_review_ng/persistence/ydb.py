@@ -30,6 +30,7 @@ from ydbdoc_review_ng.continuation import (
 from ydbdoc_review_ng.domain import GitSha, Mode, ModelRole, RepoPath
 from ydbdoc_review_ng.errors import SafeDiagnosticError
 from ydbdoc_review_ng.models import AttemptResult
+from ydbdoc_review_ng.trace import traced
 
 _MOSCOW = ZoneInfo("Europe/Moscow")
 _TTL = 'Interval("P14D")'
@@ -834,7 +835,8 @@ class YdbPersistence:
         self, operation: str, statement: str, parameters: Mapping[str, object], /
     ) -> Sequence[Mapping[str, object]]:
         try:
-            return self._executor.execute(statement, parameters)
+            with traced("ydb", operation.replace("-", "_").replace(" ", "_")):
+                return self._executor.execute(statement, parameters)
         except DailyBudgetExceeded:
             raise
         except Exception:  # noqa: BLE001 - executor diagnostics can contain request/response bytes.
