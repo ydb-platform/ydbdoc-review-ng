@@ -369,6 +369,66 @@ def test_two_invalid_field_responses_stop_without_next_field_or_partial_map() ->
     assert content.accepted_maps == ()
 
 
+def test_repeated_missing_link_pair_uses_source_preserving_segment_fallback() -> None:
+    document = document_for(
+        "Добавлены [транзакции](transactions.md) с участием "
+        "[топиков](topics.md) и таблиц.\n".encode()
+    )
+    field = document.request.fields[0]
+    assert tuple(item.token for item in field.placeholders) == (
+        "[[LINK_OPEN_0001]]",
+        "[[LINK_CLOSE_0002]]",
+        "[[LINK_OPEN_0003]]",
+        "[[LINK_CLOSE_0004]]",
+    )
+    invalid = (
+        "Added [[LINK_OPEN_0001]]transactions[[LINK_CLOSE_0002]] "
+        "involving topics and tables."
+    )
+    fallback = {
+        "segment_0001": "Added",
+        "segment_0002": "transactions",
+        "segment_0003": "involving",
+        "segment_0004": "topics",
+        "segment_0005": "and tables.",
+    }
+    models = ScriptedModels(
+        [
+            json.dumps({field.field_id: invalid}),
+            json.dumps({field.field_id: invalid}),
+            json.dumps(fallback),
+        ]
+    )
+
+    accepted = content_with(models).translate_document(document)
+
+    expected = (
+        "Added [[LINK_OPEN_0001]]transactions[[LINK_CLOSE_0002]] "
+        "involving [[LINK_OPEN_0003]]topics[[LINK_CLOSE_0004]] and tables."
+    )
+    assert accepted.as_dict() == {field.field_id: expected}
+    assert len(models.calls) == 3
+    fallback_request = models.calls[2]
+    assert mutable_json(fallback_request.schema) == {
+        "type": "object",
+        "properties": {key: {"type": "string"} for key in fallback},
+        "required": list(fallback),
+        "additionalProperties": False,
+    }
+    assert "Full field context:" in fallback_request.prompt
+    assert "Protected placeholders are source-owned separators" in fallback_request.prompt
+    assert (
+        assemble_candidate(
+            document.source,
+            document.plan,
+            document.request,
+            accepted.as_dict(),
+        )
+        == b"Added [transactions](transactions.md) involving "
+        b"[topics](topics.md) and tables.\n"
+    )
+
+
 def test_zero_field_document_returns_empty_map_without_model_call() -> None:
     source = b"```sql\nSELECT 1;\n```\n"
     document = document_for(source)
