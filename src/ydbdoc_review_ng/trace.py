@@ -19,6 +19,8 @@ _ALLOWED_DETAILS = frozenset(
         "attempt",
         "attempts_total",
         "code",
+        "chunk_index",
+        "chunks_total",
         "document_index",
         "documents_total",
         "endpoint",

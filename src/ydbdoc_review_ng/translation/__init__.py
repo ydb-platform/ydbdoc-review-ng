@@ -17,10 +17,24 @@ from ydbdoc_review_ng.translation.contract import (
     build_translation_request,
     parse_translation_response,
 )
+from ydbdoc_review_ng.translation.document import (
+    DocumentChunk,
+    DocumentPlaceholder,
+    DocumentTranslationError,
+    DocumentTranslationRequest,
+    build_document_prompt,
+    prepare_document,
+    restore_document,
+    validate_chunk_response,
+)
 
 __all__ = [
     "AssemblyError",
     "AssemblyErrorReason",
+    "DocumentChunk",
+    "DocumentPlaceholder",
+    "DocumentTranslationError",
+    "DocumentTranslationRequest",
     "Placeholder",
     "ProtectedMismatch",
     "ResponseError",
@@ -28,8 +42,12 @@ __all__ = [
     "TranslationField",
     "TranslationRequest",
     "assemble_candidate",
+    "build_document_prompt",
     "build_translation_request",
     "parse_translation_response",
+    "prepare_document",
+    "restore_document",
+    "validate_chunk_response",
     "validate_translation_values",
     "verify_protected_fragments",
 ]
