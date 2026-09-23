@@ -3,6 +3,8 @@ import urllib.error
 
 import pytest
 
+from ydbdoc_review_ng.domain import GitSha
+from ydbdoc_review_ng.publication import PublicationContext
 from ydbdoc_review_ng.runtime_github import GitHubBackend, GitHubHTTP, RuntimeBoundaryError
 
 
@@ -19,6 +21,29 @@ class Response:
 
     def read(self) -> bytes:
         return json.dumps(self.payload).encode()
+
+
+def test_translation_pr_title_names_the_authoritative_source_pr() -> None:
+    calls: list[tuple[str, str, object]] = []
+
+    def transport(method: str, path: str, payload: object) -> object:
+        calls.append((method, path, payload))
+        return {"number": 53839}
+
+    backend = GitHubBackend(transport)
+    backend.source_pr = 51079
+    backend.source_sha = GitSha("a" * 40)
+    context = PublicationContext(
+        "ydb-platform/ydb",
+        "translation/pr-51079",
+        "main",
+        "main",
+        GitSha("b" * 40),
+    )
+
+    assert backend.create_pr(context, GitSha("c" * 40)) == 53839
+    assert calls[0][0:2] == ("POST", "/repos/ydb-platform/ydb/pulls")
+    assert calls[0][2]["title"] == "PR #51079 translation"
 
 
 @pytest.mark.parametrize(

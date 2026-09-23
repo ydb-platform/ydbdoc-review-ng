@@ -313,6 +313,8 @@ gate не выполняется. Конкурентная атомарная re
 
 - Translation branch находится в `ydb-platform/ydb`, base совпадает с base
   source PR.
+- Заголовок создаваемого translation PR имеет формат
+  `PR #<source_pr> translation`.
 - Commit/push выполняется только после обязательных локальных проверок.
 - В translation PR поддерживается один актуальный QA comment.
 - Отчёт начинается с GREEN, YELLOW или RED и для каждой проблемы содержит

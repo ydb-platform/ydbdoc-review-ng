@@ -309,7 +309,7 @@ class GitHubBackend:
             "POST",
             "/pulls",
             {
-                "title": "Documentation translation",
+                "title": f"PR #{self.source_pr} translation",
                 "head": context.branch,
                 "base": context.base,
                 "body": f"<!-- ydbdoc-source-pr:{self.source_pr} -->\n"
