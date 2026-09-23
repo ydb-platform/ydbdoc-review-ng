@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
-from _runtime_services import RuntimeServices
+from _runtime_services import RuntimeServices, translated_markdown
 
 from ydbdoc_review_ng.application import TranslateWorkflowInput, VerifyWorkflowInput, WorkflowError
 from ydbdoc_review_ng.continuation import (
@@ -166,9 +166,17 @@ class CaptureServices(RuntimeServices):
 
     def model(self, request):
         body = json.loads(request.body)
-        schema = body["jsonSchema"]["schema"]
         prompt = body["messages"][-1]["text"]
-        if "verdict" in schema["properties"]:
+        schema_wrapper = body.get("jsonSchema")
+        if schema_wrapper is None:
+            role = "translate"
+            self.translations += 1
+            text = translated_markdown(prompt)
+            if self.stop == "translation" and self.translations in {2, 3}:
+                text = '{"wrong-field": "response received"}'
+            if self.stop == "translation_assembly" and self.translations in {2, 3}:
+                text = "[[YDBDOC_PROTECTED_9999]]"
+        elif "verdict" in (schema := schema_wrapper["schema"])["properties"]:
             role = "critic"
             self.critics += 1
             props = schema["properties"]["findings"]["items"]["properties"]
@@ -199,21 +207,12 @@ class CaptureServices(RuntimeServices):
             role = "direction"
             values = dict.fromkeys(schema["properties"], "undetermined")
         else:
-            role = "translate"
-            self.translations += 1
-            values = dict.fromkeys(schema["properties"], "Translated")
+            raise AssertionError("unexpected structured model role")
         self.roles.append(role)
         if self.failure == role or self.failure == "final_critic" and self.critics == 2:
             raise TimeoutError("transport failed")
-        text = json.dumps(values)
-        if self.stop == "translation" and role == "translate" and self.translations in {2, 3}:
-            text = '{"wrong-field": "response received"}'
-        if (
-            self.stop == "translation_assembly"
-            and role == "translate"
-            and self.translations in {2, 3}
-        ):
-            text = json.dumps(dict.fromkeys(schema["properties"], "[[LINK_9999]]"))
+        if role != "translate":
+            text = json.dumps(values)
         return HttpResponse(
             200,
             json.dumps(

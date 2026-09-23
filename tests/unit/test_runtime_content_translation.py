@@ -21,6 +21,7 @@ from ydbdoc_review_ng.runtime_content import Document, InvalidTranslationRespons
 from ydbdoc_review_ng.runtime_github import RuntimeBoundaryError
 from ydbdoc_review_ng.scope import FileOperation, ScopeEntry, ScopeOrigin
 from ydbdoc_review_ng.translation import (
+    DocumentTranslationError,
     assemble_candidate,
     build_translation_request,
     prepare_document,
@@ -116,8 +117,11 @@ def test_complete_markdown_response_gets_exactly_one_technical_correction() -> N
 
     assert len(models.calls) == 2
     assert "Correct the previous invalid translation" not in models.calls[0].prompt
-    assert "Correct the previous invalid translation" in models.calls[1].prompt
-    assert invalid not in models.calls[1].prompt
+    correction = models.calls[1].prompt
+    assert "Correct the previous invalid translation" in correction
+    assert prepared.chunks[0].text in correction
+    assert f"Rejected translation:\n{invalid}" in correction
+    assert "Validator error: document_response:placeholder_mismatch" in correction
 
 
 def test_provider_failure_is_not_semantically_retried() -> None:
@@ -128,6 +132,18 @@ def test_provider_failure_is_not_semantically_retried() -> None:
         content_with(models).translate_document(document)
 
     assert len(models.calls) == 1
+
+
+def test_prompt_limit_failure_happens_before_model_call() -> None:
+    document = document_for(b"# One complete top-level block that cannot fit.\n")
+    models = ScriptedModels([])
+
+    with pytest.raises(DocumentTranslationError, match="top_level_block_exceeds_limit"):
+        content_with(
+            models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "520"}
+        ).translate_document(document)
+
+    assert models.calls == []
 
 
 def test_translation_trace_is_payload_free(capsys: pytest.CaptureFixture[str]) -> None:

@@ -790,7 +790,14 @@ class RuntimeContent:
             or self.environment.get("YDBDOC_MAX_SOURCE_CHARACTERS")
             or "200000"
         )
-        prepared = prepare_document(document.source, document.plan, max_characters=limit)
+        prepared = prepare_document(
+            document.source,
+            document.plan,
+            max_characters=limit,
+            source_locale=entry.pair.source_locale.value,
+            target_locale=entry.pair.target_locale.value,
+            operator_context=operator_context,
+        )
         responses: list[str] = []
         for chunk_index, chunk in enumerate(prepared.chunks, 1):
             with traced(
@@ -801,20 +808,28 @@ class RuntimeContent:
                 chunks_total=len(prepared.chunks),
             ):
                 accepted_response: str | None = None
+                rejected_translation: str | None = None
+                validator_error: str | None = None
                 for attempt in (1, 2):
                     prompt = build_document_prompt(
                         chunk,
                         entry.pair.source_locale.value,
                         entry.pair.target_locale.value,
                         correction=attempt == 2,
+                        rejected_translation=rejected_translation,
+                        validator_error=validator_error,
                     )
                     if operator_context is not None:
                         prompt += "\n\nOperator context:\n" + operator_context
+                    if len(prompt) > limit:
+                        raise DocumentTranslationError(
+                            "document_chunk:correction_prompt_exceeds_limit"
+                        )
                     model_request = ModelRequest(
                         ModelRole.TRANSLATE,
                         self.model,
                         prompt,
-                        cast(FrozenJson, {"type": "string"}),
+                        None,
                         8000,
                         entry.pair.target_path,
                     )
@@ -823,7 +838,7 @@ class RuntimeContent:
                         raise RuntimeBoundaryError("translation_model_failed")
                     try:
                         validate_chunk_response(chunk, prepared.placeholders, result.text)
-                    except DocumentTranslationError:
+                    except DocumentTranslationError as error:
                         if attempt == 2:
                             raise InvalidTranslationResponse(
                                 "translation_response_invalid"
@@ -838,6 +853,8 @@ class RuntimeContent:
                             attempt=attempt,
                             code="translation_response_invalid",
                         )
+                        rejected_translation = result.text
+                        validator_error = str(error)
                     else:
                         accepted_response = result.text
                         break

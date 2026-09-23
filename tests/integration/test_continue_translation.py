@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
+from _runtime_services import raw_translation_source
 from test_checkpoint_capture import CaptureServices
 
 from ydbdoc_review_ng import application
@@ -87,12 +88,13 @@ class ContinueServices(CaptureServices):
         if self.continuing and self.roles[-1] == "direction" and self.direction_values is not None:
             values = self.direction_values
         if self.continuing and self.roles[-1] == "translate":
-            fields, _ = json.JSONDecoder().raw_decode(prompt.split("Fields: ", 1)[1])
-            values = {key: text.replace("Source", "Resumed") for key, text in fields.items()}
-            if self.invalid_pending and any(
-                self.invalid_pending in value for value in fields.values()
-            ):
-                values = {"invalid-field": "invalid response"}
+            source = raw_translation_source(prompt)
+            raw = source.replace("Source", "Resumed")
+            if self.invalid_pending and self.invalid_pending in source:
+                raw = "invalid response"
+            data = json.loads(response.body)
+            data["result"]["alternatives"][0]["message"]["text"] = raw
+            return HttpResponse(200, json.dumps(data).encode(), Decimal("0.01"))
         if values is not None:
             data = json.loads(response.body)
             data["result"]["alternatives"][0]["message"]["text"] = json.dumps(values)
@@ -225,7 +227,7 @@ def test_public_continue_restores_protected_link_delete_rename_and_pinned_metada
     services.snapshots[services.translated][EN + "old.md"] = b"# Wrong current counterpart\n"
     result = services.resume()
     assert result.verdict is Verdict.GREEN
-    assert services.roles == ["translate", "translate", "critic", "critic", "critic"]
+    assert services.roles == ["translate", "critic", "critic", "critic"]
     assert services.files[EN + "b.md"] == source_b.replace(b"Source", b"Resumed")
     assert services.files[EN + "moved.md"] == b"# Whole pinned translation\n"
     assert EN + "old.md" not in services.files and EN + "deleted.md" not in services.files

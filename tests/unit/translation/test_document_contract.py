@@ -36,6 +36,10 @@ def test_complete_markdown_prompt_uses_selected_direction(
     assert "guide.md" not in prompt
     assert "[[YDBDOC_PROTECTED_0001]]" in prompt
     assert "JSON" not in prompt
+    assert (
+        "headings, link labels, image alt text, supported code comments, and translatable "
+        "frontmatter values" in prompt
+    )
 
 
 def test_global_placeholders_restore_exact_bytes_and_reject_contract_drift() -> None:
@@ -60,6 +64,34 @@ def test_global_placeholders_restore_exact_bytes_and_reject_contract_drift() -> 
             restore_document(source, plan, request, (invalid,))
 
 
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        "See  and [[YDBDOC_PROTECTED_0002]].\n",
+        (
+            "See [[YDBDOC_PROTECTED_0001]][[YDBDOC_PROTECTED_0001]] and "
+            "[[YDBDOC_PROTECTED_0002]].\n"
+        ),
+        "See [[YDBDOC_PROTECTED_0002]] and [[YDBDOC_PROTECTED_0001]].\n",
+        "See [[YDBDOC_PROTECTED_9999]] and [[YDBDOC_PROTECTED_0002]].\n",
+        (
+            "See [[YDBDOC_PROTECTED_X]] [[YDBDOC_PROTECTED_0001]] and "
+            "[[YDBDOC_PROTECTED_0002]].\n"
+        ),
+    ],
+    ids=["missing", "repeated", "reordered", "numeric-unknown", "malformed-unknown"],
+)
+def test_placeholder_namespace_drift_is_rejected(invalid: str) -> None:
+    source = b"See `code` and guide.md.\n"
+    plan, request = prepared(source)
+    assert request.chunks[0].text == (
+        "See [[YDBDOC_PROTECTED_0001]] and [[YDBDOC_PROTECTED_0002]].\n"
+    )
+
+    with pytest.raises(DocumentTranslationError, match="placeholder_mismatch"):
+        restore_document(source, plan, request, (invalid,))
+
+
 def test_limit_uses_minimum_ordered_whole_block_chunks() -> None:
     source = b"# One\n\nParagraph two.\n\n- Three\n\nFinal four.\n"
     plan = build_markdown_plan(SNAPSHOT, PATH, source)
@@ -74,6 +106,37 @@ def test_limit_uses_minimum_ordered_whole_block_chunks() -> None:
     assert request.chunks[1].block_start == 3
 
 
+def test_configured_limit_applies_to_each_complete_prompt_with_minimum_chunks() -> None:
+    source = b"\n\n".join(
+        (
+            b"Paragraph one has thirty seven letters.",
+            b"Paragraph two has thirty seven letters.",
+            b"Paragraph three has thirty five chars.",
+            b"Paragraph four has thirty six letters.",
+            b"Paragraph five has thirty six letters.",
+            b"Paragraph six has thirty seven letters.",
+        )
+    ) + b"\n"
+    plan = build_markdown_plan(SNAPSHOT, PATH, source)
+
+    request = prepare_document(
+        source,
+        plan,
+        max_characters=600,
+        source_locale="ru",
+        target_locale="en",
+    )
+    prompts = tuple(build_document_prompt(chunk, "ru", "en") for chunk in request.chunks)
+
+    assert len(request.chunks) == 3
+    assert all(len(prompt) <= 600 for prompt in prompts)
+    assert "".join(chunk.text for chunk in request.chunks).encode() == source
+    assert all(
+        left.block_end == right.block_start
+        for left, right in zip(request.chunks, request.chunks[1:], strict=False)
+    )
+
+
 def test_complete_candidate_reparse_preserves_structural_block_kinds() -> None:
     source = b"# Heading\n\n- First\n- Second\n\n| A | B |\n| - | - |\n| x | y |\n"
     plan, request = prepared(source)
@@ -85,3 +148,45 @@ def test_complete_candidate_reparse_preserves_structural_block_kinds() -> None:
     assert tuple(block.kind for block in target_plan.blocks) == tuple(
         block.kind for block in plan.blocks
     )
+
+
+@pytest.mark.parametrize(
+    ("source", "opaque", "visible"),
+    [
+        (
+            b"```text\nOPAQUE_FIELDLESS_FENCE\n```\n\nVisible prose.\n",
+            b"OPAQUE_FIELDLESS_FENCE",
+            b"Visible prose.",
+        ),
+        (
+            b"```python\nprint('OPAQUE_SUPPORTED_CODE')\n# Translatable comment\n```\n",
+            b"OPAQUE_SUPPORTED_CODE",
+            b"Translatable comment",
+        ),
+        (
+            (
+                b"---\ntitle: Visible title\ndescription: Visible description\n"
+                b"layout: OPAQUE_LAYOUT\ntags: [OPAQUE_TAG]\n---\nVisible body.\n"
+            ),
+            b"OPAQUE_LAYOUT",
+            b"Visible title",
+        ),
+        (
+            b"{% include [OPAQUE_INCLUDE](path/to/file.md) %}\n\nVisible prose.\n",
+            b"OPAQUE_INCLUDE",
+            b"Visible prose.",
+        ),
+    ],
+    ids=["fieldless-fence", "supported-fence-code", "frontmatter", "yfm-include"],
+)
+def test_source_owned_opaque_bytes_never_reach_model_and_restore_exactly(
+    source: bytes, opaque: bytes, visible: bytes
+) -> None:
+    plan, request = prepared(source)
+    model_text = "".join(chunk.text for chunk in request.chunks).encode()
+
+    assert opaque not in model_text
+    assert visible in model_text
+    assert restore_document(
+        source, plan, request, tuple(chunk.text for chunk in request.chunks)
+    ) == source

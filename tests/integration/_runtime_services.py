@@ -2,7 +2,30 @@
 
 import base64
 import json
+import re
 from decimal import Decimal
+
+
+def raw_translation_source(prompt):
+    source = prompt.split("\n\n", 1)[1]
+    for marker in ("\n\nOperator context:\n", "\n\nValidator error: "):
+        source = source.split(marker, 1)[0]
+    return source
+
+
+def translated_markdown(prompt, word="Translated", *, preserve_suffix=False):
+    source = raw_translation_source(prompt)
+
+    def heading(match):
+        text = match.group(2)
+        if preserve_suffix and text.startswith("Source"):
+            text = word + text.removeprefix("Source")
+        else:
+            text = word
+        return match.group(1) + text
+
+    translated = re.sub(r"(?m)^( {0,3}#{1,6}[ \t]+)([^\r\n]+)", heading, source)
+    return re.sub(r"(?m)^Source[^\r\n]*$", word, translated)
 
 
 class RuntimeServices:
@@ -143,13 +166,19 @@ class RuntimeServices:
         from ydbdoc_review_ng.models import HttpResponse
 
         body = json.loads(request.body)
-        schema = body["jsonSchema"]["schema"]
-        self.events.append(("MODEL", tuple(schema["properties"])))
-        values = (
-            {"verdict": "GREEN", "findings": []}
-            if "verdict" in schema["properties"]
-            else {key: "Translated" for key in schema["properties"]}
-        )
+        schema = body.get("jsonSchema")
+        if schema is None:
+            self.events.append(("MODEL", ("raw_markdown",)))
+            text = translated_markdown(body["messages"][-1]["text"])
+        else:
+            properties = schema["schema"]["properties"]
+            self.events.append(("MODEL", tuple(properties)))
+            values = (
+                {"verdict": "GREEN", "findings": []}
+                if "verdict" in properties
+                else {key: "Translated" for key in properties}
+            )
+            text = json.dumps(values)
         return HttpResponse(
             200,
             json.dumps(
@@ -158,7 +187,7 @@ class RuntimeServices:
                         "alternatives": [
                             {
                                 "status": "ALTERNATIVE_STATUS_FINAL",
-                                "message": {"role": "assistant", "text": json.dumps(values)},
+                                "message": {"role": "assistant", "text": text},
                             }
                         ],
                         "usage": {"inputTextTokens": "10", "completionTokens": "5"},
@@ -251,8 +280,8 @@ class InstalledContinueServices(RuntimeServices):
         from ydbdoc_review_ng.models import HttpResponse
 
         response = super().model(request)
-        schema = json.loads(request.body)["jsonSchema"]["schema"]
-        if self.stop_review and "verdict" in schema["properties"]:
+        schema = json.loads(request.body).get("jsonSchema")
+        if self.stop_review and schema is not None and "verdict" in schema["schema"]["properties"]:
             values = {
                 "verdict": "RED",
                 "findings": [

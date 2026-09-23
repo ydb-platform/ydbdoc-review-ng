@@ -409,7 +409,11 @@ class _T017R07Services(RuntimeServices):
     def model(self, request):
         from ydbdoc_review_ng.models import HttpResponse
 
-        schema = json.loads(request.body)["jsonSchema"]["schema"]
+        body = json.loads(request.body)
+        schema_wrapper = body.get("jsonSchema")
+        if schema_wrapper is None:
+            return super().model(request)
+        schema = schema_wrapper["schema"]
         if set(schema["properties"]) == {"page.md"}:
             self.events.append(("MODEL", ("page.md",)))
             return HttpResponse(
@@ -723,7 +727,29 @@ class _T017N04Services(RuntimeServices):
     def model(self, request):
         from ydbdoc_review_ng.models import HttpResponse
 
-        schema = json.loads(request.body)["jsonSchema"]["schema"]
+        body = json.loads(request.body)
+        schema_wrapper = body.get("jsonSchema")
+        if schema_wrapper is None:
+            self.events.append(("MODEL", ("raw_markdown",)))
+            text = _t017_n04_documents()[1].decode()
+            return HttpResponse(
+                200,
+                json.dumps(
+                    {
+                        "result": {
+                            "alternatives": [
+                                {
+                                    "status": "ALTERNATIVE_STATUS_FINAL",
+                                    "message": {"role": "assistant", "text": text},
+                                }
+                            ],
+                            "usage": {"inputTextTokens": "10", "completionTokens": "5"},
+                        }
+                    }
+                ).encode(),
+                Decimal("0.01"),
+            )
+        schema = schema_wrapper["schema"]
         properties = tuple(schema["properties"])
         self.events.append(("MODEL", properties))
         if properties == ("page.md",):
@@ -1282,9 +1308,12 @@ def test_model_repair_is_published_before_final_critic_and_only_then_pr():
             self.critics = 0
 
         def model(self, request):
-            schema = json.loads(request.body)["jsonSchema"]["schema"]
+            body = json.loads(request.body)
+            schema_wrapper = body.get("jsonSchema")
+            if schema_wrapper is None:
+                return super().model(request)
+            schema = schema_wrapper["schema"]
             if "verdict" not in schema["properties"]:
-                self.field_id = next(iter(schema["properties"]))
                 if self.critics:
                     self.events.append(("REPAIR", "fields"))
                     values = {self.field_id: "Corrected"}
@@ -1292,6 +1321,10 @@ def test_model_repair_is_published_before_final_critic_and_only_then_pr():
                     return super().model(request)
             else:
                 self.critics += 1
+                field_ids = schema["properties"]["findings"]["items"]["properties"][
+                    "field_ids"
+                ]["items"]["enum"]
+                self.field_id = field_ids[0]
                 if self.critics > 1:
                     return super().model(request)
                 self.events.append(("CRITIC", "first"))
@@ -1358,7 +1391,8 @@ def test_runtime_never_reports_green_after_branch_moves_during_critic():
     class Services(RuntimeServices):
         def model(self, request):
             response = super().model(request)
-            if "verdict" in json.loads(request.body)["jsonSchema"]["schema"]["properties"]:
+            schema_wrapper = json.loads(request.body).get("jsonSchema")
+            if schema_wrapper and "verdict" in schema_wrapper["schema"]["properties"]:
                 self.branch_head = "f" * 40
             return response
 

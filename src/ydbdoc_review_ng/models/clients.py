@@ -373,7 +373,7 @@ class NativeYandexClient(_BaseYandexClient):
     endpoint = NATIVE_ENDPOINT
 
     def _payload(self, request: ModelRequest, model_uri: str) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "modelUri": model_uri,
             "completionOptions": {
                 "stream": False,
@@ -382,8 +382,10 @@ class NativeYandexClient(_BaseYandexClient):
                 "reasoningOptions": {"mode": "DISABLED"},
             },
             "messages": [{"role": "user", "text": request.prompt}],
-            "jsonSchema": {"schema": mutable_json(request.schema)},
         }
+        if request.schema is not None:
+            payload["jsonSchema"] = {"schema": mutable_json(request.schema)}
+        return payload
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -400,22 +402,24 @@ class YandexOpenAIClient(_BaseYandexClient):
     endpoint = OPENAI_ENDPOINT
 
     def _payload(self, request: ModelRequest, model_uri: str) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "model": model_uri,
             "stream": False,
             "temperature": 0,
             "max_tokens": request.max_tokens,
             "reasoning_effort": "none",
             "messages": [{"role": "user", "content": request.prompt}],
-            "response_format": {
+        }
+        if request.schema is not None:
+            payload["response_format"] = {
                 "type": "json_schema",
                 "json_schema": {
                     "name": "model_response",
                     "strict": True,
                     "schema": mutable_json(request.schema),
                 },
-            },
-        }
+            }
+        return payload
 
     def _headers(self) -> dict[str, str]:
         return {

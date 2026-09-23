@@ -56,7 +56,7 @@ class ModelRequest:
     role: ModelRole
     model: str
     prompt: str = field(repr=False)
-    schema: FrozenJson = field(repr=False)
+    schema: FrozenJson | None = field(repr=False)
     max_tokens: int = 2000
     target_path: RepoPath | None = None
 
@@ -71,7 +71,8 @@ class ModelRequest:
             raise ValueError("max_tokens must be a positive integer")
         if self.target_path is not None and type(self.target_path) is not RepoPath:
             raise TypeError("target_path must be RepoPath or None")
-        object.__setattr__(self, "schema", freeze_json(self.schema))
+        if self.schema is not None:
+            object.__setattr__(self, "schema", freeze_json(self.schema))
 
 
 @dataclass(frozen=True, slots=True)
