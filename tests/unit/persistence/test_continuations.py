@@ -16,6 +16,7 @@ from ydbdoc_review_ng.continuation import (
 )
 from ydbdoc_review_ng.direction import Direction
 from ydbdoc_review_ng.domain import ContentHash, GitSha, Mode, RepoPath
+from ydbdoc_review_ng.errors import SafeDiagnosticError
 from ydbdoc_review_ng.persistence import YdbPersistence, ydb
 from ydbdoc_review_ng.runtime_ydb import SDKExecutor
 
@@ -218,6 +219,15 @@ def test_save_load_close_checkpoint_for_source_and_translation_pr() -> None:
     store.close_checkpoint("checkpoint-1")
     with pytest.raises(ydb.PersistenceError):
         store.load_checkpoint(42, now=NOW)
+
+
+def test_missing_checkpoint_has_a_payload_free_operator_diagnostic() -> None:
+    store = YdbPersistence(CheckpointExecutor())
+
+    with pytest.raises(SafeDiagnosticError) as raised:
+        store.load_checkpoint(50858, now=NOW)
+
+    assert raised.value.code == "continue_checkpoint_missing_or_ambiguous"
 
 
 def test_later_semantic_stop_keeps_original_creation_and_expiry() -> None:

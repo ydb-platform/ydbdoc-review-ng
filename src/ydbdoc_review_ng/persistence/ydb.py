@@ -28,6 +28,7 @@ from ydbdoc_review_ng.continuation import (
     encode_state,
 )
 from ydbdoc_review_ng.domain import GitSha, Mode, ModelRole, RepoPath
+from ydbdoc_review_ng.errors import SafeDiagnosticError
 from ydbdoc_review_ng.models import AttemptResult
 
 _MOSCOW = ZoneInfo("Europe/Moscow")
@@ -42,6 +43,13 @@ class YdbExecutor(Protocol):
 
 class PersistenceError(RuntimeError):
     """A persistence error safe to show to a workflow caller."""
+
+
+class ContinuationUnavailable(PersistenceError, SafeDiagnosticError):
+    """No unique live checkpoint can be selected for continuation."""
+
+    def __init__(self) -> None:
+        SafeDiagnosticError.__init__(self, "continue_checkpoint_missing_or_ambiguous")
 
 
 class DailyBudgetExceeded(PersistenceError):
@@ -401,7 +409,7 @@ class YdbPersistence:
             {"continuation_id": continuation_id},
         )
         if len(rows) != 1:
-            raise PersistenceError("continuation checkpoint missing or ambiguous")
+            raise ContinuationUnavailable
         return self._checkpoint(rows[0])
 
     def validate_checkpoint_job(self, checkpoint: ContinuationCheckpoint, /) -> None:
@@ -523,7 +531,7 @@ class YdbPersistence:
         ):
             raise PersistenceError("continuation lineage is unresolved")
         if len(applicable) != 1:
-            raise PersistenceError("continuation checkpoint missing or ambiguous")
+            raise ContinuationUnavailable
         checkpoint = applicable[0]
         self._require_open(checkpoint, now)
         self.validate_checkpoint_job(checkpoint)
