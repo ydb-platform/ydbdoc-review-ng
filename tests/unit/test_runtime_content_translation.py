@@ -429,6 +429,43 @@ def test_repeated_missing_link_pair_uses_source_preserving_segment_fallback() ->
     )
 
 
+def test_document_revalidation_failure_repairs_only_the_structural_field() -> None:
+    document = document_for(
+        "* `enable_strict_user_management` — включает строгие правила;\n".encode()
+    )
+    field = document.request.fields[0]
+    assert tuple(item.token for item in field.placeholders) == ("[[INLINE_CODE_0001]]",)
+    models = ScriptedModels(
+        [
+            json.dumps(
+                {
+                    field.field_id: (
+                        "[[INLINE_CODE_0001]] — enables strict rules;\n```unclosed"
+                    )
+                }
+            ),
+            json.dumps({"segment_0001": "— enables strict rules;"}),
+        ]
+    )
+
+    accepted = content_with(models).translate_document(document)
+
+    assert accepted.as_dict() == {
+        field.field_id: "[[INLINE_CODE_0001]] — enables strict rules;"
+    }
+    assert len(models.calls) == 2
+    assert "Do not add Markdown delimiters or line breaks" in models.calls[1].prompt
+    assert (
+        assemble_candidate(
+            document.source,
+            document.plan,
+            document.request,
+            accepted.as_dict(),
+        )
+        == b"* `enable_strict_user_management` \xe2\x80\x94 enables strict rules;\n"
+    )
+
+
 def test_zero_field_document_returns_empty_map_without_model_call() -> None:
     source = b"```sql\nSELECT 1;\n```\n"
     document = document_for(source)
