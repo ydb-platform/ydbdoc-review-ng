@@ -195,8 +195,31 @@ def test_complete_candidate_reparse_preserves_structural_block_kinds() -> None:
             b"OPAQUE_INCLUDE",
             b"Visible prose.",
         ),
+        (
+            (
+                b'{% note info "Title" %}\n```python\nprint("OPAQUE_NESTED_CODE")\n'
+                b"# Translatable comment\n```\n{% endnote %}\n"
+            ),
+            b"OPAQUE_NESTED_CODE",
+            b"Translatable comment",
+        ),
+        (
+            (
+                b'{% note info "Visible title" %}\n```text\nOPAQUE_NESTED_TEXT\n```\n'
+                b"{% endnote %}\n"
+            ),
+            b"OPAQUE_NESTED_TEXT",
+            b"Visible title",
+        ),
     ],
-    ids=["fieldless-fence", "supported-fence-code", "frontmatter", "yfm-include"],
+    ids=[
+        "fieldless-fence",
+        "supported-fence-code",
+        "frontmatter",
+        "yfm-include",
+        "yfm-supported-fence",
+        "yfm-unsupported-fence",
+    ],
 )
 def test_source_owned_opaque_bytes_never_reach_model_and_restore_exactly(
     source: bytes, opaque: bytes, visible: bytes

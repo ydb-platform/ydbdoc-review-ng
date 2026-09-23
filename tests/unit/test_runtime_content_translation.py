@@ -190,6 +190,26 @@ def test_multiblock_unit_reserves_exactly_two_calls_within_limit() -> None:
     assert all(len(call.prompt) <= 900 for call in models.calls)
 
 
+def test_nested_yfm_fence_code_mutation_gets_one_technical_correction() -> None:
+    source = (
+        b'{% note info "Title" %}\n```python\nprint("OPAQUE_CODE")\n'
+        b"# Translatable comment\n```\n{% endnote %}\n"
+    )
+    document = document_for(source)
+    prepared = prepare_document(document.source, document.plan, max_characters=100_000)
+    valid = prepared.chunks[0].text
+    invalid = valid.replace("OPAQUE_CODE", "MUTATED_CODE").replace(
+        "[[YDBDOC_PROTECTED_0001]]", 'print("MUTATED_CODE")'
+    )
+    models = ScriptedModels([invalid, valid])
+
+    content_with(models).translate_document(document)
+
+    assert len(models.calls) == 2
+    assert "OPAQUE_CODE" not in models.calls[0].prompt
+    assert "Validator error: document_response:placeholder_mismatch" in models.calls[1].prompt
+
+
 def test_translation_trace_is_payload_free(capsys: pytest.CaptureFixture[str]) -> None:
     document = document_for(b"# PRIVATE SOURCE HEADING\n")
     models = ScriptedModels(["# PRIVATE TRANSLATED HEADING\n"])

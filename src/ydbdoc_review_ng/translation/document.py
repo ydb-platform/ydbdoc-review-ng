@@ -89,6 +89,24 @@ def _fence_opaque_spans(source: bytes, block: Block) -> tuple[tuple[int, int], .
     return tuple(spans)
 
 
+def _yfm_fence_opaque_spans(
+    source: bytes, plan: SourcePlan, block: Block
+) -> tuple[tuple[int, int], ...]:
+    lines = _lines(source, block)
+    if len(lines) < 3:
+        return ()
+    body_start = lines[0][1]
+    body_end = lines[-1][0]
+    body = source[body_start:body_end]
+    body_plan = build_markdown_plan(plan.source_snapshot, plan.source_path, body)
+    return tuple(
+        (start + body_start, end + body_start)
+        for nested in body_plan.blocks
+        if nested.kind is BlockKind.T008_FENCE
+        for start, end in _fence_opaque_spans(body, nested)
+    )
+
+
 def _source_owned_spans(source: bytes, plan: SourcePlan) -> tuple[tuple[int, int], ...]:
     spans: list[tuple[int, int]] = []
     whole_block = {
@@ -109,6 +127,7 @@ def _source_owned_spans(source: bytes, plan: SourcePlan) -> tuple[tuple[int, int
                 if not any(field.span.start < end and start < field.span.end for field in block.fields):
                     spans.append((start, end))
         elif block.kind is BlockKind.T008_YFM:
+            spans.extend(_yfm_fence_opaque_spans(source, plan, block))
             for start, end in _lines(source, block):
                 if include.fullmatch(source[start:end]):
                     spans.append((start, end))
