@@ -11,13 +11,14 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Protocol
 
 from ydbdoc_review_ng.continuation import (
+    AcceptedDocument,
     AcceptedMap,
     ContinuationStage,
     ContinuationStateError,
     RestoredPlan,
     candidate_sha256,
     checkpoint_scope_sha256,
-    validate_restored_maps,
+    validate_restored_documents,
 )
 from ydbdoc_review_ng.direction import (
     Direction,
@@ -65,6 +66,7 @@ class ContinueAdmission:
 class ContinueReplay:
     preparation: FrozenPreparation
     plans: FrozenSourcePlans | None
+    accepted_documents: tuple[AcceptedDocument, ...]
     accepted_maps: tuple[AcceptedMap, ...]
 
 
@@ -76,8 +78,10 @@ def replay_continue(
     preparation = content.prepare_source(snapshot)
     state = checkpoint.state
     if state.stage is ContinuationStage.DIRECTION:
-        return ContinueReplay(preparation, None, ())
-    referenced = {item.target_path for item in state.accepted_maps} | set(state.pending_paths)
+        return ContinueReplay(preparation, None, (), ())
+    referenced = {item.target_path for item in state.accepted_documents} | set(
+        state.pending_paths
+    )
     potential = next(
         (scope for scope in preparation.potential.scopes if scope.direction is state.direction),
         None,
@@ -123,7 +127,7 @@ def replay_continue(
         RestoredPlan(document.entry.pair.target_path, document.source, document.plan)
         for document in plans.documents
     )
-    validate_restored_maps(state, restored)
+    validate_restored_documents(state, restored)
     required = {
         document.entry.pair.target_path
         for document in plans.documents
@@ -136,11 +140,12 @@ def replay_continue(
         or not set(state.review_paths).issubset(reviewable)
     ):
         raise ContinuationStateError()
+    accepted_maps = content.restore_accepted_documents(plans, state.accepted_documents)
     if state.stage is ContinuationStage.REVIEW:
-        candidate = content.assemble(plans, state.accepted_maps)
+        candidate = content.assemble_documents(plans, state.accepted_documents, accepted_maps)
         if candidate_sha256(candidate.content) != state.candidate_sha256:
             raise ContinuationStateError()
-    return ContinueReplay(preparation, plans, state.accepted_maps)
+    return ContinueReplay(preparation, plans, state.accepted_documents, accepted_maps)
 
 
 def _command_context(body: str) -> str | None:

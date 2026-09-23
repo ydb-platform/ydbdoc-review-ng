@@ -185,7 +185,7 @@ def test_green_review_only_updates_current_verdict_and_consumes_without_commit(c
     assert services.roles == ["critic"]
 
 
-def test_repair_merges_selected_field_into_restored_map_before_final_critic():
+def test_repair_merges_complete_document_before_final_critic():
     services = ReviewServices(names=("a", "b"))
     saved = services.start_review()
     green = services.files[EN + "a.md"]
@@ -207,8 +207,11 @@ def test_repair_merges_selected_field_into_restored_map_before_final_critic():
     ]
     assert services.files[EN + "a.md"] == green
     assert services.files[EN + "b.md"] == b"# Repaired b\n\nTranslated\n"
-    assert following.state.accepted_maps[0] == saved.state.accepted_maps[0]
-    assert set(following.state.accepted_maps[1].as_dict().values()) == {"Repaired b", "Translated"}
+    assert following.state.accepted_documents[0] == saved.state.accepted_documents[0]
+    assert (
+        following.state.accepted_documents[1].translated_markdown
+        == "# Repaired b\n\nTranslated\n"
+    )
     repair_prompt = services.prompts[1][1]
     assert services.calls[1][2] is None
     assert "Source b" in raw_repair_context(repair_prompt, "authoritative-source")
@@ -258,7 +261,7 @@ def test_saved_order_and_single_repair_across_unresolved_documents():
     ]
     following = services.checkpoint()
     assert [p.value for p in following.state.review_paths] == [EN + "b.md"]
-    assert following.state.accepted_maps[:2] == saved.state.accepted_maps[:2]
+    assert following.state.accepted_documents[:2] == saved.state.accepted_documents[:2]
     assert services.files[EN + "b.md"] == b"# Translated\n\nTranslated\n"
 
 
@@ -274,7 +277,7 @@ def test_repeated_red_preserves_unresolved_path_order_for_the_next_continue():
     assert result.verdict is Verdict.RED
     following = services.checkpoint()
     assert [p.value for p in following.state.review_paths] == [EN + "c.md", EN + "b.md"]
-    assert following.state.accepted_maps == saved.state.accepted_maps
+    assert following.state.accepted_documents == saved.state.accepted_documents
     assert following.target_sha == saved.target_sha
     assert following.state.candidate_sha256 == saved.state.candidate_sha256
     assert services.resume().verdict is Verdict.GREEN
@@ -306,7 +309,10 @@ def test_pinned_rename_review_never_derives_maps_from_target_and_replays_metadat
         tree[EN + "old.md"] = pinned
         tree[EN + "toc.yaml"] = b"items:\n  - name: Old\n    href: old.md\n"
     saved = services.start_review()
-    assert [item.target_path.value for item in saved.state.accepted_maps] == [EN + "b.md"]
+    assert [item.target_path.value for item in saved.state.accepted_documents] == [
+        EN + "a.md",
+        EN + "b.md",
+    ]
     metadata = {path: value for path, value in services.files.items() if path.endswith(".yaml")}
 
     from ydbdoc_review_ng.quality.repair import _derive_target_translations
@@ -342,12 +348,12 @@ def test_pinned_rename_review_never_derives_maps_from_target_and_replays_metadat
         path: value for path, value in services.files.items() if path.endswith(".yaml")
     } == metadata
     assert EN + "old.md" not in services.files
-    assert len(following.state.accepted_maps) == (2 if repair else 1)
+    assert len(following.state.accepted_documents) == 2
     assert services.resume().verdict is Verdict.GREEN
     assert services.commits == services.initial_commits + int(repair)
 
 
-@pytest.mark.parametrize("fault", ["head", "hash", "map", "candidate", "path"])
+@pytest.mark.parametrize("fault", ["head", "hash", "document", "candidate", "path"])
 def test_admission_rejects_stale_or_unreconstructible_candidate_before_models(fault):
     services = ReviewServices(names=("a", "b"))
     saved = services.start_review()
@@ -357,8 +363,8 @@ def test_admission_rejects_stale_or_unreconstructible_candidate_before_models(fa
         services.branch_head = "f" * 40
     elif fault == "hash":
         state["candidate_sha256"] = "0" * 64
-    elif fault == "map":
-        state["accepted_maps"][EN + "a.md"] = {"unknown": "Wrong"}
+    elif fault == "document":
+        state["accepted_documents"][EN + "a.md"] = "# Wrong\n"
     elif fault == "candidate":
         services.snapshots[services.branch_head][EN + "a.md"] = b"# Tampered\n"
     else:
@@ -409,7 +415,7 @@ def test_head_movement_blocks_later_models_publication_and_verdict(move_after):
     assert services.rows[saved.continuation_id]["status"] == "open"
 
 
-def test_invalid_selected_map_keeps_candidate_and_still_gets_final_critic():
+def test_invalid_repair_keeps_candidate_and_still_gets_final_critic():
     services = ReviewServices(names=("a", "b"))
     saved = services.start_review()
     before = dict(services.files)
@@ -419,7 +425,7 @@ def test_invalid_selected_map_keeps_candidate_and_still_gets_final_critic():
     assert result.verdict is Verdict.RED and not result.repair_applied
     assert services.roles == ["critic", "repair", "critic"]
     assert services.files == before and services.commits == services.initial_commits
-    assert services.checkpoint().state.accepted_maps == saved.state.accepted_maps
+    assert services.checkpoint().state.accepted_documents == saved.state.accepted_documents
 
 
 def test_byte_identical_selected_repair_reports_existing_sha_without_empty_commit():
@@ -601,7 +607,7 @@ def test_review_red_handoff_preserves_one_logical_checkpoint_after_boundary_faul
     )
     assert eligible.target_sha == saved.target_sha
     assert eligible.expires_at == saved.expires_at
-    assert eligible.state.accepted_maps == saved.state.accepted_maps
+    assert eligible.state.accepted_documents == saved.state.accepted_documents
     assert services.roles == ["critic"]
     assert services.resume().verdict is Verdict.GREEN
     with pytest.raises(application.WorkflowError):

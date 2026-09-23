@@ -6,8 +6,10 @@ from hashlib import sha256
 
 import pytest
 
+from ydbdoc_review_ng import continuation
 from ydbdoc_review_ng.continuation import (
     STATE_VERSION,
+    AcceptedDocument,
     AcceptedMap,
     ContinuationStage,
     ContinuationState,
@@ -17,7 +19,7 @@ from ydbdoc_review_ng.continuation import (
     decode_state,
     encode_state,
     scope_sha256,
-    validate_restored_maps,
+    validate_restored_documents,
 )
 from ydbdoc_review_ng.direction import Direction
 from ydbdoc_review_ng.domain import (
@@ -49,6 +51,39 @@ TARGET_PATH = RepoPath("en/a.md")
 PENDING_PATH = RepoPath("en/b.md")
 
 
+def test_v1_state_is_rejected_and_v2_round_trip_persists_complete_documents() -> None:
+    v1 = {
+        "state_version": 1,
+        "stage": "translation",
+        "direction": "ru_to_en",
+        "scope_sha256": "b" * 64,
+        "accepted_maps": {},
+        "pending_paths": ["en/b.md"],
+        "review_paths": [],
+        "candidate_sha256": None,
+    }
+    with pytest.raises(ContinuationStateError):
+        decode_state(json.dumps(v1))
+
+    document_type = continuation.AcceptedDocument
+    state = ContinuationState(
+        2,
+        ContinuationStage.TRANSLATION,
+        Direction.RU_TO_EN,
+        ContentHash("b" * 64),
+        (document_type(TARGET_PATH, "# Complete translated Markdown\n"),),
+        (PENDING_PATH,),
+        (),
+        None,
+    )
+
+    encoded = encode_state(state)
+    assert json.loads(encoded)["accepted_documents"] == {
+        "en/a.md": "# Complete translated Markdown\n"
+    }
+    assert decode_state(encoded) == state
+
+
 def restored_plan() -> tuple[RestoredPlan, dict[str, str]]:
     plan = build_markdown_plan(SNAPSHOT, SOURCE_PATH, SOURCE)
     request = build_translation_request(SOURCE, plan)
@@ -67,12 +102,16 @@ def pending_plan() -> RestoredPlan:
 
 def translation_state() -> ContinuationState:
     restored, translations = restored_plan()
+    request = build_translation_request(restored.source, restored.plan)
+    translated = assemble_candidate(
+        restored.source, restored.plan, request, translations
+    ).decode("utf-8")
     return ContinuationState(
         STATE_VERSION,
         ContinuationStage.TRANSLATION,
         Direction.RU_TO_EN,
         ContentHash("b" * 64),
-        (AcceptedMap(restored.target_path, tuple(translations.items())),),
+        (AcceptedDocument(restored.target_path, translated),),
         (PENDING_PATH,),
         (),
         None,
@@ -129,13 +168,13 @@ def test_state_round_trip_restores_real_plan_and_source_owned_fragments() -> Non
         "stage",
         "direction",
         "scope_sha256",
-        "accepted_maps",
+        "accepted_documents",
         "pending_paths",
         "review_paths",
         "candidate_sha256",
     }
     assert decode_state(encoded) == state
-    validate_restored_maps(state, (restored, pending_plan()))
+    validate_restored_documents(state, (restored, pending_plan()))
 
     request = build_translation_request(restored.source, restored.plan)
     candidate = assemble_candidate(restored.source, restored.plan, request, translations)
@@ -148,12 +187,12 @@ def test_state_round_trip_restores_real_plan_and_source_owned_fragments() -> Non
     [
         "{}",
         json.dumps({**json.loads(encode_state(translation_state())), "unknown": 1}),
-        encode_state(translation_state()).replace('"state_version":1', '"state_version":true'),
+        encode_state(translation_state()).replace('"state_version":2', '"state_version":true'),
         encode_state(translation_state()).replace(
             '"pending_paths":["en/b.md"]', '"pending_paths":{}'
         ),
         json.dumps(
-            {**json.loads(encode_state(translation_state())), "accepted_maps": []},
+            {**json.loads(encode_state(translation_state())), "accepted_documents": []},
             separators=(",", ":"),
             sort_keys=True,
         ),
@@ -167,22 +206,20 @@ def test_decode_rejects_missing_unknown_and_non_exact_primitive_or_container_typ
         decode_state(raw)
 
 
-def duplicate_key_payloads() -> tuple[str, str, str]:
+def duplicate_key_payloads() -> tuple[str, str]:
     encoded = encode_state(translation_state())
     payload = json.loads(encoded)
-    target_map = payload["accepted_maps"][TARGET_PATH.value]
-    field_id, field_value = next(iter(target_map.items()))
-    field_pair = json.dumps(field_id) + ":" + json.dumps(field_value)
-    encoded_target_map = json.dumps(target_map, separators=(",", ":"), sort_keys=True)
-    accepted_map = f'"accepted_maps":{{"{TARGET_PATH.value}":{encoded_target_map}}}'
-    duplicate_target_map = (
-        f'"accepted_maps":{{"{TARGET_PATH.value}":{encoded_target_map},'
-        f'"{TARGET_PATH.value}":{encoded_target_map}}}'
+    translated = json.dumps(payload["accepted_documents"][TARGET_PATH.value])
+    accepted_document = (
+        f'"accepted_documents":{{"{TARGET_PATH.value}":{translated}}}'
+    )
+    duplicate_document = (
+        f'"accepted_documents":{{"{TARGET_PATH.value}":{translated},'
+        f'"{TARGET_PATH.value}":{translated}}}'
     )
     return (
-        encoded.replace('"state_version":1', '"state_version":1,"state_version":1'),
-        encoded.replace(field_pair, f"{field_pair},{field_pair}"),
-        encoded.replace(accepted_map, duplicate_target_map),
+        encoded.replace('"state_version":2', '"state_version":2,"state_version":2'),
+        encoded.replace(accepted_document, duplicate_document),
     )
 
 
@@ -199,7 +236,7 @@ def test_decode_rejects_duplicate_json_keys_at_every_object_level(raw: str) -> N
     [
         {"direction": Direction.RU_TO_EN},
         {"scope_sha256": ContentHash("b" * 64)},
-        {"accepted_maps": (AcceptedMap(TARGET_PATH, ()),)},
+        {"accepted_documents": (AcceptedDocument(TARGET_PATH, "# target\n"),)},
         {"pending_paths": (TARGET_PATH,)},
         {"review_paths": (TARGET_PATH,)},
         {"candidate_sha256": ContentHash("c" * 64)},
@@ -318,37 +355,20 @@ def test_hash_helpers_return_exact_content_hashes() -> None:
         candidate_sha256(bytearray(b"candidate"))  # type: ignore[arg-type]
 
 
-def test_restored_maps_require_exact_field_ids_valid_placeholders_and_actual_plans() -> None:
-    restored, translations = restored_plan()
+def test_restored_documents_require_known_paths_and_utf8_text() -> None:
+    restored, _translations = restored_plan()
     state = translation_state()
-    field_ids = tuple(translations)
-
-    wrong_ids = dataclasses.replace(
-        state,
-        accepted_maps=(AcceptedMap(TARGET_PATH, ((field_ids[0], "Title"),)),),
-    )
-    with pytest.raises(ContinuationStateError):
-        validate_restored_maps(wrong_ids, (restored, pending_plan()))
-
-    bad_placeholder = dict(translations)
-    bad_placeholder[field_ids[1]] = "Read https://invented.test/."
-    invalid_map = dataclasses.replace(
-        state,
-        accepted_maps=(AcceptedMap(TARGET_PATH, tuple(bad_placeholder.items())),),
-    )
-    with pytest.raises(ContinuationStateError):
-        validate_restored_maps(invalid_map, (restored, pending_plan()))
 
     with pytest.raises(ContinuationStateError):
-        validate_restored_maps(state, ())
+        validate_restored_documents(state, ())
 
     unknown_pending = dataclasses.replace(
         state,
-        accepted_maps=(),
+        accepted_documents=(),
         pending_paths=(RepoPath("en/missing.md"),),
     )
     with pytest.raises(ContinuationStateError):
-        validate_restored_maps(unknown_pending, (restored,))
+        validate_restored_documents(unknown_pending, (restored,))
 
 
 def test_value_objects_are_frozen_and_require_exact_container_types() -> None:
@@ -358,5 +378,7 @@ def test_value_objects_are_frozen_and_require_exact_container_types() -> None:
         accepted.target_path = RepoPath("en/b.md")  # type: ignore[misc]
     with pytest.raises(ContinuationStateError):
         AcceptedMap(TARGET_PATH, list(translations.items()))  # type: ignore[arg-type]
+    with pytest.raises(ContinuationStateError):
+        AcceptedDocument(TARGET_PATH, b"not text")  # type: ignore[arg-type]
     with pytest.raises(ContinuationStateError):
         RestoredPlan(TARGET_PATH, bytearray(SOURCE), restored.plan)  # type: ignore[arg-type]

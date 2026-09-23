@@ -153,7 +153,7 @@ class ContinuationCheckpoint:
         if (self.state.stage is ContinuationStage.DIRECTION) != (not self.scope_target_paths):
             raise PersistenceError("continuation scope selection incompatible with stage")
         referenced = (
-            {item.target_path for item in self.state.accepted_maps}
+            {item.target_path for item in self.state.accepted_documents}
             | set(self.state.pending_paths)
             | set(self.state.review_paths)
         )

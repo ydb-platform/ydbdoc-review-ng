@@ -13,11 +13,10 @@ from ydbdoc_review_ng.direction import Direction
 from ydbdoc_review_ng.domain import ContentHash, RepoPath
 from ydbdoc_review_ng.plan import SourcePlan, validate_source_plan
 from ydbdoc_review_ng.scope import ScopeManifest
-from ydbdoc_review_ng.translation.assembly import AssemblyError, assemble_candidate
-from ydbdoc_review_ng.translation.contract import build_translation_request
 
 __all__ = [
     "STATE_VERSION",
+    "AcceptedDocument",
     "AcceptedMap",
     "ContinuationStage",
     "ContinuationState",
@@ -35,17 +34,17 @@ __all__ = [
     "encode_state",
     "normalize_source_inventory",
     "scope_sha256",
-    "validate_restored_maps",
+    "validate_restored_documents",
 ]
 
-STATE_VERSION = 1
+STATE_VERSION = 2
 _STATE_KEYS = frozenset(
     {
         "state_version",
         "stage",
         "direction",
         "scope_sha256",
-        "accepted_maps",
+        "accepted_documents",
         "pending_paths",
         "review_paths",
         "candidate_sha256",
@@ -245,6 +244,16 @@ class AcceptedMap:
         return dict(self.fields)
 
 
+@dataclass(frozen=True, slots=True)
+class AcceptedDocument:
+    target_path: RepoPath
+    translated_markdown: str = field(repr=False)
+
+    def __post_init__(self) -> None:
+        _exact(self.target_path, RepoPath)
+        _exact(self.translated_markdown, str)
+
+
 def _exact_paths(value: object) -> tuple[RepoPath, ...]:
     _exact(value, tuple)
     paths = cast(tuple[object, ...], value)
@@ -262,7 +271,7 @@ class ContinuationState:
     stage: ContinuationStage
     direction: Direction | None
     scope_sha256: ContentHash | None
-    accepted_maps: tuple[AcceptedMap, ...]
+    accepted_documents: tuple[AcceptedDocument, ...]
     pending_paths: tuple[RepoPath, ...]
     review_paths: tuple[RepoPath, ...]
     candidate_sha256: ContentHash | None
@@ -276,10 +285,10 @@ class ContinuationState:
             _exact(self.direction, Direction)
         if self.scope_sha256 is not None:
             _exact(self.scope_sha256, ContentHash)
-        _exact(self.accepted_maps, tuple)
-        if any(type(item) is not AcceptedMap for item in self.accepted_maps):
+        _exact(self.accepted_documents, tuple)
+        if any(type(item) is not AcceptedDocument for item in self.accepted_documents):
             raise _fail()
-        accepted_paths = tuple(item.target_path for item in self.accepted_maps)
+        accepted_paths = tuple(item.target_path for item in self.accepted_documents)
         if accepted_paths != tuple(sorted(accepted_paths, key=lambda item: item.value)):
             raise _fail()
         if len(accepted_paths) != len(set(accepted_paths)):
@@ -296,7 +305,7 @@ class ContinuationState:
                 (
                     self.direction is not None,
                     self.scope_sha256 is not None,
-                    bool(self.accepted_maps),
+                    bool(self.accepted_documents),
                     bool(pending),
                     bool(review),
                     self.candidate_sha256 is not None,
@@ -388,19 +397,16 @@ def _path_list(value: object) -> tuple[RepoPath, ...]:
     return tuple(_path(item) for item in cast(list[object], value))
 
 
-def _accepted_maps(value: object) -> tuple[AcceptedMap, ...]:
-    accepted: list[AcceptedMap] = []
-    for target_path, raw_fields in _pairs(value):
-        fields: list[tuple[str, str]] = []
-        for field_id, raw_text in _pairs(raw_fields):
-            _exact(raw_text, str)
-            fields.append((field_id, cast(str, raw_text)))
-        accepted.append(AcceptedMap(_path(target_path), tuple(sorted(fields))))
+def _accepted_documents(value: object) -> tuple[AcceptedDocument, ...]:
+    accepted: list[AcceptedDocument] = []
+    for target_path, raw_markdown in _pairs(value):
+        _exact(raw_markdown, str)
+        accepted.append(AcceptedDocument(_path(target_path), cast(str, raw_markdown)))
     return tuple(sorted(accepted, key=lambda item: item.target_path.value))
 
 
 def decode_state(raw: str | bytes, /) -> ContinuationState:
-    """Decode state v1 while rejecting duplicate keys and all schema drift."""
+    """Decode state v2 while rejecting duplicate keys and all schema drift."""
     if type(raw) not in {str, bytes}:
         raise _fail()
     try:
@@ -420,7 +426,7 @@ def decode_state(raw: str | bytes, /) -> ContinuationState:
             cast(ContinuationStage, _enum(ContinuationStage, values["stage"])),
             direction,
             _optional_hash(values["scope_sha256"]),
-            _accepted_maps(values["accepted_maps"]),
+            _accepted_documents(values["accepted_documents"]),
             _path_list(values["pending_paths"]),
             _path_list(values["review_paths"]),
             _optional_hash(values["candidate_sha256"]),
@@ -437,7 +443,10 @@ def encode_state(state: ContinuationState, /) -> str:
         "stage": state.stage.value,
         "direction": None if state.direction is None else state.direction.value,
         "scope_sha256": None if state.scope_sha256 is None else state.scope_sha256.value,
-        "accepted_maps": {item.target_path.value: item.as_dict() for item in state.accepted_maps},
+        "accepted_documents": {
+            item.target_path.value: item.translated_markdown
+            for item in state.accepted_documents
+        },
         "pending_paths": [item.value for item in state.pending_paths],
         "review_paths": [item.value for item in state.review_paths],
         "candidate_sha256": (
@@ -494,10 +503,10 @@ def checkpoint_scope_sha256(
     return ContentHash(sha256(canonical.encode("utf-8")).hexdigest())
 
 
-def validate_restored_maps(
+def validate_restored_documents(
     state: ContinuationState, restored_plans: tuple[RestoredPlan, ...], /
 ) -> None:
-    """Bind every saved path and field map back to its authoritative source plan."""
+    """Bind every saved full-document path back to an authoritative source plan."""
     _exact(state, ContinuationState)
     _exact(restored_plans, tuple)
     if any(type(item) is not RestoredPlan for item in restored_plans):
@@ -506,21 +515,15 @@ def validate_restored_maps(
     if len(plans) != len(restored_plans):
         raise _fail()
     referenced = (
-        {item.target_path for item in state.accepted_maps}
+        {item.target_path for item in state.accepted_documents}
         | set(state.pending_paths)
         | set(state.review_paths)
     )
     if not referenced.issubset(plans):
         raise _fail()
     try:
-        for accepted in state.accepted_maps:
-            restored = plans[accepted.target_path]
-            request = build_translation_request(restored.source, restored.plan)
-            values = accepted.as_dict()
-            if set(values) != set(request.requested_ids) or len(values) != len(
-                request.requested_ids
-            ):
-                raise _fail()
-            assemble_candidate(restored.source, restored.plan, request, values)
-    except (AssemblyError, KeyError, TypeError, ValueError):
+        for accepted in state.accepted_documents:
+            plans[accepted.target_path]
+            accepted.translated_markdown.encode("utf-8")
+    except (KeyError, TypeError, UnicodeError, ValueError):
         raise _fail() from None

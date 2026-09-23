@@ -369,7 +369,7 @@ def test_all_complete_direction_finishes_noop_without_pr_or_other_models():
     assert services.rows[saved.continuation_id]["status"] == "closed"
 
 
-def test_repeated_pending_failure_preserves_maps_and_pending_order():
+def test_repeated_pending_failure_preserves_documents_and_pending_order():
     services = ContinueServices(stop="translation")
     saved = services.stop_and_continue()
     services.invalid_pending = "Source c"
@@ -377,8 +377,8 @@ def test_repeated_pending_failure_preserves_maps_and_pending_order():
         services.resume()
     following = services.checkpoint()
     assert services.roles == ["translate", "translate", "translate"]
-    assert following.state.accepted_maps[0] == saved.state.accepted_maps[0]
-    assert set(following.state.accepted_maps[1].as_dict().values()) == {"Resumed b"}
+    assert following.state.accepted_documents[0] == saved.state.accepted_documents[0]
+    assert following.state.accepted_documents[1].translated_markdown == "# Resumed b\n"
     assert [path.value for path in following.state.pending_paths] == [EN + "c.md"]
     assert following.expires_at == saved.expires_at
     assert following.job_id != saved.job_id
@@ -681,7 +681,7 @@ def test_replacement_preserves_exactly_one_logical_checkpoint_after_boundary_fai
     )
     assert eligible.created_at == saved.created_at
     assert eligible.expires_at == saved.expires_at
-    assert eligible.state.accepted_maps == saved.state.accepted_maps
+    assert eligible.state.accepted_documents == saved.state.accepted_documents
     assert services.roles == ["translate", "translate"] and services.commits == 0
     assert services.rows[saved.continuation_id]["consumed_by_job_id"] == consuming_job
     if fault == "activate_before":

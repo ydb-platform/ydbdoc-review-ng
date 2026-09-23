@@ -284,10 +284,10 @@ def test_two_invalid_current_field_responses_preserve_first_map_and_pending_orde
         services.translate()
     checkpoint = services.checkpoint()
     assert checkpoint.state.stage is ContinuationStage.TRANSLATION
-    assert [m.target_path.value for m in checkpoint.state.accepted_maps] == [
+    assert [item.target_path.value for item in checkpoint.state.accepted_documents] == [
         "ydb/docs/en/core/a.md"
     ]
-    assert set(checkpoint.state.accepted_maps[0].as_dict().values()) == {"Translated"}
+    assert checkpoint.state.accepted_documents[0].translated_markdown == "# Translated\n"
     assert checkpoint.state.pending_paths == tuple(
         RepoPath(f"ydb/docs/en/core/{n}.md") for n in ("b", "c")
     )
@@ -321,7 +321,7 @@ def test_review_red_saves_final_repair_map_exact_published_candidate_and_unresol
     assert checkpoint.target_sha == result.final_commit_sha == GitSha(services.branch_head)
     assert checkpoint.trigger_pr == 43
     assert checkpoint.state.review_paths == (RepoPath("ydb/docs/en/core/b.md"),)
-    assert set(checkpoint.state.accepted_maps[0].as_dict().values()) == {"Corrected"}
+    assert checkpoint.state.accepted_documents[0].translated_markdown == "# Corrected\n"
     candidate = pack(
         {p: services.files[p] for p in [f"ydb/docs/en/core/{n}.md" for n in services.names]}
     )
@@ -336,7 +336,7 @@ def test_green_does_not_open_checkpoint():
     assert services.rows == {}
 
 
-def test_red_pure_rename_replays_whole_counterpart_without_a_model_map():
+def test_red_pure_rename_replays_whole_counterpart_as_a_complete_document():
     services = CaptureServices(names=("a",), stop="rename_red")
     services.changes = [
         {
@@ -350,12 +350,12 @@ def test_red_pure_rename_replays_whole_counterpart_without_a_model_map():
         files["ydb/docs/en/core/old.md"] = files.pop("ydb/docs/en/core/a.md")
     assert services.translate().verdict is Verdict.RED
     checkpoint = services.checkpoint()
-    assert checkpoint.state.accepted_maps == ()
+    assert checkpoint.state.accepted_documents[0].translated_markdown == "# Old a\n"
     assert checkpoint.state.review_paths == (RepoPath("ydb/docs/en/core/a.md"),)
     source = RuntimeSource(ENV, GitHubBackend(services.github))
     content = RuntimeContent(source, None, ENV)
     replay = replay_continue(content, checkpoint)
-    assert replay.accepted_maps == ()
+    assert replay.accepted_documents == checkpoint.state.accepted_documents
     assert services.roles == ["critic"]
     with pytest.raises(PersistenceError, match="scope selection"):
         replay_continue(
@@ -393,7 +393,9 @@ def test_verify_red_rename_keeps_replayable_metadata_candidate():
         b"POISONED TARGET METADATA"
     )
     replay = replay_continue(content, checkpoint)
-    rebuilt = content.assemble(replay.plans, replay.accepted_maps)
+    rebuilt = content.assemble_documents(
+        replay.plans, replay.accepted_documents, replay.accepted_maps
+    )
     assert candidate_sha256(rebuilt.content) == checkpoint.state.candidate_sha256
     assert b"POISONED" not in rebuilt.content
 
@@ -412,11 +414,15 @@ def test_successfully_repaired_pure_rename_replays_the_new_map():
     result = services.translate()
     assert result.verdict is Verdict.RED and result.repair_applied
     checkpoint = services.checkpoint()
-    assert set(checkpoint.state.accepted_maps[0].as_dict().values()) == {"Corrected"}
+    assert checkpoint.state.accepted_documents[0].translated_markdown == "# Corrected\n"
     content = RuntimeContent(RuntimeSource(ENV, GitHubBackend(services.github)), None, ENV)
     replay = replay_continue(content, checkpoint)
     assert (
-        candidate_sha256(content.assemble(replay.plans, replay.accepted_maps).content)
+        candidate_sha256(
+            content.assemble_documents(
+                replay.plans, replay.accepted_documents, replay.accepted_maps
+            ).content
+        )
         == checkpoint.state.candidate_sha256
     )
 

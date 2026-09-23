@@ -14,6 +14,8 @@ from _runtime_services import RuntimeServices
 
 from ydbdoc_review_ng.application import TranslateWorkflowInput
 from ydbdoc_review_ng.continuation import (
+    STATE_VERSION,
+    AcceptedDocument,
     AcceptedMap,
     ContinuationStage,
     ContinuationState,
@@ -185,7 +187,7 @@ def frozen(services):
     return source, content, store, plans
 
 
-def accepted(document):
+def accepted_map(document):
     return AcceptedMap(
         document.entry.pair.target_path,
         tuple(
@@ -197,6 +199,16 @@ def accepted(document):
     )
 
 
+def accepted(document):
+    values = accepted_map(document).as_dict()
+    from ydbdoc_review_ng.translation import assemble_candidate
+
+    translated = assemble_candidate(
+        document.source, document.plan, document.request, values
+    ).decode("utf-8")
+    return AcceptedDocument(document.entry.pair.target_path, translated)
+
+
 def checkpoint(source, plans):
     from ydbdoc_review_ng.continuation import checkpoint_scope_sha256
 
@@ -204,7 +216,7 @@ def checkpoint(source, plans):
     page = next(
         document
         for document in plans.documents
-        if document.entry.pair.target_path.value == EN + "page.md"
+        if document.entry.pair.target_path.value.endswith("/page.md")
     )
     return ContinuationCheckpoint(
         continuation_id="replay",
@@ -218,7 +230,7 @@ def checkpoint(source, plans):
         source_inventory=source.inventory,
         scope_target_paths=tuple(entry.pair.target_path for entry in plans.manifest.entries),
         state=ContinuationState(
-            1,
+            STATE_VERSION,
             ContinuationStage.TRANSLATION,
             plans.manifest.direction,
             checkpoint_scope_sha256(plans.manifest, source.inventory),
@@ -274,7 +286,7 @@ def test_replay_reads_saved_source_and_base_after_heads_and_pr_inventory_move(me
     _, content, store = runtime(services)
     restored = replay(content, store.load_checkpoint(42, now=NOW))
     assert restored.plans.manifest == plans.manifest
-    assert restored.accepted_maps == saved.state.accepted_maps
+    assert restored.accepted_documents == saved.state.accepted_documents
     assert {document.entry.pair.target_path.value for document in restored.plans.documents} == {
         EN + "page.md",
         EN + "pending.md",
@@ -293,6 +305,39 @@ def test_replay_reads_saved_source_and_base_after_heads_and_pr_inventory_move(me
     assert not any(method in {"MODEL", "POST", "PATCH"} for method, _ in services.events)
 
 
+def test_en_to_ru_replay_restores_complete_document_and_only_pending_path():
+    services = ReplayServices()
+    services.inventory = [
+        {"status": "modified", "filename": EN + name}
+        for name in ("page.md", "pending.md")
+    ]
+    services.trees[services.source] = {
+        EN + "page.md": SOURCE,
+        EN + "pending.md": b"# Pending\n",
+    }
+    services.trees[services.base] = {
+        RU + "page.md": b"# Base differs\n",
+        RU + "pending.md": b"# Base\n",
+    }
+    source, _, store, plans = frozen(services)
+    saved = save_semantic(store, checkpoint(source, plans))
+
+    _, content, store = runtime(services)
+    restored = replay(content, store.load_checkpoint(42, now=NOW))
+
+    assert restored.plans.manifest.direction.value == "en_to_ru"
+    assert tuple(item.target_path.value for item in restored.accepted_documents) == (
+        RU + "page.md",
+    )
+    assert tuple(
+        entry.pair.target_path.value for entry in restored.plans.manifest.entries
+    ) == (
+        RU + "page.md",
+        RU + "pending.md",
+    )
+    assert saved.state.pending_paths == (RepoPath(RU + "pending.md"),)
+
+
 def test_replay_assembly_uses_source_protected_fragments_and_explicit_maps():
     services = ReplayServices()
     source, _, _, plans = frozen(services)
@@ -302,7 +347,7 @@ def test_replay_assembly_uses_source_protected_fragments_and_explicit_maps():
     services.reads.clear()
     restored = replay(content, saved)
     maps = restored.accepted_maps + tuple(
-        accepted(document)
+        accepted_map(document)
         for document in restored.plans.documents
         if document.entry.pair.target_path in saved.state.pending_paths
     )
@@ -312,7 +357,7 @@ def test_replay_assembly_uses_source_protected_fragments_and_explicit_maps():
 
 
 @pytest.mark.parametrize(
-    "corruption", ["digest", "inventory", "field", "missing_path", "status", "toc_seed"]
+    "corruption", ["digest", "inventory", "document", "missing_path", "status", "toc_seed"]
 )
 def test_replay_rejects_tampered_state_before_model_or_mutation(corruption):
     services = ReplayServices()
@@ -351,12 +396,18 @@ def test_replay_rejects_tampered_state_before_model_or_mutation(corruption):
                 ),
             ),
         )
-    elif corruption == "field":
+    elif corruption == "document":
         saved = replace(
             saved,
             state=replace(
                 saved.state,
-                accepted_maps=(AcceptedMap(RepoPath(EN + "page.md"), (("foreign_field", "bad"),)),),
+                accepted_documents=(
+                    AcceptedDocument(
+                        RepoPath(EN + "page.md"),
+                        "# Translated\n\nSee https://invented.test/wrong.\n\n"
+                        "```sql\nDROP TABLE protected;\n```\n",
+                    ),
+                ),
             ),
         )
     else:
@@ -453,7 +504,7 @@ def test_replay_preserves_delete_rename_dependency_toc_redirect_and_absent_noop(
     assert operations[EN + "edited.md"] is FileOperation.RENAME_TARGET_AND_TRANSLATE
     assert operations[EN + "dep.md"] is FileOperation.TRANSLATE
     maps = restored.accepted_maps + tuple(
-        accepted(document)
+        accepted_map(document)
         for document in restored.plans.documents
         if document.entry.pair.target_path in saved.state.pending_paths
     )
@@ -485,7 +536,7 @@ def test_direction_stage_replay_returns_only_pinned_preparation_without_directio
         checkpoint(source, plans),
         scope_target_paths=(),
         state=ContinuationState(
-            1,
+            STATE_VERSION,
             ContinuationStage.DIRECTION,
             None,
             None,
@@ -571,7 +622,7 @@ def test_review_replay_checks_exact_reassembled_candidate_digest(tampered):
         state=replace(
             saved.state,
             stage=ContinuationStage.REVIEW,
-            accepted_maps=tuple(accepted(document) for document in plans.documents),
+            accepted_documents=tuple(accepted(document) for document in plans.documents),
             pending_paths=(),
             review_paths=(RepoPath(EN + "page.md"),),
             candidate_sha256=ContentHash("0" * 64) if tampered else digest,
@@ -587,7 +638,13 @@ def test_review_replay_checks_exact_reassembled_candidate_digest(tampered):
     else:
         restored = replay(content, saved)
         assert (
-            candidate_sha256(content.assemble(restored.plans, restored.accepted_maps).content)
+            candidate_sha256(
+                content.assemble_documents(
+                    restored.plans,
+                    restored.accepted_documents,
+                    restored.accepted_maps,
+                ).content
+            )
             == digest
         )
     assert not any(method in {"MODEL", "POST", "PATCH"} for method, _ in services.events)
@@ -625,7 +682,9 @@ def test_renamed_complete_pair_restores_exact_excluded_or_selected_noop(verdict,
         assert plans.manifest.entries[0].operation is FileOperation.NOOP_TARGET_ALREADY_RENAMED
     assert tuple(entry.pair.target_path.value for entry in plans.manifest.entries) == expected_paths
     saved = checkpoint(source, plans)
-    assert tuple(item.target_path.value for item in saved.state.accepted_maps) == (EN + "page.md",)
+    assert tuple(item.target_path.value for item in saved.state.accepted_documents) == (
+        EN + "page.md",
+    )
     assert tuple(path.value for path in saved.state.pending_paths) == (EN + "pending.md",)
     assert tuple(path.value for path in saved.scope_target_paths) == expected_paths
     saved = save_semantic(store, saved)

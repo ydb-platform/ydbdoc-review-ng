@@ -14,9 +14,12 @@ from typing import TYPE_CHECKING, cast
 from ydbdoc_review_ng.application import ImmutableRunSnapshot, WorkflowCandidate
 from ydbdoc_review_ng.application.workflows import CheckpointCapture, SemanticCheckpointStop
 from ydbdoc_review_ng.continuation import (
+    STATE_VERSION,
+    AcceptedDocument,
     AcceptedMap,
     ContinuationStage,
     ContinuationState,
+    ContinuationStateError,
     SourceChangeInventory,
     candidate_sha256,
     checkpoint_scope_sha256,
@@ -423,6 +426,7 @@ class RuntimeContent:
         self.roots = LocaleRoots(RepoPath("ydb/docs/ru/core"), RepoPath("ydb/docs/en/core"))
         self.documents: tuple[Document, ...] = ()
         self.entries: tuple[ScopeEntry, ...] = ()
+        self.accepted_documents: tuple[AcceptedDocument, ...] = ()
         self.accepted_maps: tuple[AcceptedMap, ...] = ()
         self.plans: FrozenSourcePlans | None = None
         self.review_paths: tuple[RepoPath, ...] | None = None
@@ -515,7 +519,9 @@ class RuntimeContent:
                 self.source.source_pr,
                 DIRECTION_UNDETERMINED_WARNING + "\n" + DIRECTION_UNDETERMINED_ACTION,
             )
-            state = ContinuationState(1, ContinuationStage.DIRECTION, None, None, (), (), (), None)
+            state = ContinuationState(
+                STATE_VERSION, ContinuationStage.DIRECTION, None, None, (), (), (), None
+            )
             raise SemanticCheckpointStop(self._capture(preparation, state))
         selection = freeze_scope_manifest(preparation.potential, direction)
         self.entries = () if selection.manifest is None else selection.manifest.entries
@@ -685,7 +691,7 @@ class RuntimeContent:
             doc for doc in plans.documents if doc.entry.operation is not FileOperation.RENAME_TARGET
         )
         with traced("prepare", "translate_documents", documents_total=len(documents)):
-            return self._translate_documents(plans, documents, ())
+            return self._translate_documents(plans, documents, (), ())
 
     def replay_continuation(self, checkpoint: ContinuationCheckpoint, /) -> ContinueReplay:
         from ydbdoc_review_ng.runtime_continue import replay_continue
@@ -704,7 +710,9 @@ class RuntimeContent:
         if checkpoint.state.stage is ContinuationStage.REVIEW:
             if plans is None:
                 raise RuntimeBoundaryError("continue_review_plans_missing")
-            candidate = self.assemble(plans, replay.accepted_maps)
+            candidate = self.assemble_documents(
+                plans, replay.accepted_documents, replay.accepted_maps
+            )
             if candidate_sha256(candidate.content) != checkpoint.state.candidate_sha256:
                 raise RuntimeBoundaryError("continue_review_candidate_mismatch")
             # Source reconstruction and its hash are checked before reading the
@@ -719,6 +727,7 @@ class RuntimeContent:
                 if self.source.github.read_bytes(published, RepoPath(path)) != expected:
                     raise RuntimeBoundaryError("continue_review_candidate_mismatch")
             self.accepted_maps = replay.accepted_maps
+            self.accepted_documents = replay.accepted_documents
             self.review_paths = checkpoint.state.review_paths
             self.review_operator_context = operator_context
             return candidate
@@ -734,16 +743,25 @@ class RuntimeContent:
                 raise RuntimeBoundaryError("continue_stage_unsupported")
             by_path = {doc.entry.pair.target_path: doc for doc in plans.documents}
             documents = tuple(by_path[path] for path in checkpoint.state.pending_paths)
-        return self._translate_documents(plans, documents, replay.accepted_maps, operator_context)
+        return self._translate_documents(
+            plans,
+            documents,
+            replay.accepted_documents,
+            replay.accepted_maps,
+            operator_context,
+        )
 
     def _translate_documents(
         self,
         plans: FrozenSourcePlans,
         documents: tuple[Document, ...],
+        accepted_documents: tuple[AcceptedDocument, ...],
         accepted_maps: tuple[AcceptedMap, ...],
         operator_context: str | None = None,
     ) -> WorkflowCandidate:
         accepted = list(accepted_maps)
+        accepted_full = list(accepted_documents)
+        self.accepted_documents = accepted_documents
         self.accepted_maps = accepted_maps
         for index, document in enumerate(documents):
             try:
@@ -761,11 +779,11 @@ class RuntimeContent:
             except InvalidTranslationResponse:
                 assert plans.manifest is not None
                 state = ContinuationState(
-                    1,
+                    STATE_VERSION,
                     ContinuationStage.TRANSLATION,
                     plans.manifest.direction,
                     checkpoint_scope_sha256(plans.manifest, plans.preparation.inventory),
-                    self.accepted_maps,
+                    self.accepted_documents,
                     tuple(doc.entry.pair.target_path for doc in documents[index:]),
                     (),
                     None,
@@ -773,10 +791,18 @@ class RuntimeContent:
                 raise SemanticCheckpointStop(
                     self._capture(plans.preparation, state, plans)
                 ) from None
+            accepted_map = accepted[-1]
+            accepted_full.append(self._document_from_map(document, accepted_map))
             self.accepted_maps = tuple(sorted(accepted, key=lambda item: item.target_path.value))
-        return self.assemble(plans, self.accepted_maps)
+            self.accepted_documents = tuple(
+                sorted(accepted_full, key=lambda item: item.target_path.value)
+            )
+        return self.assemble_documents(
+            plans, self.accepted_documents, self.accepted_maps
+        )
 
     def load_verification_candidate(self, snapshot: ImmutableRunSnapshot, /) -> WorkflowCandidate:
+        self.accepted_documents = ()
         self.accepted_maps = ()
         plans = self.select_source(self.prepare_source(snapshot, translate=False))
         return WorkflowCandidate(pack(dict(plans.fixed_files)), plans.documents)
@@ -872,6 +898,66 @@ class RuntimeContent:
         except (DocumentTranslationError, ValueError, TypeError, UnicodeError):
             raise InvalidTranslationResponse("translation_response_invalid") from None
         return AcceptedMap(entry.pair.target_path, tuple(sorted(values.items())))
+
+    @staticmethod
+    def _document_from_map(document: Document, accepted: AcceptedMap) -> AcceptedDocument:
+        if accepted.target_path != document.entry.pair.target_path:
+            raise RuntimeBoundaryError("accepted_document_path_mismatch")
+        candidate = assemble_candidate(
+            document.source, document.plan, document.request, accepted.as_dict()
+        )
+        try:
+            text = candidate.decode("utf-8")
+        except UnicodeDecodeError:
+            raise RuntimeBoundaryError("accepted_document_utf8_invalid") from None
+        return AcceptedDocument(accepted.target_path, text)
+
+    def restore_accepted_documents(
+        self,
+        plans: FrozenSourcePlans,
+        accepted_documents: tuple[AcceptedDocument, ...],
+        /,
+    ) -> tuple[AcceptedMap, ...]:
+        by_path = {document.entry.pair.target_path: document for document in plans.documents}
+        restored: list[AcceptedMap] = []
+        try:
+            for accepted in accepted_documents:
+                document = by_path[accepted.target_path]
+                target = accepted.translated_markdown.encode("utf-8")
+                target_plan = build_markdown_plan(
+                    document.plan.source_snapshot, accepted.target_path, target
+                )
+                verify_protected_fragments(
+                    document.source, document.plan, target, target_plan
+                )
+                values = _derive_target_translations(
+                    document.source,
+                    document.plan,
+                    document.request,
+                    target,
+                    accepted.target_path,
+                )
+                restored.append(
+                    AcceptedMap(accepted.target_path, tuple(sorted(values.items())))
+                )
+        except (KeyError, TypeError, ValueError, UnicodeError):
+            raise ContinuationStateError() from None
+        return tuple(sorted(restored, key=lambda item: item.target_path.value))
+
+    def assemble_documents(
+        self,
+        plans: FrozenSourcePlans,
+        accepted_documents: tuple[AcceptedDocument, ...],
+        accepted_maps: tuple[AcceptedMap, ...],
+        /,
+    ) -> WorkflowCandidate:
+        candidate = self.assemble(plans, accepted_maps)
+        files = unpack(candidate.content)
+        for accepted in accepted_documents:
+            if accepted.target_path.value not in files:
+                raise ContinuationStateError()
+            files[accepted.target_path.value] = accepted.translated_markdown.encode("utf-8")
+        return WorkflowCandidate(pack(files), candidate.review_context)
 
     def _translate_segments(
         self,
@@ -1126,12 +1212,21 @@ class RuntimeContent:
         )
         if not set(review_paths).issubset(doc.entry.pair.target_path for doc in plans.documents):
             raise RuntimeBoundaryError("review_checkpoint_path_mismatch")
+        files = unpack(review.final_candidate)
+        accepted_documents = tuple(
+            AcceptedDocument(
+                document.entry.pair.target_path,
+                cast(bytes, files[document.entry.pair.target_path.value]).decode("utf-8"),
+            )
+            for document in plans.documents
+            if files.get(document.entry.pair.target_path.value) is not None
+        )
         state = ContinuationState(
-            1,
+            STATE_VERSION,
             ContinuationStage.REVIEW,
             plans.manifest.direction,
             checkpoint_scope_sha256(plans.manifest, plans.preparation.inventory),
-            review.accepted_maps,
+            tuple(sorted(accepted_documents, key=lambda item: item.target_path.value)),
             (),
             review_paths,
             candidate_sha256(review.final_candidate),

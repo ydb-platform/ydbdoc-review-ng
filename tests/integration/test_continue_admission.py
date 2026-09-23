@@ -52,8 +52,8 @@ class AdmissionServices:
             "stage": "direction",
             "status": "open",
             "created_at": NOW - timedelta(days=1),
-            "state": b'{"state_version":1,"stage":"direction","direction":null,'
-            b'"scope_sha256":null,"accepted_maps":{},"pending_paths":[], '
+            "state": b'{"state_version":2,"stage":"direction","direction":null,'
+            b'"scope_sha256":null,"accepted_documents":{},"pending_paths":[], '
             b'"review_paths":[],"candidate_sha256":null}',
         }
         self.job = {
@@ -151,6 +151,19 @@ def test_prepublication_checkpoint_needs_no_translation_pr(services):
     services.head = None
     result = admit(services)
     assert result.checkpoint.target_sha is None
+    assert services.effects == []
+
+
+def test_v1_checkpoint_is_rejected_before_models_or_external_mutations(services):
+    services.row["state"] = (
+        b'{"state_version":1,"stage":"direction","direction":null,'
+        b'"scope_sha256":null,"accepted_maps":{},"pending_paths":[],'
+        b'"review_paths":[],"candidate_sha256":null}'
+    )
+
+    with pytest.raises(PersistenceError, match="invalid continuation checkpoint"):
+        admit(services)
+
     assert services.effects == []
 
 

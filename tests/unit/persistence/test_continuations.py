@@ -9,6 +9,8 @@ from types import SimpleNamespace
 import pytest
 
 from ydbdoc_review_ng.continuation import (
+    STATE_VERSION,
+    AcceptedDocument,
     ContinuationStage,
     ContinuationState,
     SourceChangeInventory,
@@ -81,7 +83,9 @@ def checkpoint():
         target_sha=None,
         source_inventory=SourceChangeInventory(()),
         scope_target_paths=(),
-        state=ContinuationState(1, ContinuationStage.DIRECTION, None, None, (), (), (), None),
+        state=ContinuationState(
+            STATE_VERSION, ContinuationStage.DIRECTION, None, None, (), (), (), None
+        ),
         created_at=NOW,
     )
 
@@ -236,7 +240,7 @@ def test_later_semantic_stop_keeps_original_creation_and_expiry() -> None:
     save_semantic(store, checkpoint(), now=NOW)
     later = NOW + timedelta(days=5)
     pending = ContinuationState(
-        1,
+        STATE_VERSION,
         ContinuationStage.TRANSLATION,
         Direction.RU_TO_EN,
         ContentHash("d" * 64),
@@ -520,16 +524,14 @@ def test_checkpoint_inventory_is_required_and_cannot_change_within_lineage() -> 
 
 
 def selected_checkpoint(stage=ContinuationStage.TRANSLATION):
-    from ydbdoc_review_ng.continuation import AcceptedMap
-
     path = RepoPath("en/a.md")
     review = stage is ContinuationStage.REVIEW
     state = ContinuationState(
-        1,
+        STATE_VERSION,
         stage,
         Direction.RU_TO_EN,
         ContentHash("d" * 64),
-        (AcceptedMap(path, (("field", "text"),)),) if review else (),
+        (AcceptedDocument(path, "# Text\n"),) if review else (),
         () if review else (path,),
         (path,) if review else (),
         ContentHash("e" * 64) if review else None,
