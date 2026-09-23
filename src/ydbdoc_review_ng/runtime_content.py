@@ -1044,6 +1044,11 @@ class RuntimeContent:
                 operator_context=self.review_operator_context,
                 before_model_call=check_head if selective else None,
                 before_repaired_map=publish_map if selective else None,
+                max_request_characters=int(
+                    self.environment.get("YDBDOC_MAX_MODEL_REQUEST_CHARACTERS")
+                    or self.environment.get("YDBDOC_MAX_SOURCE_CHARACTERS")
+                    or "200000"
+                ),
             )
             if (
                 document.entry.operation is not FileOperation.RENAME_TARGET

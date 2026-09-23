@@ -26,6 +26,7 @@ from ydbdoc_review_ng.translation import (
     TranslationRequest,
     assemble_candidate,
     build_translation_request,
+    prepare_document,
 )
 
 SNAPSHOT = SnapshotRef(RepositoryId("ydb-platform/ydb"), GitSha("a" * 40))
@@ -65,6 +66,11 @@ def prepared() -> tuple[SourcePlan, TranslationRequest, dict[str, str], bytes]:
         .replace("before starting", "до начала"),
     }
     return plan, request, values, assemble_candidate(SOURCE, plan, request, values)
+
+
+def raw_document(candidate: bytes, path: RepoPath = PATH) -> str:
+    plan = build_markdown_plan(SNAPSHOT, path, candidate)
+    return prepare_document(candidate, plan, max_characters=100_000).chunks[0].text
 
 
 def critic_json(verdict: str, findings: list[dict[str, object]]) -> str:
@@ -132,8 +138,10 @@ def test_full_document_repair_restores_source_fragments_before_exposing_map(inva
             "до начала", "до начала работы"
         ),
     }
+    repaired_candidate = assemble_candidate(SOURCE, plan, request, repaired)
+    raw_repair = raw_document(repaired_candidate)
     if invalid_placeholder:
-        repaired[request.fields[1].field_id] += " [[LINK_9999]]"
+        raw_repair += " [[YDBDOC_PROTECTED_9999]]"
     executor = FakeExecutor(
         critic_json(
             "RED",
@@ -146,7 +154,7 @@ def test_full_document_repair_restores_source_fragments_before_exposing_map(inva
                 )
             ],
         ),
-        json.dumps(repaired, ensure_ascii=False),
+        raw_repair,
         critic_json("GREEN", []),
     )
     published_maps = []
@@ -166,22 +174,16 @@ def test_full_document_repair_restores_source_fragments_before_exposing_map(inva
         before_repaired_map=published_maps.append,
     )
     repair_prompt = executor.calls[1].prompt
-    assert set(mutable_json(executor.calls[1].schema)["properties"]) == set(request.requested_ids)
-    assert SOURCE.decode() not in repair_prompt
-    assert target.decode() not in repair_prompt
-    assert all(field.field_id in repair_prompt for field in request.fields)
-    assert all(field.text in repair_prompt for field in request.fields)
-    assert all(value in repair_prompt for value in accepted.values())
-    assert all(
-        placeholder.token in repair_prompt
-        for field in request.fields
-        for placeholder in field.placeholders
-    )
+    assert executor.calls[1].schema is None
+    assert all(field.field_id not in repair_prompt for field in request.fields)
+    assert "<authoritative-source>" in repair_prompt
+    assert "<current-target>" in repair_prompt
+    assert "/docs/guide" not in repair_prompt
     assert [call.role.value for call in executor.calls] == ["critic", "repair", "final_critic"]
     assert all(call.target_path == PATH for call in executor.calls)
     assert all("Private guidance" in call.prompt for call in executor.calls)
     if invalid_placeholder:
-        assert result.repair_error is RepairErrorReason.ASSEMBLY_FAILED
+        assert result.repair_error is RepairErrorReason.INVALID_RESPONSE
         assert result.final_candidate == target
         assert published_maps == []
         assert result.accepted_maps == (AcceptedMap(PATH, tuple(sorted(accepted.items()))),)
@@ -222,15 +224,16 @@ def test_repair_transport_failure_is_terminal_before_final_critic() -> None:
 def test_quality_returns_final_validated_map_including_repaired_values() -> None:
     plan, request, values, _target = prepared()
     field_id = request.requested_ids[0]
+    repaired_values = {**values, field_id: "Новая установка YDB"}
     executor = FakeExecutor(
         critic_json(
             "RED", [finding(repairable=True, snippet="Установка YDB", line=1, field_ids=[field_id])]
         ),
-        json.dumps({field_id: "Новая установка YDB"}),
+        raw_document(assemble_candidate(SOURCE, plan, request, repaired_values)),
         critic_json("RED", [finding(repairable=False, snippet="YDB", line=1)]),
     )
     result = review(executor)
-    assert result.accepted_maps[0].as_dict() == {**values, field_id: "Новая установка YDB"}
+    assert result.accepted_maps[0].as_dict() == repaired_values
     assert (
         assemble_candidate(SOURCE, plan, request, result.accepted_maps[0].as_dict())
         == result.final_candidate
@@ -274,10 +277,17 @@ def test_repairable_red_repairs_once_and_critics_actual_repaired_candidate() -> 
         .replace("the guide", "руководство")
         .replace("before starting", "до начала")
     )
+    expected_values = dict(values)
+    expected_values[field_id] = repaired_text
+    expected = assemble_candidate(SOURCE, plan, request, expected_values)
+    expected_plan = build_markdown_plan(SNAPSHOT, PATH, expected)
+    raw_repair = prepare_document(
+        expected, expected_plan, max_characters=100_000
+    ).chunks[0].text
     events: list[str] = []
     executor = FakeExecutor(
         primary,
-        json.dumps({field_id: repaired_text}, ensure_ascii=False),
+        raw_repair,
         critic_json("GREEN", []),
         events=events,
     )
@@ -285,10 +295,6 @@ def test_repairable_red_repairs_once_and_critics_actual_repaired_candidate() -> 
     def before_final_critic(candidate: bytes) -> None:
         assert candidate == expected
         events.append("repair_validated_and_published")
-
-    expected_values = dict(values)
-    expected_values[field_id] = repaired_text
-    expected = assemble_candidate(SOURCE, plan, request, expected_values)
 
     result = review_translation(
         executor,
@@ -311,13 +317,142 @@ def test_repairable_red_repairs_once_and_critics_actual_repaired_candidate() -> 
     assert result.primary.verdict is Verdict.RED
     assert result.final.verdict is Verdict.GREEN
     assert [call.role.value for call in executor.calls] == ["critic", "repair", "final_critic"]
+    assert executor.calls[1].schema is None
+    assert field_id not in executor.calls[1].prompt
+    assert "<authoritative-source>" in executor.calls[1].prompt
+    assert "<current-target>" in executor.calls[1].prompt
+    assert "Перевод пропускает обязательное условие." in executor.calls[1].prompt
     assert events == ["critic", "repair", "repair_validated_and_published", "final_critic"]
     assert expected.decode() in executor.calls[2].prompt
     assert target.decode() not in executor.calls[2].prompt
 
 
+@pytest.mark.parametrize(
+    ("source", "translated", "source_locale", "target_locale", "direction"),
+    [
+        (b"# Install YDB\n", "Установите YDB", Locale.EN, Locale.RU, "en -> ru"),
+        (
+            "# Установите YDB\n".encode(),
+            "Install YDB",
+            Locale.RU,
+            Locale.EN,
+            "ru -> en",
+        ),
+    ],
+)
+def test_raw_repair_prompt_uses_actual_translation_direction(
+    source: bytes,
+    translated: str,
+    source_locale: Locale,
+    target_locale: Locale,
+    direction: str,
+) -> None:
+    plan = build_markdown_plan(SNAPSHOT, SOURCE_PATH, source)
+    request = build_translation_request(source, plan)
+    field_id = request.requested_ids[0]
+    target = assemble_candidate(source, plan, request, {field_id: translated})
+    repaired = assemble_candidate(source, plan, request, {field_id: translated + " correctly"})
+    executor = FakeExecutor(
+        critic_json(
+            "RED",
+            [
+                finding(
+                    repairable=True,
+                    snippet=translated,
+                    line=1,
+                    field_ids=[field_id],
+                )
+            ],
+        ),
+        raw_document(repaired),
+        critic_json("GREEN", []),
+    )
+
+    result = review_translation(
+        executor,
+        model="model",
+        source=source,
+        source_plan=plan,
+        translation_request=request,
+        target=target,
+        target_path=PATH,
+        source_locale=source_locale,
+        target_locale=target_locale,
+    )
+
+    assert result.final_candidate == repaired
+    assert direction in executor.calls[1].prompt
+
+
+def test_oversized_repair_uses_minimum_ordered_structural_chunks_within_limit() -> None:
+    source = b"\n\n".join(
+        f"## Source section {number} " .encode() + (b"detail " * 16)
+        for number in range(1, 5)
+    ) + b"\n"
+    plan = build_markdown_plan(SNAPSHOT, SOURCE_PATH, source)
+    request = build_translation_request(source, plan)
+    target_values = {
+        field.field_id: field.text.replace("Source section", "Target section")
+        for field in request.fields
+    }
+    target = assemble_candidate(source, plan, request, target_values)
+    first_id = request.requested_ids[0]
+    limit = 1_450
+
+    class ChunkExecutor:
+        def __init__(self) -> None:
+            self.calls: list[ModelRequest] = []
+
+        def invoke(self, model_request: ModelRequest, /) -> ModelCallResult:
+            self.calls.append(model_request)
+            if model_request.role.value == "critic":
+                return ModelCallResult(
+                    critic_json(
+                        "RED",
+                        [
+                            finding(
+                                repairable=True,
+                                snippet="Target section 1",
+                                line=1,
+                                field_ids=[first_id],
+                            )
+                        ],
+                    ),
+                    None,
+                    (),
+                )
+            if model_request.role.value == "repair":
+                current = model_request.prompt.split("<current-target>\n", 1)[1].split(
+                    "</current-target>", 1
+                )[0]
+                return ModelCallResult(current, None, ())
+            return ModelCallResult(critic_json("GREEN", []), None, ())
+
+    executor = ChunkExecutor()
+    result = review_translation(
+        executor,
+        model="model",
+        source=source,
+        source_plan=plan,
+        translation_request=request,
+        target=target,
+        target_path=PATH,
+        source_locale=Locale.EN,
+        target_locale=Locale.RU,
+        max_request_characters=limit,
+    )
+
+    repair_calls = [call for call in executor.calls if call.role.value == "repair"]
+    assert result.final_candidate == target
+    assert len(repair_calls) == 2
+    assert all(call.schema is None for call in repair_calls)
+    assert all(len(call.prompt) <= limit for call in repair_calls)
+    assert "Source section 1" in repair_calls[0].prompt
+    assert "Source section 4" in repair_calls[-1].prompt
+
+
 def test_repair_derives_current_field_values_from_actual_target() -> None:
-    plan, request, _values, target = prepared()
+    plan, request, values, target = prepared()
     field_id = request.fields[1].field_id
     repaired_text = (
         request.fields[1]
@@ -330,7 +465,9 @@ def test_repair_derives_current_field_values_from_actual_target() -> None:
             "RED",
             [finding(repairable=True, snippet="Прочитайте", line=3, field_ids=[field_id])],
         ),
-        json.dumps({field_id: repaired_text}, ensure_ascii=False),
+        raw_document(
+            assemble_candidate(SOURCE, plan, request, {**values, field_id: repaired_text})
+        ),
         critic_json("GREEN", []),
     )
 
@@ -351,7 +488,7 @@ def test_repair_derives_current_field_values_from_actual_target() -> None:
     assert "Прочитайте полностью" in result.final_candidate.decode()
 
 
-def test_field_repair_prompt_contains_only_selected_field_context() -> None:
+def test_repair_prompt_contains_complete_source_target_and_findings() -> None:
     source_sentinel = ("SOURCE-OUTSIDE-SELECTED-FIELD " * 500).strip()
     target_sentinel = ("TARGET-OUTSIDE-SELECTED-FIELD " * 500).strip()
     source = f"{source_sentinel}\n\nRepair [this field](/docs/selected).\n".encode()
@@ -384,7 +521,17 @@ def test_field_repair_prompt_contains_only_selected_field_context() -> None:
                 )
             ],
         ),
-        json.dumps({selected.field_id: repaired_translation}, ensure_ascii=False),
+        raw_document(
+            assemble_candidate(
+                source,
+                plan,
+                request,
+                {
+                    request.fields[0].field_id: target_sentinel,
+                    selected.field_id: repaired_translation,
+                },
+            )
+        ),
         critic_json("GREEN", []),
     )
 
@@ -404,29 +551,20 @@ def test_field_repair_prompt_contains_only_selected_field_context() -> None:
     critic_prompt = executor.calls[0].prompt
     repair_request = executor.calls[1]
     repair_prompt = repair_request.prompt
-    repair_schema = mutable_json(repair_request.schema)
     assert result.repair_applied
     assert source.decode() in critic_prompt
     assert target.decode() in critic_prompt
-    assert selected.field_id in repair_prompt
-    assert selected.text in repair_prompt
-    assert current_translation in repair_prompt
-    assert all(item.token in repair_prompt for item in selected.placeholders)
+    assert repair_request.schema is None
+    assert selected.field_id not in repair_prompt
     assert "Перевод пропускает обязательное условие." in repair_prompt
     assert "Добавить пропущенное условие без изменения URL." in repair_prompt
     assert PATH.value in repair_prompt
     assert "en -> ru" in repair_prompt
     assert "Use the operator's exact terminology." in repair_prompt
-    assert source_sentinel not in repair_prompt
-    assert target_sentinel not in repair_prompt
-    assert source.decode() not in repair_prompt
-    assert target.decode() not in repair_prompt
-    assert repair_schema == {
-        "type": "object",
-        "properties": {selected.field_id: {"type": "string"}},
-        "required": [selected.field_id],
-        "additionalProperties": False,
-    }
+    assert source_sentinel in repair_prompt
+    assert target_sentinel in repair_prompt
+    assert "<authoritative-source>" in repair_prompt
+    assert "<current-target>" in repair_prompt
 
 
 def test_t017_n04_repair_preserves_logical_escaped_title_in_untouched_field() -> None:
@@ -451,7 +589,14 @@ def test_t017_n04_repair_preserves_logical_escaped_title_in_untouched_field() ->
                 )
             ],
         ),
-        json.dumps({description_id: "Corrected description"}),
+        raw_document(
+            assemble_candidate(
+                source,
+                plan,
+                request,
+                {title_id: 'A "quoted" title', description_id: "Corrected description"},
+            )
+        ),
         critic_json("GREEN", []),
     )
 
@@ -490,7 +635,7 @@ def test_unrepairable_red_uses_one_critic() -> None:
 
 
 def test_mixed_findings_repair_only_locally_safe_mapped_fields() -> None:
-    _plan, request, _values, _target = prepared()
+    plan, request, values, _target = prepared()
     safe_id = request.fields[1].field_id
     unsafe_id = request.fields[0].field_id
     primary = critic_json(
@@ -509,7 +654,9 @@ def test_mixed_findings_repair_only_locally_safe_mapped_fields() -> None:
     )
     executor = FakeExecutor(
         primary,
-        json.dumps({safe_id: repaired}),
+        raw_document(
+            assemble_candidate(SOURCE, plan, request, {**values, safe_id: repaired})
+        ),
         critic_json("RED", [finding(repairable=False, snippet="Установка", line=1)]),
     )
 
@@ -517,16 +664,12 @@ def test_mixed_findings_repair_only_locally_safe_mapped_fields() -> None:
 
     assert result.repair_attempted and result.repair_applied
     repair_request = executor.calls[1]
-    schema = mutable_json(repair_request.schema)
-    assert type(schema) is dict
-    assert schema["required"] == [safe_id]
+    assert repair_request.schema is None
     assert unsafe_id not in repair_request.prompt
     assert SOURCE.decode() not in repair_request.prompt
     assert "Прочитайте" in repair_request.prompt
     assert "Перевод пропускает обязательное условие." in repair_request.prompt
-    assert request.fields[1].text in repair_request.prompt
-    assert all(item.token in repair_request.prompt for item in request.fields[1].placeholders)
-    assert SOURCE.decode() not in repr(repair_request)
+    assert "<authoritative-source>" in repair_request.prompt
     assert result.final.verdict is Verdict.RED
 
 
@@ -568,7 +711,7 @@ def test_invalid_repair_retains_original_and_still_runs_one_final_critic() -> No
 
 
 def test_repair_callback_failure_prevents_final_critic() -> None:
-    plan, request, _values, target = prepared()
+    plan, request, values, target = prepared()
     field_id = request.fields[1].field_id
     repaired_text = (
         request.fields[1]
@@ -581,7 +724,9 @@ def test_repair_callback_failure_prevents_final_critic() -> None:
             "RED",
             [finding(repairable=True, snippet="Прочитайте", line=3, field_ids=[field_id])],
         ),
-        json.dumps({field_id: repaired_text}, ensure_ascii=False),
+        raw_document(
+            assemble_candidate(SOURCE, plan, request, {**values, field_id: repaired_text})
+        ),
         critic_json("GREEN", []),
     )
 
@@ -605,7 +750,7 @@ def test_repair_callback_failure_prevents_final_critic() -> None:
     assert [call.role.value for call in executor.calls] == ["critic", "repair"]
 
 
-def test_invalid_placeholder_repair_retains_original_and_reports_assembly_error() -> None:
+def test_invalid_placeholder_repair_retains_original_and_reports_invalid_response() -> None:
     _plan, request, _values, target = prepared()
     field_id = request.fields[1].field_id
     executor = FakeExecutor(
@@ -613,13 +758,13 @@ def test_invalid_placeholder_repair_retains_original_and_reports_assembly_error(
             "RED",
             [finding(repairable=True, snippet="Прочитайте", line=3, field_ids=[field_id])],
         ),
-        json.dumps({field_id: "Исправление без обязательных placeholders"}),
+        "Исправление без обязательных placeholders",
         critic_json("RED", [finding(repairable=False, snippet="Прочитайте", line=3)]),
     )
 
     result = review(executor)
 
-    assert result.repair_error is RepairErrorReason.ASSEMBLY_FAILED
+    assert result.repair_error is RepairErrorReason.INVALID_RESPONSE
     assert result.final_candidate == target
     assert len(executor.calls) == 3
 
@@ -653,7 +798,7 @@ def test_lone_surrogate_repair_retains_original_and_runs_final_critic() -> None:
 
     assert result.repaired_candidate is None
     assert result.final_candidate == target
-    assert result.repair_error is RepairErrorReason.ASSEMBLY_FAILED
+    assert result.repair_error is RepairErrorReason.INVALID_RESPONSE
     assert [call.role.value for call in executor.calls] == ["critic", "repair", "final_critic"]
 
 
@@ -804,8 +949,8 @@ def test_critic_parser_canonicalizes_duplicate_repair_ids_in_first_occurrence_or
     )
 
 
-def test_critic_duplicate_ids_reach_one_ordered_repair() -> None:
-    _plan, request, values, _target = prepared()
+def test_critic_duplicate_ids_reach_one_raw_document_repair() -> None:
+    _plan, request, _values, target = prepared()
     second_id = request.requested_ids[1]
     executor = FakeExecutor(
         critic_json(
@@ -819,16 +964,16 @@ def test_critic_duplicate_ids_reach_one_ordered_repair() -> None:
                 )
             ],
         ),
-        json.dumps({second_id: values[second_id]}),
+        raw_document(target),
         critic_json("GREEN", []),
     )
 
     result = review(executor)
 
-    repair_schema = mutable_json(executor.calls[1].schema)
     assert result.repair_applied
     assert result.primary.findings[0].field_ids == (second_id,)
-    assert repair_schema["required"] == [second_id]
+    assert executor.calls[1].schema is None
+    assert second_id not in executor.calls[1].prompt
     assert [call.role.value for call in executor.calls] == ["critic", "repair", "final_critic"]
 
 

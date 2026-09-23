@@ -1311,37 +1311,56 @@ def test_model_repair_is_published_before_final_critic_and_only_then_pr():
             body = json.loads(request.body)
             schema_wrapper = body.get("jsonSchema")
             if schema_wrapper is None:
+                prompt = body["messages"][-1]["text"]
+                if prompt.startswith("Repair"):
+                    self.events.append(("REPAIR", "markdown"))
+                    current = prompt.split("<current-target>\n", 1)[1].split(
+                        "</current-target>", 1
+                    )[0]
+                    values = current.replace("# Translated", "# Corrected", 1)
+                    return HttpResponse(
+                        200,
+                        json.dumps(
+                            {
+                                "result": {
+                                    "alternatives": [
+                                        {
+                                            "status": "ALTERNATIVE_STATUS_FINAL",
+                                            "message": {
+                                                "role": "assistant",
+                                                "text": values,
+                                            },
+                                        }
+                                    ]
+                                }
+                            }
+                        ).encode(),
+                        Decimal("0.02"),
+                    )
                 return super().model(request)
             schema = schema_wrapper["schema"]
-            if "verdict" not in schema["properties"]:
-                if self.critics:
-                    self.events.append(("REPAIR", "fields"))
-                    values = {self.field_id: "Corrected"}
-                else:
-                    return super().model(request)
-            else:
-                self.critics += 1
-                field_ids = schema["properties"]["findings"]["items"]["properties"][
-                    "field_ids"
-                ]["items"]["enum"]
-                self.field_id = field_ids[0]
-                if self.critics > 1:
-                    return super().model(request)
-                self.events.append(("CRITIC", "first"))
-                values = {
-                    "verdict": "RED",
-                    "findings": [
-                        {
-                            "repairable": True,
-                            "reason": "Wrong term",
-                            "expected_correction": "Use Corrected",
-                            "searchable_snippet": "Translated",
-                            "target_path": "ydb/docs/en/core/page.md",
-                            "target_line": 1,
-                            "field_ids": [self.field_id],
-                        }
-                    ],
-                }
+            self.critics += 1
+            field_ids = schema["properties"]["findings"]["items"]["properties"][
+                "field_ids"
+            ]["items"]["enum"]
+            self.field_id = field_ids[0]
+            if self.critics > 1:
+                return super().model(request)
+            self.events.append(("CRITIC", "first"))
+            values = {
+                "verdict": "RED",
+                "findings": [
+                    {
+                        "repairable": True,
+                        "reason": "Wrong term",
+                        "expected_correction": "Use Corrected",
+                        "searchable_snippet": "Translated",
+                        "target_path": "ydb/docs/en/core/page.md",
+                        "target_line": 1,
+                        "field_ids": [self.field_id],
+                    }
+                ],
+            }
             return HttpResponse(
                 200,
                 json.dumps(

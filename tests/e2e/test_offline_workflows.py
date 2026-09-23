@@ -483,8 +483,10 @@ class CriticExecutor:
                 }
             )
         elif role == "repair":
-            field = self.context.request.fields[0]
-            text = json.dumps({field.field_id: "Repaired: " + field.text})
+            current = request.prompt.split("<current-target>\n", 1)[1].split(
+                "</current-target>", 1
+            )[0]
+            text = current.replace("# ", "# Repaired: ", 1)
         else:
             text = json.dumps({"verdict": "GREEN", "findings": []})
         return ModelCallResult(text, None, ())

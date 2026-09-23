@@ -7,6 +7,7 @@ from datetime import timedelta
 from decimal import Decimal
 
 import pytest
+from _runtime_services import raw_repair_context
 from test_continue_translation import CONTEXT, EN, RU, LifecycleServices
 
 from ydbdoc_review_ng import application
@@ -80,10 +81,11 @@ class ReviewServices(LifecycleServices):
         if not self.continuing:
             return super().model(request)
         body = json.loads(request.body)
-        schema = body["jsonSchema"]["schema"]
+        schema_wrapper = body.get("jsonSchema")
+        schema = schema_wrapper["schema"] if schema_wrapper is not None else None
         prompt = body["messages"][-1]["text"]
         path = prompt.split("Target path: ", 1)[1].split("\n", 1)[0]
-        role = "critic" if "verdict" in schema["properties"] else "repair"
+        role = "repair" if schema is None else "critic"
         self.roles.append(role)
         self.prompts.append((role, prompt))
         self.calls.append((role, path, schema))
@@ -109,21 +111,24 @@ class ReviewServices(LifecycleServices):
                     finding["field_ids"] = ids["items"]["enum"][:1]
                 values["findings"].append(finding)
         else:
-            fields, _ = json.JSONDecoder().raw_decode(prompt.split("Allowed fields: ", 1)[1])
-            values = {
-                item["field_id"]: (
-                    item["current_translated_value"]
-                    if self.repair_uses_current_values
-                    else item["source_field_text"].replace("Source", "Repaired")
+            current = raw_repair_context(prompt, "current-target")
+            source = raw_repair_context(prompt, "authoritative-source")
+            if self.repair_uses_current_values:
+                raw = current
+            elif current.startswith("# Whole pinned translation"):
+                raw = source.replace("Source", "Repaired")
+            else:
+                repaired_heading = source.splitlines(keepends=True)[0].replace(
+                    "Source", "Repaired"
                 )
-                for item in fields
-            }
+                raw = repaired_heading + "".join(current.splitlines(keepends=True)[1:])
         if self.move_after == role:
             self.branch_head = "f" * 40
             self.snapshots[self.branch_head] = dict(self.files)
-        raw = (
-            self.repair_payload if role == "repair" and self.repair_payload else json.dumps(values)
-        )
+        if role == "critic":
+            raw = json.dumps(values)
+        elif self.repair_payload is not None:
+            raw = self.repair_payload
         return HttpResponse(
             200,
             json.dumps(
@@ -205,14 +210,10 @@ def test_repair_merges_selected_field_into_restored_map_before_final_critic():
     assert following.state.accepted_maps[0] == saved.state.accepted_maps[0]
     assert set(following.state.accepted_maps[1].as_dict().values()) == {"Repaired b", "Translated"}
     repair_prompt = services.prompts[1][1]
-    allowed_fields, _ = json.JSONDecoder().raw_decode(
-        repair_prompt.split("Allowed fields: ", 1)[1]
-    )
-    assert len(allowed_fields) == 1
-    assert set(services.calls[1][2]["properties"]) == {allowed_fields[0]["field_id"]}
-    assert allowed_fields[0]["source_field_text"] == "Source b"
-    assert allowed_fields[0]["current_translated_value"] == "Translated"
-    assert "Source detail b" not in repair_prompt
+    assert services.calls[1][2] is None
+    assert "Source b" in raw_repair_context(repair_prompt, "authoritative-source")
+    assert "Translated" in raw_repair_context(repair_prompt, "current-target")
+    assert "Source detail b" in repair_prompt
     assert following.target_sha == result.final_commit_sha
     assert following.state.candidate_sha256 == candidate_sha256(
         pack(
@@ -308,10 +309,15 @@ def test_pinned_rename_review_never_derives_maps_from_target_and_replays_metadat
     assert [item.target_path.value for item in saved.state.accepted_maps] == [EN + "b.md"]
     metadata = {path: value for path, value in services.files.items() if path.endswith(".yaml")}
 
-    def forbidden(*args, **kwargs):
-        raise AssertionError("REVIEW cannot reconstruct a map from target bytes")
+    from ydbdoc_review_ng.quality.repair import _derive_target_translations
 
-    monkeypatch.setattr("ydbdoc_review_ng.quality.repair._derive_target_translations", forbidden)
+    def source_only_bridge(*args, **kwargs):
+        assert args[3] != pinned, "old target bytes are context only"
+        return _derive_target_translations(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "ydbdoc_review_ng.quality.repair._derive_target_translations", source_only_bridge
+    )
     services.outcomes = {EN + "a.md": ["repair", "red"] if repair else ["red"]}
     result = services.resume()
     assert result.verdict is Verdict.RED
@@ -320,11 +326,13 @@ def test_pinned_rename_review_never_derives_maps_from_target_and_replays_metadat
     )
     if repair:
         repair_prompt = services.prompts[1][1]
-        allowed_fields, _ = json.JSONDecoder().raw_decode(
-            repair_prompt.split("Allowed fields: ", 1)[1]
+        assert services.calls[1][2] is None
+        assert "Source detail a" in raw_repair_context(
+            repair_prompt, "authoritative-source"
         )
-        assert len(allowed_fields) == len(services.calls[1][2]["properties"]) == 2
-        assert all("current_translated_value" not in field for field in allowed_fields)
+        assert "Whole pinned detail" in raw_repair_context(
+            repair_prompt, "current-target"
+        )
     following = services.checkpoint()
     assert following.state.review_paths == saved.state.review_paths[:1]
     assert services.files[EN + "a.md"] == (

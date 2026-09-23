@@ -9,7 +9,12 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
-from _runtime_services import RuntimeServices, translated_markdown
+from _runtime_services import (
+    RuntimeServices,
+    raw_repair_context,
+    rewrite_markdown,
+    translated_markdown,
+)
 
 from ydbdoc_review_ng.application import TranslateWorkflowInput, VerifyWorkflowInput, WorkflowError
 from ydbdoc_review_ng.continuation import (
@@ -169,13 +174,19 @@ class CaptureServices(RuntimeServices):
         prompt = body["messages"][-1]["text"]
         schema_wrapper = body.get("jsonSchema")
         if schema_wrapper is None:
-            role = "translate"
-            self.translations += 1
-            text = translated_markdown(prompt)
-            if self.stop == "translation" and self.translations in {2, 3}:
-                text = '{"wrong-field": "response received"}'
-            if self.stop == "translation_assembly" and self.translations in {2, 3}:
-                text = "[[YDBDOC_PROTECTED_9999]]"
+            if prompt.startswith("Repair"):
+                role = "repair"
+                text = rewrite_markdown(
+                    raw_repair_context(prompt, "current-target"), "Corrected"
+                )
+            else:
+                role = "translate"
+                self.translations += 1
+                text = translated_markdown(prompt)
+                if self.stop == "translation" and self.translations in {2, 3}:
+                    text = '{"wrong-field": "response received"}'
+                if self.stop == "translation_assembly" and self.translations in {2, 3}:
+                    text = "[[YDBDOC_PROTECTED_9999]]"
         elif "verdict" in (schema := schema_wrapper["schema"])["properties"]:
             role = "critic"
             self.critics += 1
@@ -200,9 +211,6 @@ class CaptureServices(RuntimeServices):
                 ]
                 if values["findings"][0]["repairable"]:
                     values["findings"][0]["field_ids"] = props["field_ids"]["items"]["enum"]
-        elif prompt.startswith("Repair"):
-            role = "repair"
-            values = dict.fromkeys(schema["properties"], "Corrected")
         elif prompt.startswith("Compare"):
             role = "direction"
             values = dict.fromkeys(schema["properties"], "undetermined")
@@ -211,7 +219,7 @@ class CaptureServices(RuntimeServices):
         self.roles.append(role)
         if self.failure == role or self.failure == "final_critic" and self.critics == 2:
             raise TimeoutError("transport failed")
-        if role != "translate":
+        if role not in {"translate", "repair"}:
             text = json.dumps(values)
         return HttpResponse(
             200,

@@ -210,7 +210,7 @@ def test_openai_payload_headers_and_full_model_uri_are_exact() -> None:
 def test_native_raw_text_request_omits_json_schema_and_returns_message_text() -> None:
     transport = FakeTransport(native_response(text="# Complete Markdown\n"))
     raw = ModelRequest(
-        ModelRole.TRANSLATE,
+        ModelRole.REPAIR,
         "yandexgpt-5.1/latest",
         "translate complete Markdown",
         None,
@@ -228,7 +228,7 @@ def test_native_raw_text_request_omits_json_schema_and_returns_message_text() ->
 def test_openai_raw_text_request_omits_response_format_and_returns_message_content() -> None:
     transport = FakeTransport(openai_response(text="# Complete Markdown\n"))
     raw = ModelRequest(
-        ModelRole.TRANSLATE,
+        ModelRole.REPAIR,
         "deepseek-v4-flash/latest",
         "translate complete Markdown",
         None,

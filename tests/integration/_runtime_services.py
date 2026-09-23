@@ -13,9 +13,11 @@ def raw_translation_source(prompt):
     return source
 
 
-def translated_markdown(prompt, word="Translated", *, preserve_suffix=False):
-    source = raw_translation_source(prompt)
+def raw_repair_context(prompt, tag):
+    return prompt.split(f"<{tag}>\n", 1)[1].split(f"</{tag}>", 1)[0]
 
+
+def rewrite_markdown(source, word="Translated", *, preserve_suffix=False):
     def heading(match):
         text = match.group(2)
         if preserve_suffix and text.startswith("Source"):
@@ -26,6 +28,12 @@ def translated_markdown(prompt, word="Translated", *, preserve_suffix=False):
 
     translated = re.sub(r"(?m)^( {0,3}#{1,6}[ \t]+)([^\r\n]+)", heading, source)
     return re.sub(r"(?m)^Source[^\r\n]*$", word, translated)
+
+
+def translated_markdown(prompt, word="Translated", *, preserve_suffix=False):
+    return rewrite_markdown(
+        raw_translation_source(prompt), word, preserve_suffix=preserve_suffix
+    )
 
 
 class RuntimeServices:
@@ -168,8 +176,15 @@ class RuntimeServices:
         body = json.loads(request.body)
         schema = body.get("jsonSchema")
         if schema is None:
-            self.events.append(("MODEL", ("raw_markdown",)))
-            text = translated_markdown(body["messages"][-1]["text"])
+            prompt = body["messages"][-1]["text"]
+            if prompt.startswith("Repair"):
+                self.events.append(("REPAIR", "markdown"))
+                text = rewrite_markdown(
+                    raw_repair_context(prompt, "current-target"), "Corrected"
+                )
+            else:
+                self.events.append(("MODEL", ("raw_markdown",)))
+                text = translated_markdown(prompt)
         else:
             properties = schema["schema"]["properties"]
             self.events.append(("MODEL", tuple(properties)))

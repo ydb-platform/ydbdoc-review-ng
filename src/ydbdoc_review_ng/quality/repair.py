@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from typing import Protocol, cast
+from typing import Protocol
 
 from ydbdoc_review_ng.continuation import AcceptedMap
 from ydbdoc_review_ng.domain import Locale, ModelRole, RepoPath
 from ydbdoc_review_ng.models import ModelCallResult, ModelRequest
-from ydbdoc_review_ng.models.types import FrozenJson
 from ydbdoc_review_ng.parser.markdown import build_markdown_plan
 from ydbdoc_review_ng.plan import ProtectedKind, SourcePlan, fields_of
 from ydbdoc_review_ng.quality.critic import build_critic_request, parse_critic_response
@@ -21,15 +20,20 @@ from ydbdoc_review_ng.quality.types import (
 )
 from ydbdoc_review_ng.translation import (
     AssemblyError,
+    DocumentChunk,
+    DocumentTranslationError,
+    DocumentTranslationRequest,
     ProtectedMismatch,
-    ResponseError,
     TranslationRequest,
     assemble_candidate,
     build_translation_request,
-    parse_translation_response,
+    prepare_document,
+    restore_document,
+    validate_chunk_response,
     verify_protected_fragments,
 )
 from ydbdoc_review_ng.translation.contract import field_request_text
+from ydbdoc_review_ng.translation.document import _document_block_texts
 
 
 class ModelExecutor(Protocol):
@@ -205,21 +209,16 @@ def _safe_repair_findings(
     return tuple(selected_findings), tuple(item.value for item in ordered)
 
 
-def _repair_request(
+def _repair_prompt(
     *,
-    model: str,
+    source_text: str,
+    target_text: str,
     target_path: RepoPath,
     source_locale: Locale,
     target_locale: Locale,
-    translation_request: TranslationRequest,
-    current_translations: dict[str, str],
     findings: tuple[Finding, ...],
-    field_ids: tuple[str, ...],
     operator_context: str | None = None,
-) -> tuple[ModelRequest, TranslationRequest]:
-    allowed = set(field_ids)
-    fields = tuple(field for field in translation_request.fields if field.field_id in allowed)
-    subset = TranslationRequest(tuple(field.field_id for field in fields), fields)
+) -> str:
     problems = [
         {
             "reason": finding.reason,
@@ -227,49 +226,110 @@ def _repair_request(
             "searchable_snippet": finding.searchable_snippet,
             "target_path": finding.target_path,
             "target_line": finding.target_line,
-            "field_ids": list(finding.field_ids),
         }
         for finding in findings
     ]
-    allowed_fields: list[dict[str, object]] = []
-    for field in fields:
-        allowed_field: dict[str, object] = {
-            "field_id": field.field_id,
-            "source_field_text": field.text,
-            "placeholders": [item.token for item in field.placeholders],
-        }
-        if field.field_id in current_translations:
-            allowed_field["current_translated_value"] = current_translations[field.field_id]
-        allowed_fields.append(allowed_field)
     prompt = (
-        "Repair only the allowed translated fields for the listed problems. Return one strict "
-        "JSON object mapping every allowed field_id to its complete corrected string. Preserve "
-        "each placeholder exactly once. The authoritative source and source-only assembler are "
-        "authoritative; never use old target fragments as an assembly template. Do not change "
-        "URLs, paths, anchors, code, or placeholders.\n"
+        "Repair the complete translated Markdown for the listed problems. Return Markdown only, "
+        "without JSON, explanations, or an outer code fence. Preserve Markdown/YFM structure "
+        "and every [[YDBDOC_PROTECTED_NNNN]] placeholder exactly once in its original order. "
+        "The source is authoritative for protected bytes; the current target is linguistic "
+        "context only.\n"
         f"Direction: {source_locale.value} -> {target_locale.value}\n"
         f"Target path: {target_path.value}\n"
         f"Problems: {json.dumps(problems, ensure_ascii=False)}\n"
-        f"Allowed fields: {json.dumps(allowed_fields, ensure_ascii=False)}"
+        "<authoritative-source>\n"
+        f"{source_text}"
+        "</authoritative-source>\n"
+        "<current-target>\n"
+        f"{target_text}"
+        "</current-target>"
     )
     if operator_context is not None:
         prompt += "\n<operator-context>\n" + operator_context + "</operator-context>"
-    properties = {field_id: {"type": "string"} for field_id in subset.requested_ids}
-    schema = {
-        "type": "object",
-        "properties": properties,
-        "required": list(subset.requested_ids),
-        "additionalProperties": False,
-    }
-    return (
-        ModelRequest(
-            ModelRole.REPAIR,
-            model,
-            prompt,
-            cast(FrozenJson, schema),
+    return prompt
+
+
+def _repair_requests(
+    *,
+    model: str,
+    source: bytes,
+    source_plan: SourcePlan,
+    target: bytes,
+    target_path: RepoPath,
+    source_locale: Locale,
+    target_locale: Locale,
+    findings: tuple[Finding, ...],
+    operator_context: str | None,
+    max_characters: int,
+) -> tuple[tuple[ModelRequest, ...], DocumentTranslationRequest]:
+    target_plan = build_markdown_plan(source_plan.source_snapshot, target_path, target)
+    try:
+        verify_protected_fragments(source, source_plan, target, target_plan)
+    except (ProtectedMismatch, TypeError, ValueError):
+        raise QualityInputError from None
+    source_document = prepare_document(source, source_plan, max_characters=2**63 - 1)
+    target_document = prepare_document(target, target_plan, max_characters=2**63 - 1)
+    source_descriptors = tuple(
+        (item.token, item.source_bytes, item.kind) for item in source_document.placeholders
+    )
+    target_descriptors = tuple(
+        (item.token, item.source_bytes, item.kind) for item in target_document.placeholders
+    )
+    if source_descriptors != target_descriptors or len(source_plan.blocks) != len(target_plan.blocks):
+        raise QualityInputError
+    source_blocks = _document_block_texts(source, source_plan, source_document.placeholders)
+    target_blocks = _document_block_texts(target, target_plan, target_document.placeholders)
+
+    def unit(start: int, end: int) -> tuple[DocumentChunk, ModelRequest]:
+        source_text = "".join(source_blocks[start:end])
+        target_text = "".join(target_blocks[start:end])
+        block_start = source_plan.blocks[start].span.start if start < end else 0
+        block_end = source_plan.blocks[end - 1].span.end if start < end else 0
+        tokens = tuple(
+            item.token
+            for item in source_document.placeholders
+            if block_start <= item.source_start and item.source_end <= block_end
+        )
+        chunk = DocumentChunk(source_text, start, end, tokens)
+        prompt = _repair_prompt(
+            source_text=source_text,
+            target_text=target_text,
             target_path=target_path,
-        ),
-        subset,
+            source_locale=source_locale,
+            target_locale=target_locale,
+            findings=findings,
+            operator_context=operator_context,
+        )
+        return chunk, ModelRequest(
+            ModelRole.REPAIR, model, prompt, None, 8000, target_path
+        )
+
+    if not source_blocks:
+        chunk, request = unit(0, 0)
+        if len(request.prompt) > max_characters:
+            raise QualityInputError
+        return (request,), DocumentTranslationRequest((chunk,), source_document.placeholders)
+    chunks: list[DocumentChunk] = []
+    requests: list[ModelRequest] = []
+    start = 0
+    while start < len(source_blocks):
+        end = start + 1
+        accepted: tuple[DocumentChunk, ModelRequest] | None = None
+        while end <= len(source_blocks):
+            candidate = unit(start, end)
+            if len(candidate[1].prompt) > max_characters:
+                break
+            accepted = candidate
+            end += 1
+        if accepted is None:
+            raise QualityInputError
+        chunk, request = accepted
+        chunks.append(chunk)
+        requests.append(request)
+        start = chunk.block_end
+    return tuple(requests), DocumentTranslationRequest(
+        tuple(chunks), source_document.placeholders
     )
 
 
@@ -291,6 +351,7 @@ def review_translation(
     operator_context: str | None = None,
     before_model_call: Callable[[], None] | None = None,
     before_repaired_map: Callable[[AcceptedMap], None] | None = None,
+    max_request_characters: int = 200_000,
 ) -> QualityReviewResult:
     """Review the actual candidate and apply no more than one source-only repair."""
     if accepted_map is None and not full_repair:
@@ -341,38 +402,56 @@ def review_translation(
             accepted_maps,
         )
 
-    repair_request, subset = _repair_request(
+    repair_requests, document_request = _repair_requests(
         model=model,
+        source=source,
+        source_plan=source_plan,
+        target=target,
         target_path=target_path,
         source_locale=source_locale,
         target_locale=target_locale,
-        translation_request=translation_request,
-        current_translations=target_translations,
         findings=repair_findings,
-        field_ids=translation_request.requested_ids if full_repair else repair_ids,
         operator_context=operator_context,
+        max_characters=max_request_characters,
     )
-    if before_model_call is not None:
-        before_model_call()
-    repair_response = executor.invoke(repair_request)
     repair_error: RepairErrorReason | None = None
     repaired_candidate: bytes | None = None
-    if not repair_response.success or repair_response.text is None:
-        raise QualityExecutionError("repair")
-    else:
+    responses: list[str] = []
+    for chunk, repair_request in zip(document_request.chunks, repair_requests, strict=True):
+        if before_model_call is not None:
+            before_model_call()
+        repair_response = executor.invoke(repair_request)
+        if not repair_response.success or repair_response.text is None:
+            raise QualityExecutionError("repair")
         try:
-            repaired_values = parse_translation_response(repair_response.text, subset)
-            merged = {} if full_repair else dict(target_translations)
-            merged.update(repaired_values)
-            repaired_candidate = assemble_candidate(
-                source, source_plan, translation_request, merged
+            validate_chunk_response(
+                chunk, document_request.placeholders, repair_response.text
             )
-            target_translations = merged
-            accepted_maps = (AcceptedMap(target_path, tuple(sorted(merged.items()))),)
-        except ResponseError:
+        except DocumentTranslationError:
             repair_error = RepairErrorReason.INVALID_RESPONSE
-        except (AssemblyError, UnicodeError):
+            break
+        responses.append(repair_response.text)
+    if repair_error is None:
+        try:
+            repaired_candidate = restore_document(
+                source, source_plan, document_request, tuple(responses)
+            )
+            target_translations = _derive_target_translations(
+                source,
+                source_plan,
+                translation_request,
+                repaired_candidate,
+                target_path,
+            )
+            accepted_maps = (
+                AcceptedMap(target_path, tuple(sorted(target_translations.items()))),
+            )
+        except DocumentTranslationError:
+            repair_error = RepairErrorReason.INVALID_RESPONSE
+            repaired_candidate = None
+        except (AssemblyError, UnicodeError, QualityInputError):
             repair_error = RepairErrorReason.ASSEMBLY_FAILED
+            repaired_candidate = None
     final_candidate = repaired_candidate if repaired_candidate is not None else target
     if repaired_candidate is not None and before_repaired_map is not None:
         before_repaired_map(accepted_maps[0])

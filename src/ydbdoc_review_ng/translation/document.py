@@ -36,6 +36,8 @@ class DocumentPlaceholder:
     token: str
     source_bytes: bytes
     kind: ProtectedKind
+    source_start: int
+    source_end: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -206,11 +208,11 @@ def prepare_document(
             token,
             source[start:end],
             kind,
+            start,
+            end,
         )
         placeholders.append(placeholder)
         regions.append((start, end, placeholder))
-    frozen_regions = tuple(regions)
-
     def fits(text: str, block_start: int, block_end: int) -> bool:
         if source_locale is None or target_locale is None:
             return len(text) <= max_characters
@@ -235,10 +237,7 @@ def prepare_document(
         if not fits("", 0, 0):
             raise DocumentTranslationError("document_chunk:prompt_overhead_exceeds_limit")
         return DocumentTranslationRequest((DocumentChunk("", 0, 0, ()),), tuple(placeholders))
-    rendered_blocks = tuple(
-        _render_span(source, block.span.start, block.span.end, frozen_regions)
-        for block in plan.blocks
-    )
+    rendered_blocks = _document_block_texts(source, plan, tuple(placeholders))
     if any(not fits(block, index, index + 1) for index, block in enumerate(rendered_blocks)):
         raise DocumentTranslationError("document_chunk:top_level_block_exceeds_limit")
 
@@ -256,6 +255,17 @@ def prepare_document(
         DocumentChunk(text, block_start, len(rendered_blocks), tuple(_TOKEN.findall(text)))
     )
     return DocumentTranslationRequest(tuple(chunks), tuple(placeholders))
+
+
+def _document_block_texts(
+    source: bytes,
+    plan: SourcePlan,
+    placeholders: tuple[DocumentPlaceholder, ...],
+) -> tuple[str, ...]:
+    regions = tuple((item.source_start, item.source_end, item) for item in placeholders)
+    return tuple(
+        _render_span(source, block.span.start, block.span.end, regions) for block in plan.blocks
+    )
 
 
 def build_document_prompt(
