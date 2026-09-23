@@ -171,6 +171,7 @@ def _corrective_translation_request(
         request.prompt + correction,
         cast(FrozenJson, mutable_json(request.schema)),
         request.max_tokens,
+        request.target_path,
     )
 
 
@@ -663,6 +664,7 @@ class RuntimeContent:
                     prompt,
                     cast(FrozenJson, schema),
                     8000,
+                    entry.pair.target_path,
                 )
                 for attempt in (1, 2):
                     result = self.models.invoke(model_request)

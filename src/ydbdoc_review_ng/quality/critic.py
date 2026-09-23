@@ -144,7 +144,7 @@ def build_critic_request(
         prompt += "\n<operator-context>\n" + operator_context + "</operator-context>"
     role = ModelRole.FINAL_CRITIC if final else ModelRole.CRITIC
     schema = cast(FrozenJson, critic_schema(target_path, requested_ids))
-    return ModelRequest(role, model, prompt, schema)
+    return ModelRequest(role, model, prompt, schema, target_path=target_path)
 
 
 def parse_critic_response(

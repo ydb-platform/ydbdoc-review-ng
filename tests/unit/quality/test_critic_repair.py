@@ -119,6 +119,7 @@ def test_green_uses_one_critic_and_does_not_attempt_repair() -> None:
     assert result.original_candidate == result.final_candidate
     assert result.repaired_candidate is None
     assert [call.role.value for call in executor.calls] == ["critic"]
+    assert executor.calls[0].target_path == PATH
     assert PATH.value in executor.calls[0].prompt
 
 
@@ -177,6 +178,7 @@ def test_full_document_repair_restores_source_fragments_before_exposing_map(inva
         for placeholder in field.placeholders
     )
     assert [call.role.value for call in executor.calls] == ["critic", "repair", "final_critic"]
+    assert all(call.target_path == PATH for call in executor.calls)
     assert all("Private guidance" in call.prompt for call in executor.calls)
     if invalid_placeholder:
         assert result.repair_error is RepairErrorReason.ASSEMBLY_FAILED

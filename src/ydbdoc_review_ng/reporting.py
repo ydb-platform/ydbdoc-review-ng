@@ -5,7 +5,8 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Protocol
 
-from ydbdoc_review_ng.domain import GitSha, Mode
+from ydbdoc_review_ng.domain import GitSha, Mode, ModelRole
+from ydbdoc_review_ng.persistence import AttemptCostRecord
 from ydbdoc_review_ng.publication import GitPublicationAdapter, PublicationContext, PublicationError
 from ydbdoc_review_ng.quality import QualityReviewResult, Verdict
 
@@ -53,10 +54,65 @@ class ReportContext:
     source_sha: GitSha
     target_sha: GitSha
     job_cost_rub: Decimal | None
+    attempt_costs: tuple[AttemptCostRecord, ...] = ()
 
 
 def _line(value: str) -> str:
     return " ".join(value.split())
+
+
+def _cost(records: tuple[AttemptCostRecord, ...]) -> str:
+    if not records:
+        return "not called"
+    if any(record.cost_rub is None for record in records):
+        return "unknown"
+    total = Decimal(0)
+    for record in records:
+        assert record.cost_rub is not None
+        total += record.cost_rub
+    return f"{total} RUB"
+
+
+def _role_costs(records: tuple[AttemptCostRecord, ...]) -> str:
+    groups = (
+        ("translation", frozenset({ModelRole.TRANSLATE})),
+        ("critic", frozenset({ModelRole.CRITIC, ModelRole.FINAL_CRITIC})),
+        ("repair", frozenset({ModelRole.REPAIR})),
+    )
+    parts = [
+        f"{name} {_cost(tuple(record for record in records if record.role in roles))}"
+        for name, roles in groups
+    ]
+    parts.append(f"total {_cost(records)}")
+    return "; ".join(parts)
+
+
+def _cumulative_cost_lines(records: tuple[AttemptCostRecord, ...]) -> list[str]:
+    paths = sorted(
+        {record.target_path for record in records if record.target_path is not None},
+        key=lambda path: path.value,
+    )
+    lines = ["Cumulative PR costs by article:"]
+    if paths:
+        for path in paths:
+            article = tuple(record for record in records if record.target_path == path)
+            lines.append(f"- {path.value}: {_role_costs(article)}")
+    else:
+        lines.append("- none")
+    shared = tuple(
+        record
+        for record in records
+        if record.target_path is None and record.role is ModelRole.DIRECTION
+    )
+    historical = tuple(
+        record
+        for record in records
+        if record.target_path is None and record.role is not ModelRole.DIRECTION
+    )
+    lines.append(f"Shared PR-wide cost: direction {_cost(shared)}")
+    lines.append(f"Unattributed historical cost: {_role_costs(historical)}")
+    lines.append(f"Cumulative PR total: {_cost(records)}")
+    return lines
 
 
 def render_report(
@@ -67,11 +123,12 @@ def render_report(
 ) -> str:
     readiness = merge_readiness(commit_sha, checks)
     status = "RED" if review.final.verdict is Verdict.RED else readiness.status
-    cost = "unknown" if context.job_cost_rub is None else str(context.job_cost_rub)
+    cost = "unknown" if context.job_cost_rub is None else f"{context.job_cost_rub} RUB"
     lines = [
         status,
         f"CI: {readiness.reason}",
-        f"Current job cost: {cost} RUB",
+        f"Current job cost: {cost}",
+        *_cumulative_cost_lines(context.attempt_costs),
         f"Source SHA: {context.source_sha.value}",
         f"Target SHA: {context.target_sha.value}",
         f"Commit SHA: {commit_sha.value}",

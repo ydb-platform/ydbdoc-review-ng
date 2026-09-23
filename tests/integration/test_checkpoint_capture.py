@@ -60,6 +60,8 @@ class CaptureServices(RuntimeServices):
         self.saved_after_comment = False
 
     def execute(self, statement, parameters):
+        if "a.target_path AS target_path" in statement:
+            return super().execute(statement, parameters)
         if "/jobs`" in statement:
             if "SELECT" in statement:
                 row = self.jobs.get(parameters["job_id"])

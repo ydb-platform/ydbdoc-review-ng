@@ -6,7 +6,7 @@ from decimal import Decimal
 
 import pytest
 
-from ydbdoc_review_ng.domain import Mode, ModelRole
+from ydbdoc_review_ng.domain import GitSha, Mode, ModelRole, RepoPath
 from ydbdoc_review_ng.models import (
     AttemptError,
     AttemptResult,
@@ -15,6 +15,7 @@ from ydbdoc_review_ng.models import (
     ModelUsage,
 )
 from ydbdoc_review_ng.persistence import (
+    AttemptCostRecord,
     DailyBudgetExceeded,
     JobStatus,
     PersistenceError,
@@ -31,7 +32,7 @@ class FakeExecutor:
         self, statement: str, parameters: Mapping[str, object], /
     ) -> list[Mapping[str, object]]:
         self.calls.append((statement, parameters))
-        if "SUM(cost_rub)" in statement:
+        if "SUM(cost_rub)" in statement or "a.target_path AS target_path" in statement:
             return self.rows
         return []
 
@@ -48,12 +49,14 @@ def attempt(
     cost: Decimal | None,
     raw_response: bytes | None = b'{"translation":"Ready"}',
     error: AttemptError | None = None,
+    target_path: RepoPath | None = None,
 ) -> AttemptResult:
     request = ModelRequest(
         ModelRole.TRANSLATE,
         "yandexgpt-5.1/latest",
         "confidential source text",
         {"type": "object"},
+        target_path=target_path,
     )
     return AttemptResult(
         attempt_number=1,
@@ -89,6 +92,7 @@ def test_install_schema_creates_ttl_protected_job_and_attempt_tables() -> None:
     assert "request" in ddl and "response" in ddl
     assert "source_sha Utf8 NOT NULL" not in executor.calls[0][0]
     assert "job_id Utf8," in executor.calls[1][0]
+    assert "target_path Utf8," in executor.calls[1][0]
     assert "ON created_at" in executor.calls[2][0]
     assert "source_inventory String NOT NULL" in executor.calls[2][0]
     assert "scope_target_paths String NOT NULL" in executor.calls[2][0]
@@ -108,6 +112,19 @@ def test_existing_schema_migration_keeps_audits_and_adds_nullable_binding() -> N
     assert 'TTL = Interval("P14D") ON created_at' in statements[2]
     assert "source_inventory String NOT NULL" in statements[2]
     assert "scope_target_paths String NOT NULL" in statements[2]
+
+
+def test_cost_schema_migration_adds_nullable_article_path_only() -> None:
+    executor = FakeExecutor()
+
+    YdbPersistence(executor).migrate_cost_schema()
+
+    assert executor.calls == [
+        (
+            "ALTER TABLE `ydbdoc_review/attempts` ADD COLUMN target_path Utf8;",
+            {},
+        )
+    ]
 
 
 def test_migration_failure_does_not_echo_sdk_diagnostics() -> None:
@@ -205,7 +222,9 @@ def test_t017_f10_terminal_success_updates_final_target_sha() -> None:
 def test_attempt_recorder_stores_exact_response_and_known_nonzero_decimal_cost() -> None:
     executor = FakeExecutor()
     store = YdbPersistence(executor)
-    result = attempt(cost=Decimal("1.2300"))
+    result = attempt(
+        cost=Decimal("1.2300"), target_path=RepoPath("ydb/docs/en/core/article.md")
+    )
 
     store(result)
 
@@ -217,6 +236,7 @@ def test_attempt_recorder_stores_exact_response_and_known_nonzero_decimal_cost()
     assert params["error"] is None
     assert params["model"] == "yandexgpt-5.1/latest"
     assert params["cost_rub"] == Decimal("1.2300")
+    assert params["target_path"] == "ydb/docs/en/core/article.md"
     assert "confidential source text" not in repr(store)
     assert "Ready" not in repr(store)
 
@@ -250,6 +270,41 @@ def test_attempt_with_trusted_zero_cost_keeps_zero_known() -> None:
     YdbPersistence(executor)(attempt(cost=Decimal(0)))
 
     assert executor.calls[0][1]["cost_rub"] == Decimal(0)
+
+
+def test_attempt_costs_for_source_preserve_article_role_unknown_and_historical_rows() -> None:
+    source_sha = GitSha("a" * 40)
+    executor = FakeExecutor(
+        [
+            {
+                "target_path": "ydb/docs/en/core/a.md",
+                "role": "translate",
+                "cost_rub": Decimal("1.20"),
+            },
+            {
+                "target_path": "ydb/docs/en/core/a.md",
+                "role": "critic",
+                "cost_rub": None,
+            },
+            {"target_path": None, "role": "direction", "cost_rub": Decimal("0.10")},
+            {"target_path": None, "role": "translate", "cost_rub": Decimal("2.00")},
+        ]
+    )
+
+    costs = YdbPersistence(executor).attempt_costs_for_source(source_sha)
+
+    statement, parameters = executor.calls[0]
+    assert "INNER JOIN" in statement
+    assert "j.source_sha = $source_sha" in statement
+    assert parameters == {"source_sha": source_sha.value}
+    assert costs == (
+        AttemptCostRecord(
+            RepoPath("ydb/docs/en/core/a.md"), ModelRole.TRANSLATE, Decimal("1.20")
+        ),
+        AttemptCostRecord(RepoPath("ydb/docs/en/core/a.md"), ModelRole.CRITIC, None),
+        AttemptCostRecord(None, ModelRole.DIRECTION, Decimal("0.10")),
+        AttemptCostRecord(None, ModelRole.TRANSLATE, Decimal("2.00")),
+    )
 
 
 @pytest.mark.parametrize(

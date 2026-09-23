@@ -108,6 +108,7 @@ def initial_request_for(document: Document, field_index: int = 0) -> ModelReques
         prompt,
         cast(FrozenJson, schema),
         8000,
+        TARGET_PATH,
     )
 
 
@@ -131,6 +132,7 @@ def test_translate_document_calls_model_once_per_field_then_returns_complete_map
             "yandexgpt-5.1/latest",
             8000,
         )
+        assert call.target_path == TARGET_PATH
         schema = cast(dict[str, object], mutable_json(call.schema))
         assert schema == {
             "type": "object",
@@ -205,6 +207,7 @@ def test_translate_document_retries_one_locally_invalid_field_then_continues() -
         initial.max_tokens,
     )
     assert corrective.prompt.startswith(initial.prompt + "\n\nCorrection context:\n")
+    assert corrective.target_path == TARGET_PATH
     correction = corrective.prompt.removeprefix(initial.prompt)
     assert len(correction) < 1000
     assert first.text in corrective.prompt

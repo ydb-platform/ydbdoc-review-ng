@@ -222,8 +222,8 @@ reservation не обещается.
 YDB хранит только необходимые операционные данные:
 
 - job: режим, PR, source/target SHA, время и итоговый status/error;
-- каждая model attempt: `job_id`, роль, request, response при наличии,
-  status/error, модель, timestamps и фактическая cost;
+- каждая model attempt: `job_id`, nullable `target_path`, роль, request, response
+  при наличии, status/error, модель, timestamps и фактическая cost;
 - continuation checkpoint: `continuation_id`, исходный `job_id`, source и
   trigger PR, source/base SHA, translation branch и nullable target SHA, stage,
   versioned state, status и первоначальное время создания.
@@ -240,6 +240,14 @@ GitHub, worktree и model calls.
 фиктивный ноль. Достоверно сообщённая provider стоимость `0` сохраняется как
 ноль. Request и response не выводятся в публичные логи, GitHub comments или
 artifacts.
+
+Каждый вызов translate, critic, final critic и repair сохраняет `target_path`
+статьи. Общий direction call не относится к отдельной статье и сохраняет
+`target_path = NULL`. Накопительная стоимость полного цикла связывается по
+закреплённому `source_sha`, потому что `doc_translate` запускается на исходном
+PR, а `doc_verify` на translation PR. Старые attempts без `target_path` не
+приписываются статье задним числом и показываются отдельно как unattributed
+historical cost.
 
 Для таблиц или строк с текстами настраивается TTL 14 дней средствами YDB.
 Checkpoint state содержит только frozen direction/scope digest, accepted maps
@@ -311,6 +319,14 @@ gate не выполняется. Конкурентная атомарная re
   файл, строку, короткий searchable fragment, объяснение и ожидаемую правку.
 - Стоимость текущей job и проверенные SHA показываются без request/response
   texts и секретов.
+- Отчёт показывает накопительную стоимость полного цикла по каждой статье с
+  отдельными суммами translation, critic (включая final critic) и repair.
+  Общий direction cost показывается отдельно. Attempts старой схемы без
+  `target_path` показываются отдельно как unattributed historical cost.
+- Если provider cost хотя бы одной attempt в группе неизвестна, стоимость
+  группы и включающего её total показывается как `unknown`. Отсутствие вызовов
+  показывается как `not called`. Ни одно из этих состояний не подменяется нулём;
+  достоверный provider cost `0` остаётся нулём.
 - Merge readiness требует зелёные `doc_verify` и `build-docs` на одном SHA.
   Ожидание CI не выдаётся за GREEN.
 

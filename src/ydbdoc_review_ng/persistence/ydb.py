@@ -27,7 +27,7 @@ from ydbdoc_review_ng.continuation import (
     encode_source_inventory,
     encode_state,
 )
-from ydbdoc_review_ng.domain import GitSha, Mode, RepoPath
+from ydbdoc_review_ng.domain import GitSha, Mode, ModelRole, RepoPath
 from ydbdoc_review_ng.models import AttemptResult
 
 _MOSCOW = ZoneInfo("Europe/Moscow")
@@ -63,6 +63,23 @@ class CheckpointStatus(str, Enum):
     PENDING = "pending"
     OPEN = "open"
     CLOSED = "closed"
+
+
+@dataclass(frozen=True, slots=True)
+class AttemptCostRecord:
+    """One persisted model attempt for cumulative public cost reporting."""
+
+    target_path: RepoPath | None
+    role: ModelRole
+    cost_rub: Decimal | None
+
+    def __post_init__(self) -> None:
+        if self.target_path is not None and type(self.target_path) is not RepoPath:
+            raise TypeError("target_path must be RepoPath or None")
+        if type(self.role) is not ModelRole:
+            raise TypeError("role must be ModelRole")
+        if self.cost_rub is not None and type(self.cost_rub) is not Decimal:
+            raise TypeError("cost_rub must be Decimal or None")
 
 
 def semantic_stop_error(stage: ContinuationStage) -> str:
@@ -172,6 +189,7 @@ class YdbPersistence:
             f"""CREATE TABLE `{self._table("attempts")}` (
                 attempt_id Utf8 NOT NULL,
                 job_id Utf8,
+                target_path Utf8,
                 role Utf8 NOT NULL,
                 request String NOT NULL,
                 response String,
@@ -204,6 +222,14 @@ class YdbPersistence:
             {},
         )
         self._install_continuations()
+
+    def migrate_cost_schema(self) -> None:
+        """Explicit one-time upgrade adding per-article attempt attribution."""
+        self._execute(
+            "cost schema migration",
+            f"ALTER TABLE `{self._table('attempts')}` ADD COLUMN target_path Utf8;",
+            {},
+        )
 
     def _install_continuations(self) -> None:
         self._execute(
@@ -718,13 +744,18 @@ class YdbPersistence:
         self._execute(
             "attempt recording",
             f"""UPSERT INTO `{self._table("attempts")}`
-                (attempt_id, job_id, role, request, response, status, error, model, started_at,
-                 finished_at, cost_rub)
-                VALUES ($attempt_id, $job_id, $role, $request, $response, $status, $error, $model,
-                 $started_at, $finished_at, $cost_rub);""",
+                (attempt_id, job_id, target_path, role, request, response, status, error, model,
+                 started_at, finished_at, cost_rub)
+                VALUES ($attempt_id, $job_id, $target_path, $role, $request, $response, $status,
+                 $error, $model, $started_at, $finished_at, $cost_rub);""",
             {
                 "attempt_id": str(uuid4()),
                 "job_id": job_id,
+                "target_path": (
+                    None
+                    if attempt.request.target_path is None
+                    else attempt.request.target_path.value
+                ),
                 "role": attempt.request_role.value,
                 "request": attempt.request_payload,
                 "response": attempt.raw_response,
@@ -736,6 +767,32 @@ class YdbPersistence:
                 "cost_rub": attempt.cost_rub,
             },
         )
+
+    def attempt_costs_for_source(self, source_sha: GitSha, /) -> tuple[AttemptCostRecord, ...]:
+        """Read all lifecycle attempt costs sharing one pinned authoritative source."""
+        if type(source_sha) is not GitSha:
+            raise TypeError("source_sha must be GitSha")
+        rows = self._execute(
+            "cost breakdown lookup",
+            f"""SELECT a.target_path AS target_path, a.role AS role, a.cost_rub AS cost_rub
+                FROM `{self._table("attempts")}` AS a
+                INNER JOIN `{self._table("jobs")}` AS j ON a.job_id = j.job_id
+                WHERE j.source_sha = $source_sha;""",
+            {"source_sha": source_sha.value},
+        )
+        try:
+            return tuple(
+                AttemptCostRecord(
+                    None
+                    if row.get("target_path") is None
+                    else RepoPath(cast(str, row["target_path"])),
+                    ModelRole(cast(str, row["role"])),
+                    cast(Decimal | None, row.get("cost_rub")),
+                )
+                for row in rows
+            )
+        except (KeyError, TypeError, ValueError):
+            raise PersistenceError("invalid cost breakdown") from None
 
     def known_cost_for_moscow_date(self, day: date, /) -> Decimal:
         start_at, end_at = self._moscow_day_interval(day)

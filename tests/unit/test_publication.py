@@ -4,7 +4,8 @@ from decimal import Decimal
 import pytest
 
 from ydbdoc_review_ng.application import ImmutableRunSnapshot, WorkflowCandidate
-from ydbdoc_review_ng.domain import GitSha, Mode, RepoPath
+from ydbdoc_review_ng.domain import GitSha, Mode, ModelRole, RepoPath
+from ydbdoc_review_ng.persistence import AttemptCostRecord
 from ydbdoc_review_ng.publication import (
     FileChange,
     GitPublicationAdapter,
@@ -429,6 +430,58 @@ def test_report_contains_all_human_fields_cost_and_checked_shas():
         assert value in report
     assert report.startswith("RED")
     assert SECRET not in report
+
+
+def test_report_shows_cumulative_costs_per_article_shared_and_historical() -> None:
+    other = RepoPath("ydb/docs/en/core/other.md")
+    costs = (
+        AttemptCostRecord(PATH, ModelRole.TRANSLATE, Decimal("1.20")),
+        AttemptCostRecord(PATH, ModelRole.CRITIC, Decimal("0.30")),
+        AttemptCostRecord(PATH, ModelRole.FINAL_CRITIC, Decimal("0.10")),
+        AttemptCostRecord(other, ModelRole.TRANSLATE, Decimal("2.00")),
+        AttemptCostRecord(other, ModelRole.REPAIR, None),
+        AttemptCostRecord(None, ModelRole.DIRECTION, Decimal("0.05")),
+        AttemptCostRecord(None, ModelRole.TRANSLATE, Decimal("3.00")),
+    )
+
+    report = render_report(
+        review(), COMMIT, ReportContext(SOURCE, TARGET, Decimal("0.40"), costs), ()
+    )
+
+    assert "Current job cost: 0.40 RUB" in report
+    assert (
+        f"- {PATH.value}: translation 1.20 RUB; critic 0.40 RUB; "
+        "repair not called; total 1.60 RUB"
+    ) in report
+    assert (
+        f"- {other.value}: translation 2.00 RUB; critic not called; "
+        "repair unknown; total unknown"
+    ) in report
+    assert "Shared PR-wide cost: direction 0.05 RUB" in report
+    assert (
+        "Unattributed historical cost: translation 3.00 RUB; critic not called; "
+        "repair not called; total 3.00 RUB"
+    ) in report
+    assert "Cumulative PR total: unknown" in report
+
+
+def test_report_never_renders_unknown_cost_as_zero() -> None:
+    report = render_report(
+        review(),
+        COMMIT,
+        ReportContext(
+            SOURCE,
+            TARGET,
+            None,
+            (AttemptCostRecord(PATH, ModelRole.TRANSLATE, None),),
+        ),
+        (),
+    )
+
+    assert "Current job cost: unknown" in report
+    assert "translation unknown" in report
+    assert "Cumulative PR total: unknown" in report
+    assert "0 RUB" not in report
 
 
 @pytest.mark.parametrize(

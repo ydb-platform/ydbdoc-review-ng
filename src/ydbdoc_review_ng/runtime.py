@@ -325,7 +325,12 @@ class RuntimeReporter:
             self.source.github,
             self.publisher,
             lambda: ReportContext(
-                self.source.snapshots.source_snapshot.commit_sha, commit_sha, self.models.cost
+                self.source.snapshots.source_snapshot.commit_sha,
+                commit_sha,
+                self.models.cost,
+                self.models.persistence.attempt_costs_for_source(
+                    self.source.snapshots.source_snapshot.commit_sha
+                ),
             ),
             lambda: self.source.github.checks(commit_sha),
             verification_context=self.source.context,

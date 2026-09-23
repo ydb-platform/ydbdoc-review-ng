@@ -26,6 +26,21 @@ class RuntimeServices:
 
     def execute(self, statement, parameters):
         self.audit.append(dict(parameters))
+        if "a.target_path AS target_path" in statement:
+            job_ids = {
+                row["job_id"]
+                for row in self.audit
+                if row.get("source_sha") == parameters["source_sha"] and "mode" in row
+            }
+            return [
+                {
+                    "target_path": row.get("target_path"),
+                    "role": row["role"],
+                    "cost_rub": row.get("cost_rub"),
+                }
+                for row in self.audit
+                if "attempt_id" in row and row.get("job_id") in job_ids
+            ]
         if "SUM" in statement:
             return [{"total_cost_rub": Decimal(0)}]
         return []
@@ -165,6 +180,8 @@ class InstalledContinueServices(RuntimeServices):
         self.continuing = False
 
     def execute(self, statement, parameters):
+        if "a.target_path AS target_path" in statement:
+            return super().execute(statement, parameters)
         if "/jobs`" in statement:
             if "SELECT" in statement:
                 row = self.jobs.get(parameters["job_id"])

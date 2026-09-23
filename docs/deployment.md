@@ -29,6 +29,11 @@ printed or included in comments. Every model attempt is persisted. Explicit
 billable cost is retained; unavailable cost is NULL, not fabricated zero.
 Current-job cost is unknown if any attempt cost is unknown. The daily budget
 uses all known costs across all three modes and all roles.
+Translate, critic, final-critic and repair attempts also retain their article
+`target_path`; direction remains PR-wide. The QA comment reads cumulative costs
+for the pinned `source_sha`, breaks them down by article and role, and lists old
+rows without a path as unattributed. Unknown and not-called costs are never
+rendered as zero.
 
 ## Pinned content and publication
 
@@ -78,10 +83,10 @@ file inventory or truncated checks fails closed. No pagination subsystem exists.
 
 ## Schema setup, separately authorized
 
-Provision the database and grant access before enabling workflows. Version 1.1.0
-needs three tables under `ydbdoc_review/`. Run exactly one of the following
-commands from an installed 1.1.0 runtime environment, after deployment authorization.
-For a new database without the tables:
+Provision the database and grant access before enabling workflows. The runtime
+needs three tables under `ydbdoc_review/`. Run the applicable commands below
+from the installed runtime environment after deployment authorization. For a
+new database without the tables:
 
 ```bash
 python - <<'PY'
@@ -98,8 +103,8 @@ YdbPersistence(SDKExecutor(
 PY
 ```
 
-For an existing v1.0.x database with `jobs` and `attempts`, run the one-time
-migration instead:
+For an existing v1.0.x database with `jobs` and `attempts`, run the original
+one-time migration first:
 
 ```bash
 python - <<'PY'
@@ -116,8 +121,26 @@ YdbPersistence(SDKExecutor(
 PY
 ```
 
-Do not run migration after a fresh install. DDL is nontransactional and not
-idempotent: inspect applied statements before retrying a partially failed
+For every existing database, including one already upgraded for continuation,
+then run the separate one-time cost-attribution migration:
+
+```bash
+python - <<'PY'
+import os
+from ydbdoc_review_ng.persistence import YdbPersistence
+from ydbdoc_review_ng.runtime_ydb import DEFAULT_YDB_DATABASE, DEFAULT_YDB_ENDPOINT, SDKExecutor
+
+YdbPersistence(SDKExecutor(
+    os.environ.get("YDB_ENDPOINT", DEFAULT_YDB_ENDPOINT),
+    os.environ.get("YDB_DATABASE", DEFAULT_YDB_DATABASE),
+    os.environ.get("YDB_TOKEN", ""),
+    os.environ.get("YDB_SA_KEY", ""),
+)).migrate_cost_schema()
+PY
+```
+
+Do not run either migration after a fresh install. DDL is nontransactional and
+not idempotent: inspect applied statements before retrying a partially failed
 upgrade. No schema operation runs automatically in `create_runtime`.
 
 The migration executes these statements in order. The fresh install creates
@@ -127,6 +150,7 @@ then creates the same `continuations` table:
 ```sql
 ALTER TABLE `ydbdoc_review/attempts` ADD COLUMN job_id Utf8;
 ALTER TABLE `ydbdoc_review/jobs` ALTER COLUMN source_sha DROP NOT NULL;
+ALTER TABLE `ydbdoc_review/attempts` ADD COLUMN target_path Utf8;
 CREATE TABLE `ydbdoc_review/continuations` (
     continuation_id Utf8 NOT NULL,
     job_id Utf8 NOT NULL,
@@ -148,7 +172,8 @@ CREATE TABLE `ydbdoc_review/continuations` (
 ```
 
 `jobs` and `attempts` retain TTL `Interval("P14D") ON started_at`; old attempts
-may have NULL `job_id`. A new continuation audit starts with NULL `source_sha`
+may have NULL `job_id` or `target_path`. A new continuation audit starts with
+NULL `source_sha`
 until admission binds the saved source. Checkpoint `state` is strict JSON v1;
 `source_inventory` and `scope_target_paths` freeze replay inputs. A replacement
 checkpoint inherits `created_at`, so retrying never extends its TTL. Runtime

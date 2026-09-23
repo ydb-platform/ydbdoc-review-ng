@@ -10,7 +10,7 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Protocol, TypeAlias, cast
 
-from ydbdoc_review_ng.domain import ModelRole
+from ydbdoc_review_ng.domain import ModelRole, RepoPath
 
 JsonScalar: TypeAlias = None | bool | int | float | str
 FrozenJson: TypeAlias = JsonScalar | tuple["FrozenJson", ...] | Mapping[str, "FrozenJson"]
@@ -58,6 +58,7 @@ class ModelRequest:
     prompt: str = field(repr=False)
     schema: FrozenJson = field(repr=False)
     max_tokens: int = 2000
+    target_path: RepoPath | None = None
 
     def __post_init__(self) -> None:
         if type(self.role) is not ModelRole:
@@ -68,6 +69,8 @@ class ModelRequest:
             raise ValueError("prompt must be a non-empty string")
         if type(self.max_tokens) is not int or self.max_tokens < 1:
             raise ValueError("max_tokens must be a positive integer")
+        if self.target_path is not None and type(self.target_path) is not RepoPath:
+            raise TypeError("target_path must be RepoPath or None")
         object.__setattr__(self, "schema", freeze_json(self.schema))
 
 

@@ -261,7 +261,16 @@ def _repair_request(
         "required": list(subset.requested_ids),
         "additionalProperties": False,
     }
-    return ModelRequest(ModelRole.REPAIR, model, prompt, cast(FrozenJson, schema)), subset
+    return (
+        ModelRequest(
+            ModelRole.REPAIR,
+            model,
+            prompt,
+            cast(FrozenJson, schema),
+            target_path=target_path,
+        ),
+        subset,
+    )
 
 
 def review_translation(
