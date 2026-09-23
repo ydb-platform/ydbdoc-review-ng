@@ -1,17 +1,26 @@
 # Проверенный алгоритм перевода
 
-## Поля и protected fragments
+## Целый документ и protected fragments
 
-Parser выделяет цельные переводимые поля и точные protected source fragments.
-Ответ модели является JSON map `field_id → string`. Локально проверяются exact
-requested IDs, строковые значения, отсутствие duplicate/extra keys, точное
-множество placeholders и корректные container pairs.
+Единица перевода по умолчанию, целый source Markdown/YFM документ. Parser
+находит только непрозрачные source fragments: URL, paths, anchors, identifiers,
+templates, inline code, нетранслируемый код и служебные конструкции. Они
+заменяются уникальными placeholders, а Markdown/YFM-разметка и вся переводимая
+проза остаются видимы модели. Модель получает явное направление RU→EN или EN→RU
+и возвращает только целый переведённый Markdown.
 
-После проверки placeholders заменяются исходными bytes, candidate собирается и
-повторно разбирается как Markdown/YFM. Невалидный ответ не попадает в сборщик.
-При `doc_verify` те же exact source fragments сверяются с текущим target:
-ручное изменение URL, path или code относительно authoritative source
-отвергается без отдельного navigation graph или link resolver.
+Если документ не помещается в лимит запроса, он делится на минимальное число
+крупных чанков по безопасным границам верхнеуровневых блоков. Внутри одного
+чанка модель по-прежнему видит связный Markdown, а не отдельные предложения или
+поля. Ответы собираются строго в исходном порядке.
+
+До восстановления проверяются точное множество placeholders, единственность и
+порядок каждого токена. Затем placeholders заменяются исходными fragments,
+candidate повторно разбирается как Markdown/YFM и проверяется на совместимость
+структуры. Невалидный ответ получает не более одной технической попытки
+исправления с конкретной ошибкой валидатора. При `doc_verify` те же protected
+fragments сверяются с текущим target: ручное изменение URL, path или code
+относительно authoritative source отвергается.
 
 ## Fenced comments
 
@@ -29,8 +38,9 @@ Scanner различает маркеры и те же символы внутр
 После первой валидной публикации critic сравнивает authoritative source и final
 target целиком или крупными осмысленными блоками. Он проверяет точность,
 полноту, термины и ссылки. Для исправимого finding разрешена одна repair
-attempt, затем обязательны повторная сборка, локальные validators, parse и final
-critic. Следующих repair attempts нет.
+attempt, которая возвращает целый исправленный Markdown. Затем обязательны
+восстановление protected fragments, локальные validators, parse и final critic.
+Следующих repair attempts нет.
 
 Технический transport retry может быть bounded, но не превращается в
 сохраняемую state machine или механизм продолжения.
