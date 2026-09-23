@@ -19,6 +19,7 @@ from ydbdoc_review_ng.application.workflows import (
     WorkflowStage,
 )
 from ydbdoc_review_ng.domain import GitSha, Mode
+from ydbdoc_review_ng.errors import SafeDiagnosticError
 from ydbdoc_review_ng.persistence import DailyBudgetExceeded, JobStatus
 from ydbdoc_review_ng.quality import (
     CriticResult,
@@ -38,6 +39,7 @@ SECRET = "confidential-source-and-model-payload"
 @dataclass
 class Scenario:
     fail_once_at: set[str] = field(default_factory=set)
+    safe_fail_once_at: set[str] = field(default_factory=set)
     repair: bool = False
     invalid_repair: bool = False
     mixed_locale: bool = False
@@ -47,6 +49,9 @@ class Scenario:
 
     def hit(self, event: str) -> None:
         self.events.append(event)
+        if event in self.safe_fail_once_at:
+            self.safe_fail_once_at.remove(event)
+            raise SafeDiagnosticError("continue_checkpoint_missing")
         if event in self.fail_once_at:
             self.fail_once_at.remove(event)
             if event == "budget":
@@ -521,6 +526,18 @@ def test_t017_r08_failed_before_any_target_is_known_audits_null_sha() -> None:
         workflows.doc_translate(translate_input())
 
     assert persistence.finished_target_shas == [None]
+
+
+def test_fixed_boundary_diagnostic_survives_workflow_redaction() -> None:
+    scenario = Scenario(safe_fail_once_at={"authorize:translate"})
+    workflows, persistence = build_workflows(scenario)
+
+    with pytest.raises(WorkflowError) as raised:
+        workflows.doc_translate(translate_input())
+
+    assert raised.value.diagnostic == "continue_checkpoint_missing"
+    assert str(raised.value).endswith(": continue_checkpoint_missing")
+    assert persistence.finished_errors == ["authorize_failed"]
 
 
 @pytest.mark.parametrize(

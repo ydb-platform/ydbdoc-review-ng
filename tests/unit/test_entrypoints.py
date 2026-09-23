@@ -13,6 +13,7 @@ from ydbdoc_review_ng.application import (
 )
 from ydbdoc_review_ng.cli import main
 from ydbdoc_review_ng.domain import GitSha, Mode
+from ydbdoc_review_ng.errors import SafeDiagnosticError
 from ydbdoc_review_ng.persistence import DailyBudgetExceeded
 from ydbdoc_review_ng.quality import Verdict
 
@@ -144,6 +145,24 @@ def test_sanitized_workflow_failure_exposes_only_mode_and_stage(capsys) -> None:
     assert (
         capsys.readouterr().err
         == "doc_translate workflow failed during prepare; inspect the job audit\n"
+    )
+
+
+def test_sanitized_workflow_failure_exposes_fixed_boundary_diagnostic(capsys) -> None:
+    class FailedDispatcher(Dispatcher):
+        def doc_continue(self, request):
+            super().doc_continue(request)
+            raise WorkflowError(
+                Mode.DOC_CONTINUE,
+                WorkflowStage.AUTHORIZE,
+                SafeDiagnosticError("continue_checkpoint_missing"),
+            )
+
+    assert main(["continue", "--pr", "50858"], dispatcher=FailedDispatcher()) == 1
+    assert (
+        capsys.readouterr().err
+        == "doc_continue workflow failed during authorize: "
+        "continue_checkpoint_missing; inspect the job audit\n"
     )
 
 

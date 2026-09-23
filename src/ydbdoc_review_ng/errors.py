@@ -4,10 +4,28 @@ __all__ = [
     "DomainError",
     "InvariantViolation",
     "MalformedPayload",
+    "SafeDiagnosticError",
     "SerializationError",
     "UnknownDomainType",
     "UnsupportedSchemaVersion",
 ]
+
+class SafeDiagnosticError(RuntimeError):
+    """An internal, payload-free diagnostic code safe for operator output."""
+
+    def __init__(self, code: str, /) -> None:
+        if (
+            type(code) is not str
+            or not code
+            or len(code) > 80
+            or not code.isascii()
+            or not code.isidentifier()
+            or not code.islower()
+            or not code[0].isalpha()
+        ):
+            raise ValueError("invalid safe diagnostic code")
+        self.code = code
+        super().__init__(code)
 
 
 class DomainError(ValueError):

@@ -15,6 +15,7 @@ from ydbdoc_review_ng.continuation import (
     SourceChangeInventory,
 )
 from ydbdoc_review_ng.domain import GitSha, Mode, RepoPath
+from ydbdoc_review_ng.errors import SafeDiagnosticError
 from ydbdoc_review_ng.persistence import (
     ContinuationCheckpoint,
     DailyBudgetExceeded,
@@ -48,12 +49,22 @@ class WorkflowStage(str, Enum):
 
 
 class WorkflowError(RuntimeError):
-    """A stage-only workflow failure that cannot retain boundary payloads."""
+    """A workflow failure retaining only stage and an optional safe code."""
 
-    def __init__(self, mode: Mode, stage: WorkflowStage, /) -> None:
+    def __init__(
+        self,
+        mode: Mode,
+        stage: WorkflowStage,
+        diagnostic: SafeDiagnosticError | None = None,
+        /,
+    ) -> None:
         self.mode = mode
         self.stage = stage
-        super().__init__(f"{mode.value} workflow failed during {stage.value}")
+        self.diagnostic = None if diagnostic is None else diagnostic.code
+        message = f"{mode.value} workflow failed during {stage.value}"
+        if self.diagnostic is not None:
+            message += f": {self.diagnostic}"
+        super().__init__(message)
 
 
 @dataclass(frozen=True, slots=True)
@@ -803,6 +814,7 @@ class LinearWorkflows:
         target_sha: GitSha | None,
     ) -> NoReturn:
         is_quota = stage is WorkflowStage.BUDGET and isinstance(error, DailyBudgetExceeded)
+        diagnostic = error if isinstance(error, SafeDiagnosticError) else None
         safe_error = DailyBudgetExceeded.user_message if is_quota else f"{stage.value}_failed"
         self._record_failed_terminal(
             job_id,
@@ -813,7 +825,7 @@ class LinearWorkflows:
         )
         if is_quota:
             raise DailyBudgetExceeded from None
-        raise WorkflowError(mode, stage) from None
+        raise WorkflowError(mode, stage, diagnostic) from None
 
     def _record_failed_terminal(
         self,

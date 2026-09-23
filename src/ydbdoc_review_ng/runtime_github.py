@@ -14,13 +14,14 @@ from datetime import datetime
 from typing import Any
 
 from ydbdoc_review_ng.domain import GitSha, RepoPath, SnapshotRef
+from ydbdoc_review_ng.errors import SafeDiagnosticError
 from ydbdoc_review_ng.publication import PublicationContext, PublicationPlan
 from ydbdoc_review_ng.reporting import CheckResult, Comment
 
 JsonTransport = Callable[[str, str, object], Any]
 
 
-class RuntimeBoundaryError(RuntimeError):
+class RuntimeBoundaryError(SafeDiagnosticError):
     """Only fixed diagnostics cross a remote-service boundary."""
 
 
