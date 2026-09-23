@@ -7,7 +7,9 @@ from ydbdoc_review_ng.application import (
     ContinueWorkflowInput,
     TranslateWorkflowInput,
     VerifyWorkflowInput,
+    WorkflowError,
     WorkflowResult,
+    WorkflowStage,
 )
 from ydbdoc_review_ng.cli import main
 from ydbdoc_review_ng.domain import GitSha, Mode
@@ -130,6 +132,19 @@ def test_t017_f13_quota_message_is_exact_while_arbitrary_errors_stay_redacted(ca
     error = capsys.readouterr().err
     assert error == "Workflow failed; inspect the job audit\n"
     assert "private-token" not in error
+
+
+def test_sanitized_workflow_failure_exposes_only_mode_and_stage(capsys) -> None:
+    class FailedDispatcher(Dispatcher):
+        def doc_translate(self, request):
+            super().doc_translate(request)
+            raise WorkflowError(Mode.DOC_TRANSLATE, WorkflowStage.PREPARE)
+
+    assert main(VALID_ARGUMENTS["translate"], dispatcher=FailedDispatcher()) == 1
+    assert (
+        capsys.readouterr().err
+        == "doc_translate workflow failed during prepare; inspect the job audit\n"
+    )
 
 
 @pytest.mark.parametrize(

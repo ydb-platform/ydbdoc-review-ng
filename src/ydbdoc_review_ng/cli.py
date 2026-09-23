@@ -64,6 +64,7 @@ def main(
         ContinueWorkflowInput,
         TranslateWorkflowInput,
         VerifyWorkflowInput,
+        WorkflowError,
         WorkflowResult,
     )
     from ydbdoc_review_ng.domain import GitSha
@@ -100,6 +101,9 @@ def main(
             return 1
     except DailyBudgetExceeded:
         print(DailyBudgetExceeded.user_message, file=sys.stderr)
+        return 1
+    except WorkflowError as error:
+        print(f"{error}; inspect the job audit", file=sys.stderr)
         return 1
     except Exception:  # noqa: BLE001 - workflow/transport diagnostics stay in audit.
         print("Workflow failed; inspect the job audit", file=sys.stderr)
