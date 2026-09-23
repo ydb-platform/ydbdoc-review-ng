@@ -23,6 +23,7 @@ from ydbdoc_review_ng.scope import FileOperation, ScopeEntry, ScopeOrigin
 from ydbdoc_review_ng.translation import (
     DocumentTranslationError,
     assemble_candidate,
+    build_document_prompt,
     build_translation_request,
     prepare_document,
 )
@@ -144,6 +145,49 @@ def test_prompt_limit_failure_happens_before_model_call() -> None:
         ).translate_document(document)
 
     assert models.calls == []
+
+
+def test_near_limit_correction_reservation_fails_before_model_call() -> None:
+    document = document_for(b"# See [guide](guide.md).\n")
+    prepared = prepare_document(document.source, document.plan, max_characters=100_000)
+    invalid = prepared.chunks[0].text.replace(prepared.placeholders[0].token, "", 1)
+    models = ScriptedModels([invalid])
+    operator_context = "Reviewer context"
+    initial_prompt = (
+        build_document_prompt(prepared.chunks[0], "ru", "en")
+        + "\n\nOperator context:\n"
+        + operator_context
+    )
+    assert len(initial_prompt) == 589
+
+    with pytest.raises(DocumentTranslationError, match="top_level_block_exceeds_limit"):
+        content_with(
+            models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "589"}
+        ).translate_document(document, operator_context=operator_context)
+
+    assert models.calls == []
+
+
+def test_multiblock_unit_reserves_exactly_two_calls_within_limit() -> None:
+    source = b"\n\n".join(
+        (
+            b"Paragraph one has thirty seven letters.",
+            b"Paragraph two has thirty seven letters.",
+            b"Paragraph three has thirty five chars.",
+        )
+    ) + b"\n"
+    document = document_for(source)
+    valid = source.decode()
+    invalid = valid.replace("\n\n", "\n", 1)
+    models = ScriptedModels([invalid, valid])
+    operator_context = "Reviewer context"
+
+    content_with(
+        models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "900"}
+    ).translate_document(document, operator_context=operator_context)
+
+    assert len(models.calls) == 2
+    assert all(len(call.prompt) <= 900 for call in models.calls)
 
 
 def test_translation_trace_is_payload_free(capsys: pytest.CaptureFixture[str]) -> None:

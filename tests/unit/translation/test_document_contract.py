@@ -118,18 +118,37 @@ def test_configured_limit_applies_to_each_complete_prompt_with_minimum_chunks() 
         )
     ) + b"\n"
     plan = build_markdown_plan(SNAPSHOT, PATH, source)
+    operator_context = "Reviewer context"
 
     request = prepare_document(
         source,
         plan,
-        max_characters=600,
+        max_characters=900,
         source_locale="ru",
         target_locale="en",
+        operator_context=operator_context,
     )
-    prompts = tuple(build_document_prompt(chunk, "ru", "en") for chunk in request.chunks)
+    prompts = tuple(
+        (
+            build_document_prompt(chunk, "ru", "en")
+            + "\n\nOperator context:\n"
+            + operator_context,
+            build_document_prompt(
+                chunk,
+                "ru",
+                "en",
+                correction=True,
+                rejected_translation=chunk.text,
+                validator_error="document_response:placeholder_mismatch",
+            )
+            + "\n\nOperator context:\n"
+            + operator_context,
+        )
+        for chunk in request.chunks
+    )
 
-    assert len(request.chunks) == 3
-    assert all(len(prompt) <= 600 for prompt in prompts)
+    assert len(request.chunks) == 2
+    assert all(len(prompt) <= 900 for pair in prompts for prompt in pair)
     assert "".join(chunk.text for chunk in request.chunks).encode() == source
     assert all(
         left.block_end == right.block_start

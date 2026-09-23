@@ -195,14 +195,22 @@ def prepare_document(
     def fits(text: str, block_start: int, block_end: int) -> bool:
         if source_locale is None or target_locale is None:
             return len(text) <= max_characters
-        prompt = build_document_prompt(
-            DocumentChunk(text, block_start, block_end, tuple(_TOKEN.findall(text))),
-            source_locale,
-            target_locale,
-        )
+        chunk = DocumentChunk(text, block_start, block_end, tuple(_TOKEN.findall(text)))
+        prompts = [
+            build_document_prompt(chunk, source_locale, target_locale),
+            build_document_prompt(
+                chunk,
+                source_locale,
+                target_locale,
+                correction=True,
+                rejected_translation=text,
+                validator_error="document_response:placeholder_mismatch",
+            ),
+        ]
         if operator_context is not None:
-            prompt += "\n\nOperator context:\n" + operator_context
-        return len(prompt) <= max_characters
+            suffix = "\n\nOperator context:\n" + operator_context
+            prompts = [prompt + suffix for prompt in prompts]
+        return all(len(prompt) <= max_characters for prompt in prompts)
 
     if not plan.blocks:
         if not fits("", 0, 0):
