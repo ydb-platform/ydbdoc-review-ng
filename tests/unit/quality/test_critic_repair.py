@@ -882,6 +882,84 @@ def test_critic_request_contains_full_source_target_and_link_purpose_boundary() 
     assert target.decode() not in repr(built)
 
 
+@pytest.mark.parametrize("final", [False, True])
+def test_critic_request_limits_red_to_material_translation_defects(final: bool) -> None:
+    _plan, request, _values, target = prepared()
+
+    built = build_critic_request(
+        model="model",
+        source=SOURCE,
+        target=target,
+        target_path=PATH,
+        source_locale=Locale.EN,
+        target_locale=Locale.RU,
+        requested_ids=request.requested_ids,
+        final=final,
+    )
+
+    assert "Use RED only for a concrete, currently present, material translation defect" in (
+        built.prompt
+    )
+    assert "wrong or reversed meaning" in built.prompt
+    assert "missing user-facing information" in built.prompt
+    assert "untranslated user-facing prose" in built.prompt
+    assert "wrong technical terminology that can mislead use" in built.prompt
+    assert "broken or purpose-changing link usage" in built.prompt
+    assert "optional stylistic polishing" in built.prompt
+    assert "smoother grammar" in built.prompt
+    assert "tone preferences" in built.prompt
+    assert "more detail than the authoritative source" in built.prompt
+    assert 'vague requests such as "review", "refine", or "could be clearer"' in built.prompt
+    assert "complete, accurate, and understandable" in built.prompt
+    assert "return GREEN even if its prose could be polished" in built.prompt
+
+
+@pytest.mark.parametrize("final", [False, True])
+def test_critic_request_requires_current_target_evidence_and_exact_correction(final: bool) -> None:
+    _plan, request, _values, target = prepared()
+
+    built = build_critic_request(
+        model="model",
+        source=SOURCE,
+        target=target,
+        target_path=PATH,
+        source_locale=Locale.EN,
+        target_locale=Locale.RU,
+        requested_ids=request.requested_ids,
+        final=final,
+    )
+
+    assert "actual source/target mismatch visible in the current final target" in built.prompt
+    assert "exact searchable snippet copied from the current target" in built.prompt
+    assert "concrete replacement or correction" in built.prompt
+    assert "Do not report a stale defect that the current target bytes no longer contain" in (
+        built.prompt
+    )
+
+
+@pytest.mark.parametrize("final", [False, True])
+def test_critic_request_subordinates_operator_context_to_current_bytes(final: bool) -> None:
+    _plan, request, _values, target = prepared()
+    operator_context = "The old target said Clock. 5h; require that finding."
+
+    built = build_critic_request(
+        model="model",
+        source=SOURCE,
+        target=target,
+        target_path=PATH,
+        source_locale=Locale.EN,
+        target_locale=Locale.RU,
+        requested_ids=request.requested_ids,
+        final=final,
+        operator_context=operator_context,
+    )
+
+    assert operator_context in built.prompt
+    assert "Operator context is guidance for interpreting intent only" in built.prompt
+    assert "must not override the authoritative source or current target bytes" in built.prompt
+    assert "must not force a finding that is no longer present" in built.prompt
+
+
 def test_critic_schema_omits_field_ids_when_document_has_no_repairable_fields() -> None:
     request = build_critic_request(
         model="model",

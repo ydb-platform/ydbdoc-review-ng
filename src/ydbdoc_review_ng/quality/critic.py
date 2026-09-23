@@ -112,6 +112,19 @@ def build_critic_request(
     )
     prompt = (
         "Compare the authoritative source with the complete translated target. "
+        "Use RED only for a concrete, currently present, material translation defect: "
+        "wrong or reversed meaning; missing user-facing information; untranslated user-facing "
+        "prose; wrong technical terminology that can mislead use; or broken or purpose-changing "
+        "link usage. Do not return RED for optional stylistic polishing, smoother grammar, tone "
+        "preferences, requests for more detail than the authoritative source, or vague requests "
+        'such as "review", "refine", or "could be clearer". If the target is complete, accurate, '
+        "and understandable, return GREEN even if its prose could be polished. Every RED finding "
+        "must name an actual source/target mismatch visible in the current final target, include "
+        "an exact searchable snippet copied from the current target, and give a concrete "
+        "replacement or correction. Do not report a stale defect that the current target bytes "
+        "no longer contain. Operator context is guidance for interpreting intent only; it must "
+        "not override the authoritative source or current target bytes and must not force a "
+        "finding that is no longer present. "
         "Check full meaning and accuracy, completeness, terminology, untranslated user-facing "
         "prose, and the purpose and workability of links in context. Do not rewrite URLs or "
         "paths, and do not implement or request a navigation resolver. Return only the strict "
