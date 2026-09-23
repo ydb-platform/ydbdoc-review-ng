@@ -791,6 +791,7 @@ class RuntimeContent:
 
         for document in documents:
             path = document.entry.pair.target_path
+            restored_map = previous.get(path)
             target = files[path.value]
             assert target is not None
 
@@ -821,8 +822,8 @@ class RuntimeContent:
                 target_locale=document.entry.pair.target_locale,
                 before_final_critic=None if selective else publish,
                 allow_repair=not attempted,
-                accepted_map=previous.get(path),
-                full_repair=selective,
+                accepted_map=restored_map,
+                full_repair=selective and restored_map is None,
                 operator_context=self.review_operator_context,
                 before_model_call=check_head if selective else None,
                 before_repaired_map=publish_map if selective else None,

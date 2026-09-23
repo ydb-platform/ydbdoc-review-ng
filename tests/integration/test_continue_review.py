@@ -30,6 +30,7 @@ class ReviewServices(LifecycleServices):
         self.calls = []
         self.timeline = []
         self.repair_payload = None
+        self.repair_uses_current_values = False
         self.move_after = None
         self.waiting_ci = False
         self.move_during_report = False
@@ -110,7 +111,11 @@ class ReviewServices(LifecycleServices):
         else:
             fields, _ = json.JSONDecoder().raw_decode(prompt.split("Allowed fields: ", 1)[1])
             values = {
-                item["field_id"]: item["source_field_text"].replace("Source", "Repaired")
+                item["field_id"]: (
+                    item["current_translated_value"]
+                    if self.repair_uses_current_values
+                    else item["source_field_text"].replace("Source", "Repaired")
+                )
                 for item in fields
             }
         if self.move_after == role:
@@ -175,7 +180,7 @@ def test_green_review_only_updates_current_verdict_and_consumes_without_commit(c
     assert services.roles == ["critic"]
 
 
-def test_repair_replaces_full_document_map_and_publishes_before_final_critic():
+def test_repair_merges_selected_field_into_restored_map_before_final_critic():
     services = ReviewServices(names=("a", "b"))
     saved = services.start_review()
     green = services.files[EN + "a.md"]
@@ -196,19 +201,24 @@ def test_repair_replaces_full_document_map_and_publishes_before_final_critic():
         "checkpoint",
     ]
     assert services.files[EN + "a.md"] == green
-    assert services.files[EN + "b.md"] == b"# Repaired b\n\nRepaired detail b\n"
+    assert services.files[EN + "b.md"] == b"# Repaired b\n\nTranslated\n"
     assert following.state.accepted_maps[0] == saved.state.accepted_maps[0]
-    assert set(following.state.accepted_maps[1].as_dict().values()) == {
-        "Repaired b",
-        "Repaired detail b",
-    }
-    assert len(services.calls[1][2]["properties"]) == 2
+    assert set(following.state.accepted_maps[1].as_dict().values()) == {"Repaired b", "Translated"}
+    repair_prompt = services.prompts[1][1]
+    allowed_fields, _ = json.JSONDecoder().raw_decode(
+        repair_prompt.split("Allowed fields: ", 1)[1]
+    )
+    assert len(allowed_fields) == 1
+    assert set(services.calls[1][2]["properties"]) == {allowed_fields[0]["field_id"]}
+    assert allowed_fields[0]["source_field_text"] == "Source b"
+    assert allowed_fields[0]["current_translated_value"] == "Translated"
+    assert "Source detail b" not in repair_prompt
     assert following.target_sha == result.final_commit_sha
     assert following.state.candidate_sha256 == candidate_sha256(
         pack(
             {
                 EN + "a.md": green,
-                EN + "b.md": b"# Repaired b\n\nRepaired detail b\n",
+                EN + "b.md": b"# Repaired b\n\nTranslated\n",
             }
         )
     )
@@ -287,8 +297,10 @@ def test_pinned_rename_review_never_derives_maps_from_target_and_replays_metadat
         "previous_filename": RU + "old.md",
         "changes": 0,
     }
-    pinned = b"# Whole pinned translation\n\n```sql\nSELECT 1;\n```\n"
+    source = b"# Source a\n\nSource detail a\n\n```sql\nSELECT 1;\n```\n"
+    pinned = b"# Whole pinned translation\n\nWhole pinned detail\n\n```sql\nSELECT 1;\n```\n"
     for tree in [services.files, *services.snapshots.values()]:
+        tree[RU + "a.md"] = source
         tree.pop(EN + "a.md")
         tree[EN + "old.md"] = pinned
         tree[EN + "toc.yaml"] = b"items:\n  - name: Old\n    href: old.md\n"
@@ -306,10 +318,17 @@ def test_pinned_rename_review_never_derives_maps_from_target_and_replays_metadat
     assert services.roles == (
         ["critic", "repair", "critic", "critic"] if repair else ["critic", "critic"]
     )
+    if repair:
+        repair_prompt = services.prompts[1][1]
+        allowed_fields, _ = json.JSONDecoder().raw_decode(
+            repair_prompt.split("Allowed fields: ", 1)[1]
+        )
+        assert len(allowed_fields) == len(services.calls[1][2]["properties"]) == 2
+        assert all("current_translated_value" not in field for field in allowed_fields)
     following = services.checkpoint()
     assert following.state.review_paths == saved.state.review_paths[:1]
     assert services.files[EN + "a.md"] == (
-        b"# Repaired a\n\n```sql\nSELECT 1;\n```\n" if repair else pinned
+        b"# Repaired a\n\nRepaired detail a\n\n```sql\nSELECT 1;\n```\n" if repair else pinned
     )
     assert {
         path: value for path, value in services.files.items() if path.endswith(".yaml")
@@ -382,13 +401,12 @@ def test_head_movement_blocks_later_models_publication_and_verdict(move_after):
     assert services.rows[saved.continuation_id]["status"] == "open"
 
 
-def test_invalid_full_map_keeps_candidate_and_still_gets_final_critic():
+def test_invalid_selected_map_keeps_candidate_and_still_gets_final_critic():
     services = ReviewServices(names=("a", "b"))
     saved = services.start_review()
     before = dict(services.files)
     services.outcomes = {EN + "b.md": ["repair", "red"]}
-    first_id = saved.state.accepted_maps[1].fields[0][0]
-    services.repair_payload = json.dumps({first_id: "Only one field"})
+    services.repair_payload = json.dumps({})
     result = services.resume()
     assert result.verdict is Verdict.RED and not result.repair_applied
     assert services.roles == ["critic", "repair", "critic"]
@@ -396,11 +414,11 @@ def test_invalid_full_map_keeps_candidate_and_still_gets_final_critic():
     assert services.checkpoint().state.accepted_maps == saved.state.accepted_maps
 
 
-def test_byte_identical_full_repair_reports_existing_sha_without_empty_commit():
+def test_byte_identical_selected_repair_reports_existing_sha_without_empty_commit():
     services = ReviewServices(names=("a", "b"))
     saved = services.start_review()
     services.outcomes = {EN + "b.md": ["repair", "green"]}
-    services.repair_payload = json.dumps(saved.state.accepted_maps[1].as_dict())
+    services.repair_uses_current_values = True
     result = services.resume()
     assert result.verdict is Verdict.GREEN and result.repair_applied
     assert result.final_commit_sha == saved.target_sha
