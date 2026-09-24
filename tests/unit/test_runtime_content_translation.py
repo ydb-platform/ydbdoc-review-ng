@@ -36,7 +36,9 @@ from ydbdoc_review_ng.translation import (
     build_document_prompt,
     build_translation_request,
     prepare_document,
+    split_content_filter_chunk,
 )
+from ydbdoc_review_ng.translation.document import _document_block_texts
 
 SOURCE_PATH = RepoPath("ydb/docs/ru/core/page.md")
 TARGET_PATH = RepoPath("ydb/docs/en/core/page.md")
@@ -488,6 +490,39 @@ def test_complete_markdown_response_gets_exactly_one_technical_correction() -> N
     assert prepared.chunks[0].text in correction
     assert f"Rejected translation:\n{invalid}" in correction
     assert "Validator error: document_response:placeholder_mismatch" in correction
+
+
+def test_exhausted_invalid_large_chunk_splits_once_at_safe_boundary() -> None:
+    source = content_filter_witness() + b"## See [guide](guide.md).\n"
+    document = document_for(source)
+    prepared = prepare_document(
+        source,
+        document.plan,
+        max_characters=250_000,
+        source_locale="ru",
+        target_locale="en",
+    )
+    assert len(prepared.chunks) == 1
+    parent = prepared.chunks[0]
+    invalid = parent.text.replace(prepared.placeholders[0].token, "", 1)
+    block_texts = _document_block_texts(source, document.plan, prepared.placeholders)
+    children = split_content_filter_chunk(parent, block_texts)
+    assert children is not None
+    models = ScriptedModels([invalid, invalid, children[0].text, children[1].text])
+
+    accepted = content_with(
+        models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "250000"}
+    ).translate_document(document)
+
+    assert len(models.calls) == 4
+    assert "Correct the previous invalid translation" in models.calls[1].prompt
+    assert tuple(call.prompt.split("\n\n", 1)[1] for call in models.calls[2:]) == tuple(
+        child.text for child in children
+    )
+    assert (
+        assemble_candidate(document.source, document.plan, document.request, accepted.as_dict())
+        == source
+    )
 
 
 def test_provider_failure_is_not_semantically_retried() -> None:

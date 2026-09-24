@@ -91,7 +91,10 @@ from ydbdoc_review_ng.translation import (
     validate_translation_values,
     verify_document_candidate,
 )
-from ydbdoc_review_ng.translation.document import _document_block_texts
+from ydbdoc_review_ng.translation.document import (
+    RAW_MARKDOWN_RESPONSE_MAX_CHARACTERS,
+    _document_block_texts,
+)
 
 if TYPE_CHECKING:
     from ydbdoc_review_ng.persistence import ContinuationCheckpoint
@@ -911,19 +914,34 @@ class RuntimeContent:
                 chunk_index=chunk_index,
                 chunks_total=len(prepared.chunks),
             ):
-                accepted_response, failure, failed_on_primary = invoke_chunk(
-                    chunk, chunk_index
-                )
+                invalid_response = False
+                try:
+                    accepted_response, failure, failed_on_primary = invoke_chunk(
+                        chunk, chunk_index
+                    )
+                except InvalidTranslationResponse:
+                    accepted_response = None
+                    failure = None
+                    failed_on_primary = False
+                    invalid_response = True
                 if accepted_response is not None:
                     effective_chunks.append(chunk)
                     responses.append(accepted_response)
                     continue
                 children = (
                     split_content_filter_chunk(chunk, block_texts)
-                    if failure is AttemptError.CONTENT_FILTER and failed_on_primary
+                    if (
+                        invalid_response
+                        and len(chunk.text) > RAW_MARKDOWN_RESPONSE_MAX_CHARACTERS // 2
+                    )
+                    or (failure is AttemptError.CONTENT_FILTER and failed_on_primary)
                     else None
                 )
                 if children is None:
+                    if invalid_response:
+                        raise InvalidTranslationResponse(
+                            "translation_response_invalid"
+                        ) from None
                     raise RuntimeBoundaryError("translation_model_failed")
                 for child in children:
                     child_response, _child_failure, _child_primary = invoke_chunk(
