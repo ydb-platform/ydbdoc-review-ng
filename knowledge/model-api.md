@@ -20,6 +20,10 @@
   boundary. Два child request имеют обычный `max_attempts = 2`, больше не
   делятся и не перезапускают успешные соседние chunks; correction и другие
   provider errors этот split не включают.
+- В raw-Markdown prompts каждый placeholder требуется ровно один раз в своём
+  source top-level block. Только независимые `inline_code` и атомарные `template`
+  могут менять порядок внутри переводимого поля; остальные placeholders и
+  link/image пары сохраняют порядок и вложенность.
 
 ## Проверенные модели
 

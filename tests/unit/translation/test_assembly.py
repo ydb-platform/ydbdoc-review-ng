@@ -490,6 +490,31 @@ def test_verify_accepts_translated_prose_with_unchanged_protected_fragments() ->
     )
 
 
+def test_verify_allows_inline_code_and_template_reorder_inside_one_field() -> None:
+    source = b"Use `FIRST`, then {{ second }}.\n"
+    target = b"Use {{ second }}, then `FIRST`.\n"
+
+    verify_protected_fragments(
+        source,
+        build_markdown_plan(SNAPSHOT, PATH, source),
+        target,
+        build_markdown_plan(SNAPSHOT, PATH, target),
+    )
+
+
+def test_verify_rejects_non_mobile_path_reorder_inside_one_field() -> None:
+    source = b"Read first.md before second.md.\n"
+    target = b"Read second.md before first.md.\n"
+
+    with pytest.raises(ProtectedMismatch):
+        verify_protected_fragments(
+            source,
+            build_markdown_plan(SNAPSHOT, PATH, source),
+            target,
+            build_markdown_plan(SNAPSHOT, PATH, target),
+        )
+
+
 def test_linked_image_restores_both_source_urls_and_preserves_translated_alt_text() -> None:
     source = b"[![diagram](/good.png)](/outer)\n"
     plan, request = prepared(source)

@@ -236,7 +236,9 @@ def _repair_prompt(
     prompt = (
         "Repair the complete translated Markdown for the listed problems. Return Markdown only, "
         "without JSON, explanations, or an outer code fence. Preserve Markdown/YFM structure "
-        "and every [[YDBDOC_PROTECTED_NNNN]] placeholder exactly once in its original order. "
+        "with each placeholder exactly once in its source top-level block. Independent "
+        "inline-code/template may move in-field for grammar; all others retain source "
+        "order/pairing. "
         "The source is authoritative for protected bytes; the current target is linguistic "
         "context only.\n"
         f"Direction: {source_locale.value} -> {target_locale.value}\n"

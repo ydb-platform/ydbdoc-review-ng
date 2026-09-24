@@ -144,6 +144,81 @@ def test_shipped_composition_translates_then_verifies_current_pr_without_retrans
     )  # two jobs, three model attempts
 
 
+def test_runtime_publishes_field_local_inline_code_grammar_order_once() -> None:
+    from ydbdoc_review_ng.cli import main
+    from ydbdoc_review_ng.models import HttpResponse
+    from ydbdoc_review_ng.runtime import create_runtime
+
+    class MobilityServices(RuntimeServices):
+        def __init__(self) -> None:
+            super().__init__()
+            self.files["ydb/docs/ru/core/page.md"] = (
+                "* В системные представления `.sys/top_queries_*` и "
+                "`.sys/query_sessions` добавлена колонка `TraceId`.\n"
+            ).encode()
+            self.raw_calls = 0
+
+        def model(self, request):
+            body = json.loads(request.body)
+            if body.get("jsonSchema") is not None:
+                return super().model(request)
+            self.raw_calls += 1
+            self.events.append(("MODEL", ("raw_markdown",)))
+            text = (
+                "* The [[YDBDOC_PROTECTED_0003]] column was added to "
+                "[[YDBDOC_PROTECTED_0001]] and [[YDBDOC_PROTECTED_0002]].\n"
+            )
+            return HttpResponse(
+                200,
+                json.dumps(
+                    {
+                        "result": {
+                            "alternatives": [
+                                {
+                                    "status": "ALTERNATIVE_STATUS_FINAL",
+                                    "message": {"role": "assistant", "text": text},
+                                }
+                            ],
+                            "usage": {
+                                "inputTextTokens": "10",
+                                "completionTokens": "5",
+                            },
+                        }
+                    }
+                ).encode(),
+                Decimal("0.01"),
+            )
+
+    services = MobilityServices()
+    runtime = create_runtime(
+        environment={
+            "GITHUB_ACTOR": "maintainer",
+            "YDBDOC_ALLOWED_ACTORS": "maintainer",
+            "YANDEX_API_KEY": "secret",
+            "YANDEX_FOLDER_ID": "folder",
+        },
+        ydb_executor=services,
+        github_transport=services.github,
+        model_transport=services.model,
+    )
+
+    exit_code = main(
+        ["translate", "--pr", "42", "--source-sha", services.source, "--budget-rub", "10"],
+        dispatcher=runtime,
+    )
+
+    assert exit_code == 0
+    assert services.raw_calls == 1
+    assert services.files["ydb/docs/en/core/page.md"] == (
+        b"* The `TraceId` column was added to `.sys/top_queries_*` and "
+        b"`.sys/query_sessions`.\n"
+    )
+    assert sum(
+        method in {"POST", "PATCH"} and "/git/refs" in path
+        for method, path in services.events
+    ) == 1
+
+
 class ContentFilterServices(RuntimeServices):
     def __init__(self, filtered_responses: int) -> None:
         super().__init__()

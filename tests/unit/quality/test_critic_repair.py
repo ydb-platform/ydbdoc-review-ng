@@ -199,6 +199,61 @@ def test_full_document_repair_restores_source_fragments_before_exposing_map(inva
         assert published_maps == [AcceptedMap(PATH, tuple(sorted(repaired.items())))]
 
 
+def test_raw_repair_accepts_field_local_inline_code_grammar_order() -> None:
+    source = (
+        b"* The `TraceId` column was added to `.sys/top_queries_*` and "
+        b"`.sys/query_sessions`.\n"
+    )
+    target = (
+        "* Колонка `TraceId` добавлена в `.sys/top_queries_*` и "
+        "`.sys/query_sessions`.\n"
+    ).encode()
+    repaired = (
+        "* В системные представления `.sys/top_queries_*` и `.sys/query_sessions` "
+        "добавлена колонка `TraceId`.\n"
+    ).encode()
+    plan = build_markdown_plan(SNAPSHOT, SOURCE_PATH, source)
+    request = build_translation_request(source, plan)
+    document = prepare_document(source, plan, max_characters=100_000)
+    raw_repair = repaired.decode()
+    for placeholder in document.placeholders:
+        raw_repair = raw_repair.replace(
+            placeholder.source_bytes.decode(), placeholder.token
+        )
+    executor = FakeExecutor(
+        critic_json(
+            "RED",
+            [
+                finding(
+                    repairable=True,
+                    snippet="Колонка",
+                    line=1,
+                    field_ids=[request.requested_ids[0]],
+                )
+            ],
+        ),
+        raw_repair,
+        critic_json("GREEN", []),
+    )
+
+    result = review_translation(
+        executor,
+        model="yandexgpt-5.1/latest",
+        source=source,
+        source_plan=plan,
+        translation_request=request,
+        target=target,
+        target_path=PATH,
+        source_locale=Locale.EN,
+        target_locale=Locale.RU,
+    )
+
+    assert result.repair_applied
+    assert result.final_candidate == repaired
+    assert [call.role.value for call in executor.calls] == ["critic", "repair", "final_critic"]
+    assert "source top-level block" in executor.calls[1].prompt
+
+
 def test_repair_transport_failure_is_terminal_before_final_critic() -> None:
     _plan, request, _values, _target = prepared()
     executor = FakeExecutor(

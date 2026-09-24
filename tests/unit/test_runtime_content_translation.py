@@ -6,6 +6,7 @@ from typing import cast
 
 import pytest
 
+from ydbdoc_review_ng.continuation import AcceptedDocument
 from ydbdoc_review_ng.domain import (
     FilePair,
     GitSha,
@@ -18,7 +19,13 @@ from ydbdoc_review_ng.locales import PairKey
 from ydbdoc_review_ng.models import AttemptError, ModelCallResult, ModelRequest
 from ydbdoc_review_ng.parser.markdown import build_markdown_plan
 from ydbdoc_review_ng.runtime import RecordedModels, RuntimeSource
-from ydbdoc_review_ng.runtime_content import Document, InvalidTranslationResponse, RuntimeContent
+from ydbdoc_review_ng.runtime_content import (
+    Document,
+    FrozenPreparation,
+    FrozenSourcePlans,
+    InvalidTranslationResponse,
+    RuntimeContent,
+)
 from ydbdoc_review_ng.runtime_github import RuntimeBoundaryError
 from ydbdoc_review_ng.scope import FileOperation, ScopeEntry, ScopeOrigin
 from ydbdoc_review_ng.translation import (
@@ -128,6 +135,81 @@ def test_translate_document_uses_complete_markdown_and_selected_direction(
     assert (
         assemble_candidate(document.source, document.plan, document.request, accepted.as_dict())
         == b"# Translated heading\n\nText with [guide](guide.md).\n\n- One\n- Two\n"
+    )
+
+
+@pytest.mark.parametrize(
+    ("source_locale", "source", "translated"),
+    [
+        (
+            Locale.RU,
+            (
+                "* В системные представления `.sys/top_queries_*` и "
+                "`.sys/query_sessions` добавлена колонка `TraceId`.\n"
+            ).encode(),
+            (
+                b"* The `TraceId` column was added to `.sys/top_queries_*` and "
+                b"`.sys/query_sessions`.\n"
+            ),
+        ),
+        (
+            Locale.EN,
+            (
+                b"* The `TraceId` column was added to `.sys/top_queries_*` and "
+                b"`.sys/query_sessions`.\n"
+            ),
+            (
+                "* В системные представления `.sys/top_queries_*` и "
+                "`.sys/query_sessions` добавлена колонка `TraceId`.\n"
+            ).encode(),
+        ),
+    ],
+    ids=["ru-to-en-live-order", "en-to-ru-inverse-order"],
+)
+def test_translate_accepts_field_local_inline_code_grammar_order(
+    source_locale: Locale, source: bytes, translated: bytes
+) -> None:
+    document = document_for(source, source_locale=source_locale)
+    prepared = prepare_document(document.source, document.plan, max_characters=100_000)
+    response = translated.decode()
+    for placeholder in prepared.placeholders:
+        response = response.replace(placeholder.source_bytes.decode(), placeholder.token)
+    models = ScriptedModels([response, response])
+
+    accepted = content_with(models).translate_document(document)
+
+    assert len(models.calls) == 1
+    assert "exactly once" in models.calls[0].prompt
+    assert "source top-level block" in models.calls[0].prompt
+    assert (
+        assemble_candidate(document.source, document.plan, document.request, accepted.as_dict())
+        == translated
+    )
+
+
+def test_continuation_revalidates_field_local_inline_code_grammar_order() -> None:
+    source = (
+        "* В системные представления `.sys/top_queries_*` и `.sys/query_sessions` "
+        "добавлена колонка `TraceId`.\n"
+    ).encode()
+    translated = (
+        b"* The `TraceId` column was added to `.sys/top_queries_*` and "
+        b"`.sys/query_sessions`.\n"
+    )
+    document = document_for(source)
+    plans = FrozenSourcePlans(cast(FrozenPreparation, object()), None, (document,), ())
+
+    restored = content_with(ScriptedModels([])).restore_accepted_documents(
+        plans,
+        (AcceptedDocument(document.entry.pair.target_path, translated.decode()),),
+    )
+
+    assert len(restored) == 1
+    assert (
+        assemble_candidate(
+            document.source, document.plan, document.request, restored[0].as_dict()
+        )
+        == translated
     )
 
 

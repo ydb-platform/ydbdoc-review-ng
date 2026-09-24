@@ -55,9 +55,6 @@ def test_global_placeholders_restore_exact_bytes_and_reject_contract_drift() -> 
         text.replace(tokens[0], "", 1),
         text.replace(tokens[0], tokens[0] + tokens[0], 1),
         text.replace(tokens[0], "[[YDBDOC_PROTECTED_9999]]", 1),
-        text.replace(tokens[0], "TEMP", 1)
-        .replace(tokens[1], tokens[0], 1)
-        .replace("TEMP", tokens[1], 1),
     )
     for invalid in mutations:
         with pytest.raises(DocumentTranslationError, match="placeholder_mismatch"):
@@ -72,14 +69,13 @@ def test_global_placeholders_restore_exact_bytes_and_reject_contract_drift() -> 
             "See [[YDBDOC_PROTECTED_0001]][[YDBDOC_PROTECTED_0001]] and "
             "[[YDBDOC_PROTECTED_0002]].\n"
         ),
-        "See [[YDBDOC_PROTECTED_0002]] and [[YDBDOC_PROTECTED_0001]].\n",
         "See [[YDBDOC_PROTECTED_9999]] and [[YDBDOC_PROTECTED_0002]].\n",
         (
             "See [[YDBDOC_PROTECTED_X]] [[YDBDOC_PROTECTED_0001]] and "
             "[[YDBDOC_PROTECTED_0002]].\n"
         ),
     ],
-    ids=["missing", "repeated", "reordered", "numeric-unknown", "malformed-unknown"],
+    ids=["missing", "repeated", "numeric-unknown", "malformed-unknown"],
 )
 def test_placeholder_namespace_drift_is_rejected(invalid: str) -> None:
     source = b"See `code` and guide.md.\n"
@@ -90,6 +86,46 @@ def test_placeholder_namespace_drift_is_rejected(invalid: str) -> None:
 
     with pytest.raises(DocumentTranslationError, match="placeholder_mismatch"):
         restore_document(source, plan, request, (invalid,))
+
+
+def test_field_local_mobility_rejects_cross_block_inline_code_move() -> None:
+    source = b"First `ONE`.\n\nSecond `TWO`.\n"
+    plan, request = prepared(source)
+    text = request.chunks[0].text
+    first, second = (item.token for item in request.placeholders)
+    moved = text.replace(first, "TEMP", 1).replace(second, first, 1).replace("TEMP", second, 1)
+
+    with pytest.raises(DocumentTranslationError, match="structure_mismatch"):
+        restore_document(source, plan, request, (moved,))
+
+
+def test_field_local_mobility_rejects_linked_image_endpoint_repairing() -> None:
+    source = b"[![diagram](image.png)](outer.md)\n"
+    plan, request = prepared(source)
+    text = request.chunks[0].text
+    tokens = tuple(item.token for item in request.placeholders)
+    assert len(tokens) == 4
+    repaired = (
+        text.replace(tokens[2], "TEMP", 1)
+        .replace(tokens[3], tokens[2], 1)
+        .replace("TEMP", tokens[3], 1)
+    )
+
+    with pytest.raises(DocumentTranslationError, match="structure_mismatch"):
+        restore_document(source, plan, request, (repaired,))
+
+
+def test_field_local_mobility_rejects_opaque_block_reorder() -> None:
+    source = b"```text\nOPAQUE_ONE\n```\n\nVisible.\n\n```text\nOPAQUE_TWO\n```\n"
+    plan, request = prepared(source)
+    text = request.chunks[0].text
+    first, second = (item.token for item in request.placeholders)
+    reordered = (
+        text.replace(first, "TEMP", 1).replace(second, first, 1).replace("TEMP", second, 1)
+    )
+
+    with pytest.raises(DocumentTranslationError, match="structure_mismatch"):
+        restore_document(source, plan, request, (reordered,))
 
 
 def test_limit_uses_minimum_ordered_whole_block_chunks() -> None:

@@ -92,16 +92,21 @@ def validate_translation_values(
 
 def _protected_signature(data: bytes, plan: SourcePlan, position: int) -> tuple[object, ...]:
     field = fields_of(plan)[position]
-    singles: list[tuple[str, bytes]] = []
+    ordered_singles: list[tuple[str, bytes]] = []
+    movable_singles: list[tuple[str, bytes]] = []
     groups: dict[int, list[tuple[str, bytes]]] = {}
     for region in field.protected_regions:
         entry = (region.kind.value, data[region.span.start : region.span.end])
         if region.group is None:
-            singles.append(entry)
+            if region.kind in {ProtectedKind.INLINE_CODE, ProtectedKind.TEMPLATE}:
+                movable_singles.append(entry)
+            else:
+                ordered_singles.append(entry)
         else:
             groups.setdefault(region.group, []).append(entry)
     return (
-        tuple(sorted(singles)),
+        tuple(ordered_singles),
+        tuple(sorted(movable_singles)),
         tuple(sorted(tuple(items) for items in groups.values())),
     )
 
