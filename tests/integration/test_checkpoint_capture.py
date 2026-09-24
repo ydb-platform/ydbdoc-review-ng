@@ -184,7 +184,7 @@ class CaptureServices(RuntimeServices):
                 self.translations += 1
                 text = translated_markdown(prompt)
                 if self.stop == "translation" and self.translations in {2, 3}:
-                    text = '{"wrong-field": "response received"}'
+                    text = "[[YDBDOC_PROTECTED_9999]]"
                 if self.stop == "translation_assembly" and self.translations in {2, 3}:
                     text = "[[YDBDOC_PROTECTED_9999]]"
         elif "verdict" in (schema := schema_wrapper["schema"])["properties"]:

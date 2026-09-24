@@ -91,7 +91,7 @@ class ContinueServices(CaptureServices):
             source = raw_translation_source(prompt)
             raw = source.replace("Source", "Resumed")
             if self.invalid_pending and self.invalid_pending in source:
-                raw = "invalid response"
+                raw = "[[YDBDOC_PROTECTED_9999]]"
             data = json.loads(response.body)
             data["result"]["alternatives"][0]["message"]["text"] = raw
             return HttpResponse(200, json.dumps(data).encode(), Decimal("0.01"))

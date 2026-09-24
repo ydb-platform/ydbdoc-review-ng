@@ -51,7 +51,13 @@ from ydbdoc_review_ng.models.types import FrozenJson, mutable_json
 from ydbdoc_review_ng.parser.markdown import build_markdown_plan
 from ydbdoc_review_ng.plan import ProtectedKind, SourcePlan, fields_of
 from ydbdoc_review_ng.publication import FileChange, GitPublicationAdapter, PublicationPlan
-from ydbdoc_review_ng.quality import CriticResult, QualityReviewResult, Verdict, review_translation
+from ydbdoc_review_ng.quality import (
+    CriticResult,
+    QualityInputError,
+    QualityReviewResult,
+    Verdict,
+    review_translation,
+)
 from ydbdoc_review_ng.quality.repair import _derive_target_translations
 from ydbdoc_review_ng.repository import ResolvedRepositorySnapshots
 from ydbdoc_review_ng.runtime_github import RuntimeBoundaryError
@@ -934,13 +940,16 @@ class RuntimeContent:
             candidate = restore_document(
                 document.source, document.plan, effective_request, tuple(responses)
             )
-            values = _derive_target_translations(
-                document.source,
-                document.plan,
-                document.request,
-                candidate,
-                entry.pair.target_path,
-            )
+            try:
+                values = _derive_target_translations(
+                    document.source,
+                    document.plan,
+                    document.request,
+                    candidate,
+                    entry.pair.target_path,
+                )
+            except QualityInputError:
+                values = {}
         except (DocumentTranslationError, ValueError, TypeError, UnicodeError):
             raise InvalidTranslationResponse("translation_response_invalid") from None
         accepted = AcceptedMap(entry.pair.target_path, tuple(sorted(values.items())))
@@ -977,13 +986,16 @@ class RuntimeContent:
                 verify_document_candidate(
                     document.source, document.plan, target, target_plan
                 )
-                values = _derive_target_translations(
-                    document.source,
-                    document.plan,
-                    document.request,
-                    target,
-                    accepted.target_path,
-                )
+                try:
+                    values = _derive_target_translations(
+                        document.source,
+                        document.plan,
+                        document.request,
+                        target,
+                        accepted.target_path,
+                    )
+                except QualityInputError:
+                    values = {}
                 restored.append(
                     AcceptedMap(accepted.target_path, tuple(sorted(values.items())))
                 )

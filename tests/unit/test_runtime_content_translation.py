@@ -545,7 +545,7 @@ def test_near_limit_correction_reservation_fails_before_model_call() -> None:
     assert models.calls == []
 
 
-def test_multiblock_unit_reserves_exactly_two_calls_within_limit() -> None:
+def test_multiblock_unit_accepts_cosmetic_blank_line_change_without_retry() -> None:
     source = b"\n\n".join(
         (
             b"Paragraph one has thirty seven letters.",
@@ -554,16 +554,15 @@ def test_multiblock_unit_reserves_exactly_two_calls_within_limit() -> None:
         )
     ) + b"\n"
     document = document_for(source)
-    valid = source.decode()
-    invalid = valid.replace("\n\n", "\n", 1)
-    models = ScriptedModels([invalid, valid])
+    invalid = source.decode().replace("\n\n", "\n", 1)
+    models = ScriptedModels([invalid])
     operator_context = "Reviewer context"
 
     content_with(
         models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "900"}
     ).translate_document(document, operator_context=operator_context)
 
-    assert len(models.calls) == 2
+    assert len(models.calls) == 1
     assert all(len(call.prompt) <= 900 for call in models.calls)
 
 

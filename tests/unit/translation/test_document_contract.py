@@ -203,6 +203,25 @@ def test_missing_final_lf_is_restored_at_each_chunk_boundary() -> None:
     assert build_markdown_plan(SNAPSHOT, PATH, candidate).blocks == plan.blocks
 
 
+def test_missing_blank_line_at_chunk_boundary_is_cosmetic() -> None:
+    source = b"First paragraph.\n\nSecond paragraph.\n"
+    plan, request = prepared(source, limit=18)
+    assert tuple(chunk.text for chunk in request.chunks) == (
+        "First paragraph.\n\n",
+        "Second paragraph.\n",
+    )
+
+    candidate = restore_document(
+        source,
+        plan,
+        request,
+        ("Translated first.", "Translated second."),
+    )
+
+    assert candidate == b"Translated first.\nTranslated second.\n"
+    assert len(build_markdown_plan(SNAPSHOT, PATH, candidate).blocks) != len(plan.blocks)
+
+
 def test_translated_abbreviation_is_not_treated_as_mutated_source_path() -> None:
     source = (
         "  * `enable_strict_user_management` — включает строгие правила "
@@ -222,12 +241,13 @@ def test_translated_abbreviation_is_not_treated_as_mutated_source_path() -> None
     )
 
 
-def test_final_lf_restoration_does_not_tolerate_block_kind_change() -> None:
+def test_block_kind_change_is_left_for_critic_review() -> None:
     source = b"# First\n\n# Second\n"
     plan, request = prepared(source)
 
-    with pytest.raises(DocumentTranslationError, match="structure_mismatch"):
-        restore_document(source, plan, request, ("# First\n\nSecond",))
+    candidate = restore_document(source, plan, request, ("# First\n\nSecond",))
+
+    assert candidate == b"# First\n\nSecond\n"
 
 
 def test_configured_limit_applies_to_each_complete_prompt_with_minimum_chunks() -> None:

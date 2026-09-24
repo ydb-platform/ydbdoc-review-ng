@@ -542,13 +542,18 @@ def review_translation(
             repaired_candidate = restore_document(
                 source, source_plan, effective_request, tuple(responses)
             )
-            target_translations = _derive_target_translations(
-                source,
-                source_plan,
-                translation_request,
-                repaired_candidate,
-                target_path,
-            )
+            try:
+                target_translations = _derive_target_translations(
+                    source,
+                    source_plan,
+                    translation_request,
+                    repaired_candidate,
+                    target_path,
+                )
+            except QualityInputError:
+                if accepted_map is None:
+                    raise
+                target_translations = accepted_map.as_dict()
             accepted_maps = (
                 AcceptedMap(target_path, tuple(sorted(target_translations.items()))),
             )

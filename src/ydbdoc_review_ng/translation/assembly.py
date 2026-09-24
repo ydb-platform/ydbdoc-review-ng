@@ -257,7 +257,7 @@ def verify_protected_fragments(
     _validate_frontmatter_yaml(target, target_plan)
     source_fields = fields_of(source_plan)
     target_fields = fields_of(target_plan)
-    if len(source_fields) != len(target_fields):
+    if exact_non_field_slices and len(source_fields) != len(target_fields):
         raise ProtectedMismatch(min(len(source_fields), len(target_fields)) + 1)
     if exact_non_field_slices:
         source_slices = _non_field_slices(source, source_plan)
@@ -282,25 +282,24 @@ def verify_protected_fragments(
                 raise ProtectedMismatch(position + 1)
         return
 
-    if tuple(block.kind for block in source_plan.blocks) != tuple(
-        block.kind for block in target_plan.blocks
+    source_signatures = tuple(
+        _block_protected_signature(source, block) for block in source_plan.blocks
+    )
+    target_signatures = tuple(
+        _block_protected_signature(target, block) for block in target_plan.blocks
+    )
+    source_ordered = tuple(item for ordered, _, _ in source_signatures for item in ordered)
+    target_ordered = tuple(item for ordered, _, _ in target_signatures for item in ordered)
+    source_movable = tuple(item for _, movable, _ in source_signatures for item in movable)
+    target_movable = tuple(item for _, movable, _ in target_signatures for item in movable)
+    source_groups = tuple(item for _, _, groups in source_signatures for item in groups)
+    target_groups = tuple(item for _, _, groups in target_signatures for item in groups)
+    if (
+        not _is_subsequence(source_ordered, target_ordered)
+        or Counter(source_movable) - Counter(target_movable)
+        or not _is_subsequence(source_groups, target_groups)
     ):
         raise ProtectedMismatch(1)
-    for position, (source_block, target_block) in enumerate(
-        zip(source_plan.blocks, target_plan.blocks, strict=True), 1
-    ):
-        source_ordered, source_movable, source_groups = _block_protected_signature(
-            source, source_block
-        )
-        target_ordered, target_movable, target_groups = _block_protected_signature(
-            target, target_block
-        )
-        if (
-            not _is_subsequence(source_ordered, target_ordered)
-            or Counter(source_movable) - Counter(target_movable)
-            or not _is_subsequence(source_groups, target_groups)
-        ):
-            raise ProtectedMismatch(position)
 
 
 def assemble_candidate(

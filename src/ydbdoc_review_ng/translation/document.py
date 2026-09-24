@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from collections import Counter
 from dataclasses import dataclass
@@ -252,9 +253,7 @@ def verify_document_candidate(
     """Validate a whole-document candidate without projecting source formatting."""
     from ydbdoc_review_ng.translation.assembly import verify_protected_fragments
 
-    if target_plan.diagnostics or tuple(block.kind for block in target_plan.blocks) != tuple(
-        block.kind for block in source_plan.blocks
-    ):
+    if target_plan.diagnostics:
         raise DocumentTranslationError("document_response:structure_mismatch")
     verify_protected_fragments(
         source,
@@ -451,11 +450,7 @@ def build_document_prompt(
 
 
 def _restore_chunk_final_lf(chunk: DocumentChunk, response: str, /) -> str:
-    if (
-        chunk.text.endswith("\n")
-        and not chunk.text.endswith(("\r\n", "\n\n"))
-        and not response.endswith("\n")
-    ):
+    if chunk.text.endswith("\n") and not response.endswith("\n"):
         return response + "\n"
     return response
 
@@ -469,6 +464,12 @@ def validate_chunk_response(
     """Validate one provider unit before any later chunk is requested."""
     if type(response) is not str:
         raise DocumentTranslationError("document_response:unit_mismatch")
+    try:
+        legacy_map = json.loads(response)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        legacy_map = None
+    if type(legacy_map) is dict:
+        raise DocumentTranslationError("document_response:structure_mismatch")
     response = _restore_chunk_final_lf(chunk, response)
     response_tokens = _response_tokens(response)
     if Counter(response_tokens) != Counter(chunk.placeholders):
@@ -505,9 +506,7 @@ def validate_chunk_response(
         candidate_spans, target_plan_value
     ):
         raise DocumentTranslationError("document_response:placeholder_mismatch")
-    if target_plan_value.diagnostics or tuple(
-        block.kind for block in target_plan_value.blocks
-    ) != tuple(block.kind for block in source_plan_value.blocks):
+    if target_plan_value.diagnostics:
         raise DocumentTranslationError("document_response:structure_mismatch")
     from ydbdoc_review_ng.translation.assembly import ProtectedMismatch
 
