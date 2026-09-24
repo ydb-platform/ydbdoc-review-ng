@@ -1151,14 +1151,7 @@ class RuntimeContent:
                     before_final_critic(pack(files))
 
             def publish_map(value: AcceptedMap) -> None:
-                assert self.plans is not None
                 accepted[value.target_path] = value
-                maps = tuple(sorted(accepted.values(), key=lambda value: value.target_path.value))
-                rebuilt = self.assemble(self.plans, maps)
-                if before_final_critic is not None:
-                    before_final_critic(rebuilt.content)
-                files.clear()
-                files.update(unpack(rebuilt.content))
 
             review = review_translation(
                 self.models,
@@ -1170,7 +1163,7 @@ class RuntimeContent:
                 target_path=path,
                 source_locale=document.entry.pair.source_locale,
                 target_locale=document.entry.pair.target_locale,
-                before_final_critic=None if selective else publish,
+                before_final_critic=publish,
                 allow_repair=not attempted,
                 accepted_map=restored_map,
                 full_repair=selective and restored_map is None,

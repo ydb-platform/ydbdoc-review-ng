@@ -243,6 +243,50 @@ def test_repair_merges_complete_document_before_final_critic():
     assert services.rows[following.continuation_id]["status"] == "closed"
 
 
+def test_continuation_repair_publishes_exact_model_markdown():
+    class FormattingReviewServices(ReviewServices):
+        def model(self, request):
+            response = super().model(request)
+            role = self.roles[-1]
+            body = json.loads(request.body)
+            prompt = body["messages"][-1]["text"]
+            replacement = None
+            if role == "translate" and "Nested source item" in prompt:
+                replacement = "* Parent translated\n* Nested translated item\n"
+            elif role == "repair" and "Nested source item" in prompt:
+                replacement = "* Parent corrected\n* Nested translated item\n"
+            elif role == "critic" and self.continuing and "Nested source item" in prompt:
+                payload = json.loads(response.body)
+                values = json.loads(payload["result"]["alternatives"][0]["message"]["text"])
+                if values["findings"]:
+                    values["findings"][0]["searchable_snippet"] = "Parent translated"
+                    payload["result"]["alternatives"][0]["message"]["text"] = json.dumps(
+                        values
+                    )
+                return HttpResponse(200, json.dumps(payload).encode(), Decimal("0.01"))
+            if replacement is None:
+                return response
+            payload = json.loads(response.body)
+            payload["result"]["alternatives"][0]["message"]["text"] = replacement
+            return HttpResponse(200, json.dumps(payload).encode(), Decimal("0.01"))
+
+    services = FormattingReviewServices(names=("a", "b"))
+    source = b"* Parent\n  * Nested source item\n"
+    for tree in [services.files, *services.snapshots.values()]:
+        tree[RU + "b.md"] = source
+
+    services.start_review()
+    services.outcomes = {EN + "b.md": ["repair", "green"]}
+
+    result = services.resume()
+
+    expected = b"* Parent corrected\n* Nested translated item\n"
+    assert result.verdict is Verdict.GREEN and result.repair_applied
+    assert services.roles == ["critic", "repair", "critic"]
+    assert services.files[EN + "b.md"] == expected
+    assert services.snapshots[result.final_commit_sha.value][EN + "b.md"] == expected
+
+
 def test_saved_order_and_single_repair_across_unresolved_documents():
     services = ReviewServices()
     saved = services.start_review()
