@@ -89,6 +89,20 @@ class InvalidTwiceThenEchoModels:
         return ModelCallResult(response, None, ())
 
 
+class InvalidThenFilteredThenEchoModels:
+    def __init__(self, invalid: str) -> None:
+        self.invalid = invalid
+        self.calls: list[ModelRequest] = []
+
+    def invoke(self, request: ModelRequest, /) -> ModelCallResult:
+        self.calls.append(request)
+        if len(self.calls) == 1:
+            return ModelCallResult(self.invalid, None, ())
+        if len(self.calls) == 2:
+            return ModelCallResult(None, AttemptError.CONTENT_FILTER, ())
+        return ModelCallResult(_source_from_prompt(request.prompt), None, ())
+
+
 def _heading_block(number: int, length: int) -> str:
     prefix = f"## Block {number:03d} "
     return prefix + "x" * (length - len(prefix) - 1) + "\n"
@@ -764,6 +778,30 @@ def test_exhausted_invalid_large_chunk_is_split_once_and_validated() -> None:
     content = content_with(models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "250000"})
 
     _accepted, accepted_document = content._translate_document(document)
+
+    assert len(models.calls) == 4
+    assert "Important correction" in models.calls[1].prompt
+    assert accepted_document.translated_markdown.encode() == source
+
+
+def test_large_chunk_splits_when_technical_correction_is_filtered() -> None:
+    source = content_filter_witness() + b"## Use `CPUTime` now.\n"
+    document = document_for(source)
+    prepared = prepare_document(
+        source,
+        document.plan,
+        max_characters=250_000,
+        source_locale="ru",
+        target_locale="en",
+    )
+    parent = prepared.chunks[0]
+    placeholder = next(item for item in prepared.placeholders if item.source_bytes == b"`CPUTime`")
+    invalid = parent.text.replace(placeholder.token, "", 1)
+    models = InvalidThenFilteredThenEchoModels(invalid)
+
+    _accepted, accepted_document = content_with(
+        models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "250000"}
+    )._translate_document(document)
 
     assert len(models.calls) == 4
     assert "Important correction" in models.calls[1].prompt

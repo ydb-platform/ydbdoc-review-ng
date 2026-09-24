@@ -928,7 +928,13 @@ class RuntimeContent:
                     )
                 )
                 if not result.success or result.text is None:
-                    should_split = attempt == 1 and result.failure is AttemptError.CONTENT_FILTER
+                    should_split = (
+                        result.failure is AttemptError.CONTENT_FILTER
+                        and (
+                            attempt == 1
+                            or len(chunk.text) >= _INVALID_RESPONSE_SPLIT_MIN_CHARACTERS
+                        )
+                    )
                     return None, result.failure, should_split
                 try:
                     validate_chunk_response(chunk, prepared.placeholders, result.text)
