@@ -83,6 +83,57 @@ def _placeholder_owners(
     return owners
 
 
+def _placeholder_block_masks(
+    spans: dict[str, tuple[int, int]],
+    plan: SourcePlan,
+    token_bits: dict[str, int],
+    /,
+) -> tuple[int, ...]:
+    masks: list[int] = []
+    for block in plan.blocks:
+        if block.kind is BlockKind.BLANK:
+            continue
+        mask = 0
+        for token, (start, end) in spans.items():
+            if block.span.start <= start and end <= block.span.end:
+                mask |= token_bits[token]
+        masks.append(mask)
+    return tuple(masks)
+
+
+def _merged_block_masks_match(many: tuple[int, ...], few: tuple[int, ...], /) -> bool:
+    reachable = {0}
+    for expected in few:
+        next_reachable: set[int] = set()
+        for start in reachable:
+            combined = 0
+            for end in range(start + 1, len(many) + 1):
+                combined |= many[end - 1]
+                if combined == expected:
+                    next_reachable.add(end)
+        reachable = next_reachable
+        if not reachable:
+            return False
+    return len(many) in reachable
+
+
+def _placeholder_blocks_compatible(
+    source_spans: dict[str, tuple[int, int]],
+    source_plan: SourcePlan,
+    target_spans: dict[str, tuple[int, int]],
+    target_plan: SourcePlan,
+    /,
+) -> bool:
+    token_bits = {token: 1 << position for position, token in enumerate(source_spans)}
+    source_masks = _placeholder_block_masks(source_spans, source_plan, token_bits)
+    target_masks = _placeholder_block_masks(target_spans, target_plan, token_bits)
+    if len(source_masks) == len(target_masks):
+        return source_masks == target_masks
+    if len(source_masks) > len(target_masks):
+        return _merged_block_masks_match(source_masks, target_masks)
+    return _merged_block_masks_match(target_masks, source_masks)
+
+
 @dataclass(frozen=True, slots=True)
 class DocumentPlaceholder:
     token: str
@@ -502,9 +553,14 @@ def validate_chunk_response(
         target_plan_value = build_markdown_plan(chunk_snapshot, chunk_path, candidate_chunk)
     except (UnicodeError, TypeError, ValueError, yaml.YAMLError):
         raise DocumentTranslationError("document_response:structure_mismatch") from None
-    if len(source_plan_value.blocks) == len(target_plan_value.blocks) and _placeholder_owners(
-        source_spans, source_plan_value
-    ) != _placeholder_owners(candidate_spans, target_plan_value):
+    if len(source_plan_value.blocks) == len(target_plan_value.blocks):
+        if _placeholder_owners(source_spans, source_plan_value) != _placeholder_owners(
+            candidate_spans, target_plan_value
+        ):
+            raise DocumentTranslationError("document_response:placeholder_mismatch")
+    elif response_tokens != chunk.placeholders or not _placeholder_blocks_compatible(
+        source_spans, source_plan_value, candidate_spans, target_plan_value
+    ):
         raise DocumentTranslationError("document_response:placeholder_mismatch")
     if target_plan_value.diagnostics:
         raise DocumentTranslationError("document_response:structure_mismatch")

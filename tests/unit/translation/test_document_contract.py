@@ -253,11 +253,37 @@ def test_whole_document_response_rejects_link_move_between_preserved_blocks() ->
         restore_document(source, plan, request, (response,))
 
 
+def test_block_merge_does_not_hide_link_move_between_other_blocks() -> None:
+    source = b"[Guide](guide.md) first.\n\nSecond paragraph.\n\nThird paragraph.\n"
+    plan, request = prepared(source)
+    open_token, close_token = (item.token for item in request.placeholders)
+    response = (
+        "First paragraph.\n\n"
+        f"Second {open_token}Guide{close_token}.\n"
+        "Third paragraph.\n"
+    )
+
+    with pytest.raises(DocumentTranslationError, match="placeholder_mismatch"):
+        restore_document(source, plan, request, (response,))
+
+
+@pytest.mark.parametrize("invented", ("evil.md", "new_identifier"))
+def test_whole_document_response_rejects_invented_path_or_identifier(
+    invented: str,
+) -> None:
+    source = b"Plain source.\n"
+    plan, request = prepared(source)
+
+    with pytest.raises(DocumentTranslationError, match="structure_mismatch"):
+        restore_document(source, plan, request, (f"Translated {invented}.\n",))
+
+
 @pytest.mark.parametrize(
     "response",
     (
         "---\ndescription: Translated title\n---\n",
         "Translated title\n",
+        "---\ntitle: Translated title\ntitle: Shadow title\n---\n",
     ),
 )
 def test_whole_document_response_preserves_frontmatter_keys(response: str) -> None:

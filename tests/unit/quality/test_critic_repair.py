@@ -1010,7 +1010,7 @@ def test_cosmetic_block_merge_still_gets_one_critic_repair() -> None:
     plan = build_markdown_plan(SNAPSHOT, SOURCE_PATH, source)
     request = build_translation_request(source, plan)
     target = b"First translated paragraph.\nSecond translated paragraph.\n"
-    repaired = b"First corrected paragraph.\n\nSecond corrected paragraph.\n"
+    repaired = b"First corrected paragraph.\nSecond corrected paragraph.\n"
     executor = FakeExecutor(
         critic_json(
             "RED",
@@ -1023,7 +1023,7 @@ def test_cosmetic_block_merge_still_gets_one_critic_repair() -> None:
                 )
             ],
         ),
-        raw_document(repaired),
+        repaired.decode(),
         critic_json("GREEN", []),
     )
 
@@ -1042,6 +1042,52 @@ def test_cosmetic_block_merge_still_gets_one_critic_repair() -> None:
     assert result.repair_applied
     assert result.final_candidate == repaired
     assert [call.role.value for call in executor.calls] == ["critic", "repair", "final_critic"]
+
+
+def test_large_cosmetic_block_merge_keeps_repair_chunked() -> None:
+    source = ("A" * 8_500 + "\n\n" + "B" * 8_500 + "\n").encode()
+    plan = build_markdown_plan(SNAPSHOT, SOURCE_PATH, source)
+    request = build_translation_request(source, plan)
+    target = ("X" * 8_500 + "\n" + "Y" * 8_500 + "\n").encode()
+    first_repair = "C" * 8_500 + "\n"
+    second_repair = "D" * 8_500 + "\n"
+    executor = FakeExecutor(
+        critic_json(
+            "RED",
+            [
+                finding(
+                    repairable=True,
+                    snippet="X" * 20,
+                    line=1,
+                    field_ids=[request.fields[0].field_id],
+                )
+            ],
+        ),
+        first_repair,
+        second_repair,
+        critic_json("GREEN", []),
+    )
+
+    result = review_translation(
+        executor,
+        model="model",
+        source=source,
+        source_plan=plan,
+        translation_request=request,
+        target=target,
+        target_path=PATH,
+        source_locale=Locale.EN,
+        target_locale=Locale.RU,
+    )
+
+    assert result.repair_applied
+    assert result.final_candidate == (first_repair + second_repair).encode()
+    assert [call.role.value for call in executor.calls] == [
+        "critic",
+        "repair",
+        "repair",
+        "final_critic",
+    ]
 
 
 def test_t017_n04_repair_preserves_logical_escaped_title_in_untouched_field() -> None:

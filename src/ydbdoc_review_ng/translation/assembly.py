@@ -182,10 +182,10 @@ def _frontmatter_keys(data: bytes, plan: SourcePlan) -> tuple[tuple[object, ...]
         if block.kind is not BlockKind.T008_FRONT_MATTER:
             continue
         lines = data[block.span.start : block.span.end].splitlines(keepends=True)
-        loaded = yaml.safe_load(b"".join(lines[1:-1]).decode("utf-8"))
-        if not isinstance(loaded, Mapping):
+        loaded = yaml.compose(b"".join(lines[1:-1]).decode("utf-8"))
+        if not isinstance(loaded, yaml.MappingNode):
             raise TypeError("invalid frontmatter")
-        result.append(tuple(loaded.keys()))
+        result.append(tuple(key.value for key, _value in loaded.value))
     return tuple(result)
 
 
@@ -312,8 +312,6 @@ def verify_protected_fragments(
     source_groups = tuple(item for _, _, groups in source_signatures for item in groups)
     target_groups = tuple(item for _, _, groups in target_signatures for item in groups)
     allowed_target_only = {
-        ProtectedKind.PATH.value,
-        ProtectedKind.IDENTIFIER.value,
         ProtectedKind.ESCAPE.value,
         ProtectedKind.LINE_BREAK.value,
         ProtectedKind.CONTINUATION_PREFIX.value,

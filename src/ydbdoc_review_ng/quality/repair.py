@@ -11,7 +11,7 @@ from ydbdoc_review_ng.continuation import AcceptedMap
 from ydbdoc_review_ng.domain import Locale, ModelRole, RepoPath
 from ydbdoc_review_ng.models import AttemptError, ModelCallResult, ModelRequest
 from ydbdoc_review_ng.parser.markdown import build_markdown_plan
-from ydbdoc_review_ng.plan import ProtectedKind, SourcePlan, fields_of
+from ydbdoc_review_ng.plan import BlockKind, ProtectedKind, SourcePlan, fields_of
 from ydbdoc_review_ng.quality.critic import build_critic_request, parse_critic_response
 from ydbdoc_review_ng.quality.types import (
     CriticResult,
@@ -322,41 +322,38 @@ def _repair_requests(
     )
 
     if len(source_plan.blocks) != len(target_plan.blocks):
-        source_text = "".join(source_blocks)
         target_text = "".join(target_blocks)
-        chunk = DocumentChunk(
-            source_text,
-            0,
-            len(source_blocks),
-            tuple(item.token for item in source_document.placeholders),
+        content_positions = tuple(
+            index
+            for index, block in enumerate(source_plan.blocks)
+            if block.kind is not BlockKind.BLANK
         )
-        request = ModelRequest(
-            ModelRole.REPAIR,
-            model,
-            _repair_prompt(
-                source_text=source_text,
-                target_text=target_text,
-                target_path=target_path,
-                source_locale=source_locale,
-                target_locale=target_locale,
-                findings=findings,
-                operator_context=operator_context,
-            ),
-            None,
-            8000,
-            target_path,
-        )
-        if (
-            max(len(source_text), len(target_text)) > RAW_MARKDOWN_RESPONSE_MAX_CHARACTERS
-            or len(request.prompt) > max_characters
-        ):
+        if not content_positions:
             raise QualityInputError
-        return (
-            (request,),
-            DocumentTranslationRequest((chunk,), source_document.placeholders),
-            (source_text,),
-            (target_text,),
-        )
+        source_lengths = tuple(len(source_blocks[index]) for index in content_positions)
+        source_total = sum(source_lengths)
+        boundaries = [0]
+        consumed = 0
+        for length in source_lengths[:-1]:
+            consumed += length
+            wanted = len(target_text) * consumed // source_total
+            candidates = tuple(
+                match.end()
+                for match in re.finditer(r"\s+", target_text)
+                if boundaries[-1] < match.end() < len(target_text)
+            )
+            boundaries.append(
+                min(candidates, key=lambda value: abs(value - wanted))
+                if candidates
+                else wanted
+            )
+        boundaries.append(len(target_text))
+        aligned = [""] * len(source_blocks)
+        for position, start, end in zip(
+            content_positions, boundaries[:-1], boundaries[1:], strict=True
+        ):
+            aligned[position] = target_text[start:end]
+        target_blocks = tuple(aligned)
 
     def unit(start: int, end: int) -> tuple[DocumentChunk, ModelRequest]:
         source_text = "".join(source_blocks[start:end])
@@ -401,10 +398,7 @@ def _repair_requests(
         while end <= len(source_blocks):
             candidate = unit(start, end)
             if (
-                max(
-                    len("".join(source_blocks[start:end])),
-                    len("".join(target_blocks[start:end])),
-                )
+                len("".join(source_blocks[start:end]))
                 > RAW_MARKDOWN_RESPONSE_MAX_CHARACTERS
                 or len(candidate[1].prompt) > max_characters
             ):
@@ -589,9 +583,7 @@ def review_translation(
                     target_path,
                 )
             except QualityInputError:
-                if accepted_map is None:
-                    raise
-                target_translations = accepted_map.as_dict()
+                target_translations = accepted_map.as_dict() if accepted_map is not None else {}
             accepted_maps = (
                 AcceptedMap(target_path, tuple(sorted(target_translations.items()))),
             )

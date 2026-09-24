@@ -752,6 +752,8 @@ def _inline_regions(
             hierarchical = raw_path.count(b"/") >= 2
             filename = _FILENAME.fullmatch(raw_path.rsplit(b"/", 1)[-1]) is not None
             if (
+                raw_path.lower() not in {b"e.g", b"i.e"}
+                and
                 (explicit or hierarchical or filename)
                 and (before is None or before not in leading_boundary)
                 and (after is None or after not in trailing_boundary)
