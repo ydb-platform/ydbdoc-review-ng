@@ -27,6 +27,7 @@ from ydbdoc_review_ng.translation.document import (
     restore_document,
     split_content_filter_chunk,
     validate_chunk_response,
+    verify_document_candidate,
 )
 
 __all__ = [
@@ -51,5 +52,6 @@ __all__ = [
     "split_content_filter_chunk",
     "validate_chunk_response",
     "validate_translation_values",
+    "verify_document_candidate",
     "verify_protected_fragments",
 ]

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from itertools import pairwise
+from types import SimpleNamespace
 from typing import cast
 
 import pytest
@@ -25,6 +26,7 @@ from ydbdoc_review_ng.runtime_content import (
     FrozenSourcePlans,
     InvalidTranslationResponse,
     RuntimeContent,
+    unpack,
 )
 from ydbdoc_review_ng.runtime_github import RuntimeBoundaryError
 from ydbdoc_review_ng.scope import FileOperation, ScopeEntry, ScopeOrigin
@@ -149,6 +151,28 @@ def test_translate_restores_source_final_lf_without_technical_correction() -> No
         assemble_candidate(document.source, document.plan, document.request, accepted.as_dict())
         == b"# Translated heading\n"
     )
+
+
+def test_translate_accepts_list_indentation_drift_and_preserves_model_markdown() -> None:
+    source = b"* Parent\n  * Nested source item\n"
+    translated = "* Parent translated\n* Nested translated item\n"
+    document = document_for(source)
+    models = ScriptedModels([translated, "unused correction"])
+    content = content_with(models)
+    plans = cast(
+        FrozenSourcePlans,
+        SimpleNamespace(
+            preparation=SimpleNamespace(for_translation=True),
+            manifest=None,
+            documents=(document,),
+            fixed_files=(),
+        ),
+    )
+
+    candidate = content._translate_documents(plans, (document,), (), ())
+
+    assert len(models.calls) == 1
+    assert unpack(candidate.content)[TARGET_PATH.value] == translated.encode()
 
 
 @pytest.mark.parametrize(

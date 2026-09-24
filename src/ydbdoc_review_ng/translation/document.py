@@ -242,6 +242,33 @@ def _source_owned_spans(source: bytes, plan: SourcePlan) -> tuple[tuple[int, int
     return tuple(spans)
 
 
+def verify_document_candidate(
+    source: bytes,
+    source_plan: SourcePlan,
+    target: bytes,
+    target_plan: SourcePlan,
+    /,
+) -> None:
+    """Validate a whole-document candidate without projecting source formatting."""
+    from ydbdoc_review_ng.translation.assembly import verify_protected_fragments
+
+    if target_plan.diagnostics or tuple(block.kind for block in target_plan.blocks) != tuple(
+        block.kind for block in source_plan.blocks
+    ):
+        raise DocumentTranslationError("document_response:structure_mismatch")
+    verify_protected_fragments(
+        source,
+        source_plan,
+        target,
+        target_plan,
+        exact_non_field_slices=False,
+    )
+    source_owned = tuple(source[start:end] for start, end in _source_owned_spans(source, source_plan))
+    target_owned = tuple(target[start:end] for start, end in _source_owned_spans(target, target_plan))
+    if source_owned != target_owned:
+        raise DocumentTranslationError("document_response:structure_mismatch")
+
+
 def _render_span(
     source: bytes,
     start: int,
@@ -482,17 +509,11 @@ def validate_chunk_response(
         block.kind for block in target_plan_value.blocks
     ) != tuple(block.kind for block in source_plan_value.blocks):
         raise DocumentTranslationError("document_response:structure_mismatch")
-    from ydbdoc_review_ng.translation.assembly import (
-        ProtectedMismatch,
-        verify_protected_fragments,
-    )
+    from ydbdoc_review_ng.translation.assembly import ProtectedMismatch
 
     try:
-        verify_protected_fragments(
-            source_chunk,
-            source_plan_value,
-            candidate_chunk,
-            target_plan_value,
+        verify_document_candidate(
+            source_chunk, source_plan_value, candidate_chunk, target_plan_value
         )
     except (ProtectedMismatch, TypeError, ValueError, yaml.YAMLError):
         raise DocumentTranslationError("document_response:structure_mismatch") from None
@@ -526,19 +547,7 @@ def restore_document(
     )
     try:
         target_plan = build_markdown_plan(plan.source_snapshot, plan.source_path, candidate)
-        if target_plan.diagnostics or tuple(block.kind for block in target_plan.blocks) != tuple(
-            block.kind for block in plan.blocks
-        ):
-            raise ValueError
-        from ydbdoc_review_ng.translation.assembly import (
-            ProtectedMismatch,
-            verify_protected_fragments,
-        )
-
-        try:
-            verify_protected_fragments(source, plan, candidate, target_plan)
-        except ProtectedMismatch:
-            raise ValueError from None
+        verify_document_candidate(source, plan, candidate, target_plan)
     except (UnicodeError, ValueError, TypeError):
         raise DocumentTranslationError("document_response:structure_mismatch") from None
     return candidate

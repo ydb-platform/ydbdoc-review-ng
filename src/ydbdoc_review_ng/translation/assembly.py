@@ -203,8 +203,12 @@ def verify_protected_fragments(
     target: bytes,
     target_plan: SourcePlan,
     /,
+    *,
+    exact_non_field_slices: bool = True,
 ) -> None:
     """Compare protected fragments by field position and kind/container contract."""
+    if type(exact_non_field_slices) is not bool:
+        raise TypeError("exact_non_field_slices must be a boolean")
     validate_source_plan(source, source_plan)
     validate_source_plan(target, target_plan)
     _validate_frontmatter_yaml(source, source_plan)
@@ -213,18 +217,21 @@ def verify_protected_fragments(
     target_fields = fields_of(target_plan)
     if len(source_fields) != len(target_fields):
         raise ProtectedMismatch(min(len(source_fields), len(target_fields)) + 1)
-    source_slices = _non_field_slices(source, source_plan)
-    target_slices = list(_non_field_slices(target, target_plan))
-    _normalize_encoded_frontmatter_slices(source, source_plan, target, target_plan, target_slices)
-    if source_slices != tuple(target_slices):
-        mismatch = next(
-            position
-            for position, (source_slice, target_slice) in enumerate(
-                zip(source_slices, target_slices, strict=True), 1
-            )
-            if source_slice != target_slice
+    if exact_non_field_slices:
+        source_slices = _non_field_slices(source, source_plan)
+        target_slices = list(_non_field_slices(target, target_plan))
+        _normalize_encoded_frontmatter_slices(
+            source, source_plan, target, target_plan, target_slices
         )
-        raise ProtectedMismatch(mismatch)
+        if source_slices != tuple(target_slices):
+            mismatch = next(
+                position
+                for position, (source_slice, target_slice) in enumerate(
+                    zip(source_slices, target_slices, strict=True), 1
+                )
+                if source_slice != target_slice
+            )
+            raise ProtectedMismatch(mismatch)
     for position in range(len(source_fields)):
         if _protected_signature(source, source_plan, position) != _protected_signature(
             target, target_plan, position

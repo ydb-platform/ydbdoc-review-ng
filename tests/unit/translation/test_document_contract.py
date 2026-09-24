@@ -203,12 +203,12 @@ def test_missing_final_lf_is_restored_at_each_chunk_boundary() -> None:
     assert build_markdown_plan(SNAPSHOT, PATH, candidate).blocks == plan.blocks
 
 
-def test_final_lf_restoration_does_not_tolerate_interior_whitespace_change() -> None:
+def test_final_lf_restoration_does_not_tolerate_block_kind_change() -> None:
     source = b"# First\n\n# Second\n"
     plan, request = prepared(source)
 
     with pytest.raises(DocumentTranslationError, match="structure_mismatch"):
-        restore_document(source, plan, request, ("# First\n\n\n# Second",))
+        restore_document(source, plan, request, ("# First\n\nSecond",))
 
 
 def test_configured_limit_applies_to_each_complete_prompt_with_minimum_chunks() -> None:

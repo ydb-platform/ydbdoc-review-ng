@@ -16,7 +16,10 @@ templates, inline code, нетранслируемый код и служебн�
 
 Одиночный финальный `LF` на границе source chunk принадлежит source. Если модель
 опустила только этот `LF`, collector восстанавливает его перед validation и
-assembly; другой whitespace не нормализуется.
+assembly, чтобы соседние чанки не слились. Остальные whitespace, marker style и
+punctuation не восстанавливаются из source: model Markdown сохраняется, если
+parser shape и protected invariants проходят проверку. Byte-exact совпадение
+обычных non-field syntax slices не требуется.
 
 До восстановления проверяются точное множество placeholders, единственность и
 принадлежность исходному верхнеуровневому блоку. Независимые `inline_code` и

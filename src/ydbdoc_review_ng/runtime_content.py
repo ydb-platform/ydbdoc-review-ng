@@ -83,7 +83,7 @@ from ydbdoc_review_ng.translation import (
     split_content_filter_chunk,
     validate_chunk_response,
     validate_translation_values,
-    verify_protected_fragments,
+    verify_document_candidate,
 )
 from ydbdoc_review_ng.translation.document import _document_block_texts
 
@@ -777,9 +777,10 @@ class RuntimeContent:
                     documents_total=len(documents),
                     fields_total=len(document.request.fields),
                 ):
-                    accepted.append(
-                        self.translate_document(document, operator_context=operator_context)
+                    accepted_map, accepted_document = self._translate_document(
+                        document, operator_context=operator_context
                     )
+                    accepted.append(accepted_map)
             except InvalidTranslationResponse:
                 assert plans.manifest is not None
                 state = ContinuationState(
@@ -795,8 +796,7 @@ class RuntimeContent:
                 raise SemanticCheckpointStop(
                     self._capture(plans.preparation, state, plans)
                 ) from None
-            accepted_map = accepted[-1]
-            accepted_full.append(self._document_from_map(document, accepted_map))
+            accepted_full.append(accepted_document)
             self.accepted_maps = tuple(sorted(accepted, key=lambda item: item.target_path.value))
             self.accepted_documents = tuple(
                 sorted(accepted_full, key=lambda item: item.target_path.value)
@@ -814,6 +814,14 @@ class RuntimeContent:
     def translate_document(
         self, document: Document, /, *, operator_context: str | None = None
     ) -> AcceptedMap:
+        accepted, _document = self._translate_document(
+            document, operator_context=operator_context
+        )
+        return accepted
+
+    def _translate_document(
+        self, document: Document, /, *, operator_context: str | None = None
+    ) -> tuple[AcceptedMap, AcceptedDocument]:
         entry = document.entry
         limit = int(
             self.environment.get("YDBDOC_MAX_MODEL_REQUEST_CHARACTERS")
@@ -935,7 +943,8 @@ class RuntimeContent:
             )
         except (DocumentTranslationError, ValueError, TypeError, UnicodeError):
             raise InvalidTranslationResponse("translation_response_invalid") from None
-        return AcceptedMap(entry.pair.target_path, tuple(sorted(values.items())))
+        accepted = AcceptedMap(entry.pair.target_path, tuple(sorted(values.items())))
+        return accepted, AcceptedDocument(entry.pair.target_path, candidate.decode("utf-8"))
 
     @staticmethod
     def _document_from_map(document: Document, accepted: AcceptedMap) -> AcceptedDocument:
@@ -965,7 +974,7 @@ class RuntimeContent:
                 target_plan = build_markdown_plan(
                     document.plan.source_snapshot, accepted.target_path, target
                 )
-                verify_protected_fragments(
+                verify_document_candidate(
                     document.source, document.plan, target, target_plan
                 )
                 values = _derive_target_translations(
@@ -1089,7 +1098,7 @@ class RuntimeContent:
             target_plan = build_markdown_plan(
                 document.plan.source_snapshot, document.entry.pair.target_path, target
             )
-            verify_protected_fragments(document.source, document.plan, target, target_plan)
+            verify_document_candidate(document.source, document.plan, target, target_plan)
 
     def validate_candidate(
         self, snapshot: ImmutableRunSnapshot, candidate: WorkflowCandidate, /

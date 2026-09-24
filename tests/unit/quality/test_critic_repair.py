@@ -129,6 +129,31 @@ def test_green_uses_one_critic_and_does_not_attempt_repair() -> None:
     assert PATH.value in executor.calls[0].prompt
 
 
+def test_formatting_drift_reaches_critic_without_deterministic_repair() -> None:
+    source = b"* Parent\n  * Nested source item\n"
+    target = b"* Parent translated\n* Nested translated item\n"
+    plan = build_markdown_plan(SNAPSHOT, SOURCE_PATH, source)
+    request = build_translation_request(source, plan)
+    executor = FakeExecutor(critic_json("GREEN", []))
+
+    result = review_translation(
+        executor,
+        model="yandexgpt-5.1/latest",
+        source=source,
+        source_plan=plan,
+        translation_request=request,
+        target=target,
+        target_path=PATH,
+        source_locale=Locale.EN,
+        target_locale=Locale.RU,
+    )
+
+    assert result.primary.verdict is Verdict.GREEN
+    assert result.original_candidate == target
+    assert not result.repair_attempted
+    assert [call.role.value for call in executor.calls] == ["critic"]
+
+
 @pytest.mark.parametrize("invalid_placeholder", [False, True])
 def test_full_document_repair_restores_source_fragments_before_exposing_map(invalid_placeholder):
     plan, request, accepted, target = prepared()

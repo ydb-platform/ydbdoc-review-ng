@@ -31,7 +31,7 @@ from ydbdoc_review_ng.translation import (
     restore_document,
     split_content_filter_chunk,
     validate_chunk_response,
-    verify_protected_fragments,
+    verify_document_candidate,
 )
 from ydbdoc_review_ng.translation.contract import field_request_text
 from ydbdoc_review_ng.translation.document import (
@@ -66,7 +66,7 @@ def _derive_target_translations(
         raise QualityInputError
     target_plan = build_markdown_plan(source_plan.source_snapshot, target_path, target)
     try:
-        verify_protected_fragments(source, source_plan, target, target_plan)
+        verify_document_candidate(source, source_plan, target, target_plan)
     except (ProtectedMismatch, TypeError, ValueError):
         raise QualityInputError from None
     target_fields = fields_of(target_plan)
@@ -134,8 +134,7 @@ def _derive_target_translations(
         except UnicodeDecodeError:
             raise QualityInputError from None
     try:
-        if assemble_candidate(source, source_plan, translation_request, values) != target:
-            raise QualityInputError
+        assemble_candidate(source, source_plan, translation_request, values)
     except AssemblyError:
         raise QualityInputError from None
     return values
@@ -276,7 +275,7 @@ def _repair_requests(
 ]:
     target_plan = build_markdown_plan(source_plan.source_snapshot, target_path, target)
     try:
-        verify_protected_fragments(source, source_plan, target, target_plan)
+        verify_document_candidate(source, source_plan, target, target_plan)
     except (ProtectedMismatch, TypeError, ValueError):
         raise QualityInputError from None
     source_document = prepare_document(source, source_plan, max_characters=2**63 - 1)
