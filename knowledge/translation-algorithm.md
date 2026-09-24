@@ -34,9 +34,10 @@ diagnostics. Косметические и иные изменения model Mar
 исправления. Повторный prompt сохраняет тот же authoritative source и прямо
 перечисляет потерянные tokens, соответствующие source fragments и примерные
 source-строки; rejected translation в него не копируется. Если после повтора
-известный placeholder всё равно отсутствует, candidate публикуется без этого
-fragment и получает детерминированный RED с понятной инструкцией исправить файл
-вручную и перезапустить `doc_verify`. При `doc_verify`
+известный placeholder всё равно отсутствует либо точный набор placeholders
+переставлен, parseable candidate публикуется и получает детерминированный RED с
+понятной инструкцией исправить файл вручную и перезапустить `doc_verify`. Лишние
+или повторные placeholders не публикуются. При `doc_verify`
 те же protected fragments сверяются с текущим target: ручное изменение URL, path
 или code относительно authoritative source отвергается.
 

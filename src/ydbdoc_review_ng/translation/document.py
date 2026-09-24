@@ -235,7 +235,7 @@ def build_document_correction_note(
             f"Validation failed: {validation_problem}. Return complete Markdown; preserve "
             "structure and every placeholder."
         )
-    lines.append("Do not add, duplicate, rename, or alter any protected placeholder.")
+    lines.append("Do not add, duplicate, rename, reorder, or alter any protected placeholder.")
     return "\n".join(lines)
 
 

@@ -267,6 +267,24 @@ def test_translate_rejects_link_groups_that_exchange_source_endpoints(
     assert len(models.calls) == 2
 
 
+@pytest.mark.parametrize("source_locale", [Locale.RU, Locale.EN])
+def test_translate_rejects_crossed_link_group_intervals(source_locale: Locale) -> None:
+    document = document_for(
+        b"Read [one](one.md), then [two](two.md).\n",
+        source_locale=source_locale,
+    )
+    crossed = (
+        "Read [[YDBDOC_PROTECTED_0001]]one[[YDBDOC_PROTECTED_0003]], then "
+        "[[YDBDOC_PROTECTED_0002]]two[[YDBDOC_PROTECTED_0004]].\n"
+    )
+    models = ScriptedModels([crossed, crossed])
+
+    with pytest.raises(InvalidTranslationResponse, match="translation_response_invalid"):
+        content_with(models).translate_document(document)
+
+    assert len(models.calls) == 2
+
+
 @pytest.mark.parametrize(
     ("second_response", "succeeds"),
     [
@@ -483,6 +501,7 @@ def test_complete_markdown_response_gets_exactly_one_technical_correction() -> N
     assert "Rejected translation:" not in correction
     assert placeholder.token in correction
     assert "`CPUTime`" in correction
+    assert "reorder" in correction
     assert accepted.as_dict() == {}
     assert accepted_document.translated_markdown == "# Use  now.\n"
     finding = content.translation_findings[document.entry.pair.target_path][0]
@@ -518,6 +537,51 @@ def test_lost_placeholder_candidate_is_reviewed_red_without_critic_call() -> Non
     assert placeholder.token in review.final.findings[0].reason
     assert "`CPUTime`" in review.final.findings[0].reason
     assert len(models.calls) == 2
+
+
+def test_reordered_link_pairs_publish_parseable_candidate_red() -> None:
+    document = document_for(b"Read [one](one.md), then [two](two.md).\n")
+    prepared = prepare_document(document.source, document.plan, max_characters=100_000)
+    first_open, first_close, second_open, second_close = (
+        item.token for item in prepared.placeholders
+    )
+    reordered = f"Read {second_open}two{second_close}, after {first_open}one{first_close}.\n"
+    models = ScriptedModels([reordered, reordered])
+    content = content_with(models)
+
+    _accepted, accepted_document = content._translate_document(document)
+
+    assert accepted_document.translated_markdown == ("Read [two](two.md), after [one](one.md).\n")
+    assert len(models.calls) == 2
+    finding = content.translation_findings[document.entry.pair.target_path][0]
+    assert "moved protected placeholder" in finding.reason
+    assert "one.md" in finding.reason or "two.md" in finding.reason
+    assert finding.searchable_snippet == "Read [two](two.md), after [one](one.md)."
+    assert finding.target_line == 1
+
+
+def test_live_nested_link_reorder_witness_publishes_red() -> None:
+    document = document_for("* [Добавлена](issue) поддержка [репликации](guide).\n".encode())
+    prepared = prepare_document(document.source, document.plan, max_characters=100_000)
+    outer_open, outer_close, inner_open, inner_close = (
+        item.token for item in prepared.placeholders
+    )
+    reordered = (
+        f"* {outer_open}Support for {inner_open}replication{inner_close} "
+        f"has been added{outer_close}.\n"
+    )
+    models = ScriptedModels([reordered, reordered])
+    content = content_with(models)
+
+    _accepted, accepted_document = content._translate_document(document)
+
+    assert accepted_document.translated_markdown == (
+        "* [Support for [replication](guide) has been added](issue).\n"
+    )
+    finding = content.translation_findings[document.entry.pair.target_path][0]
+    assert "moved protected placeholder" in finding.reason
+    assert "](issue)" in finding.reason
+    assert "Support for [replication](guide)" in finding.searchable_snippet
 
 
 def test_exhausted_invalid_large_chunk_is_not_split_or_retried_again() -> None:

@@ -866,7 +866,9 @@ class RuntimeContent:
                     if token != missing_token and token in rejected
                 )
             )
-            position = rejected.find(neighbors[0][2]) if neighbors else -1
+            position = rejected.find(missing_token)
+            if position < 0:
+                position = rejected.find(neighbors[0][2]) if neighbors else -1
             local_line = rejected[: max(position, 0)].count("\n") + 1
             candidate_lines = rejected.splitlines()
             if not candidate_lines:
@@ -889,6 +891,44 @@ class RuntimeContent:
                 snippet = "translated line is empty"
             target_line = local_line + sum(response.count("\n") for response in responses)
             return snippet[:160], target_line
+
+        def container_pairs_preserved(chunk: DocumentChunk, returned: tuple[str, ...]) -> bool:
+            opening_for = {
+                ProtectedKind.LINK_CLOSE: ProtectedKind.LINK_OPEN,
+                ProtectedKind.IMAGE_CLOSE: ProtectedKind.IMAGE_OPEN,
+            }
+            source_stack: list[tuple[ProtectedKind, str]] = []
+            close_to_open: dict[str, str] = {}
+            for token in chunk.placeholders:
+                kind = by_placeholder[token].kind
+                if kind in {ProtectedKind.LINK_OPEN, ProtectedKind.IMAGE_OPEN}:
+                    source_stack.append((kind, token))
+                elif kind in opening_for:
+                    expected_open = opening_for[kind]
+                    match = next(
+                        (
+                            index
+                            for index in range(len(source_stack) - 1, -1, -1)
+                            if source_stack[index][0] is expected_open
+                        ),
+                        None,
+                    )
+                    if match is None:
+                        return False
+                    _kind, open_token = source_stack.pop(match)
+                    close_to_open[token] = open_token
+            if source_stack:
+                return False
+            open_tokens = set(close_to_open.values())
+            returned_stack: list[str] = []
+            for token in returned:
+                if token in open_tokens:
+                    returned_stack.append(token)
+                elif token in close_to_open:
+                    if not returned_stack or returned_stack[-1] != close_to_open[token]:
+                        return False
+                    returned_stack.pop()
+            return not returned_stack
 
         def invoke_chunk(
             chunk: DocumentChunk, chunk_index: int
@@ -925,33 +965,78 @@ class RuntimeContent:
                         missing, unexpected = _placeholder_differences(
                             chunk.placeholders, result.text
                         )
+                        returned = tuple(_DIAGNOSTIC_PLACEHOLDER.findall(result.text))
+                        reordered = (
+                            not missing and not unexpected and returned != chunk.placeholders
+                        )
                         if (
                             str(error) == "document_response:placeholder_mismatch"
-                            and missing
                             and not unexpected
+                            and (missing or reordered)
                         ):
-                            reduced = chunk.text
-                            for token in missing:
-                                reduced = reduced.replace(token, "", 1)
-                            reduced_chunk = DocumentChunk(
-                                reduced,
-                                chunk.block_start,
-                                chunk.block_end,
-                                tuple(
-                                    token
-                                    for token in chunk.placeholders
-                                    if token not in set(missing)
-                                ),
-                            )
-                            try:
-                                validate_chunk_response(
-                                    reduced_chunk, prepared.placeholders, result.text
+                            if missing:
+                                reduced = chunk.text
+                                for token in missing:
+                                    reduced = reduced.replace(token, "", 1)
+                                missing_set = set(missing)
+                                reduced_chunk = DocumentChunk(
+                                    reduced,
+                                    chunk.block_start,
+                                    chunk.block_end,
+                                    tuple(
+                                        token
+                                        for token in chunk.placeholders
+                                        if token not in missing_set
+                                    ),
                                 )
-                            except DocumentTranslationError:
-                                raise InvalidTranslationResponse(
-                                    "translation_response_invalid"
-                                ) from None
-                            for token in missing:
+                                try:
+                                    validate_chunk_response(
+                                        reduced_chunk, prepared.placeholders, result.text
+                                    )
+                                except DocumentTranslationError:
+                                    raise InvalidTranslationResponse(
+                                        "translation_response_invalid"
+                                    ) from None
+                                finding_tokens = missing
+                            else:
+                                if not container_pairs_preserved(chunk, returned):
+                                    raise InvalidTranslationResponse(
+                                        "translation_response_invalid"
+                                    ) from None
+                                reordered_chunk = DocumentChunk(
+                                    chunk.text,
+                                    chunk.block_start,
+                                    chunk.block_end,
+                                    returned,
+                                )
+                                try:
+                                    validate_chunk_response(
+                                        reordered_chunk,
+                                        prepared.placeholders,
+                                        result.text,
+                                    )
+                                except DocumentTranslationError:
+                                    raise InvalidTranslationResponse(
+                                        "translation_response_invalid"
+                                    ) from None
+                                mismatched = tuple(
+                                    expected
+                                    for expected, actual in zip(
+                                        chunk.placeholders, returned, strict=True
+                                    )
+                                    if expected != actual
+                                )
+                                finding_tokens = (
+                                    next(
+                                        (
+                                            token
+                                            for token in mismatched
+                                            if len(by_placeholder[token].source_bytes) > 1
+                                        ),
+                                        mismatched[0],
+                                    ),
+                                )
+                            for token in finding_tokens:
                                 placeholder = by_placeholder[token]
                                 source_text, source_line = document_placeholder_context(
                                     document.source, placeholder
@@ -962,12 +1047,19 @@ class RuntimeContent:
                                 degraded_findings.append(
                                     Finding(
                                         False,
-                                        f"The translation model lost protected placeholder "
+                                        f"The translation model "
+                                        f"{'lost' if missing else 'moved'} protected placeholder "
                                         f"{token}, which represents source text "
                                         f"{json.dumps(source_text, ensure_ascii=False)}, near "
                                         f"source line {source_line}.",
-                                        "Restore this exact source fragment in the corresponding "
-                                        "translated sentence, then rerun doc_verify.",
+                                        (
+                                            "Restore this exact source fragment in the "
+                                            "corresponding translated sentence"
+                                            if missing
+                                            else "Move this exact source fragment back so the "
+                                            "protected links keep their source pairing and order"
+                                        )
+                                        + ", then rerun doc_verify.",
                                         searchable_snippet,
                                         entry.pair.target_path.value,
                                         target_line,
