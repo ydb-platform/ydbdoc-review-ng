@@ -7,11 +7,13 @@ import re
 from collections import Counter
 from collections.abc import Mapping
 from enum import Enum
+from typing import TypeVar
 
 import yaml  # type: ignore[import-untyped]
 
 from ydbdoc_review_ng.parser.markdown import build_markdown_plan
 from ydbdoc_review_ng.plan import (
+    Block,
     BlockKind,
     Field,
     ProtectedKind,
@@ -25,6 +27,14 @@ _TOKEN = re.compile(r"\[\[[A-Z_]+_[0-9]{4}\]\]")
 _PLACEHOLDER_LIKE = re.compile(r"\[\[[A-Z_]+.*?\]\]")
 _OPEN = {ProtectedKind.LINK_OPEN, ProtectedKind.IMAGE_OPEN}
 _CLOSE = {ProtectedKind.LINK_CLOSE, ProtectedKind.IMAGE_CLOSE}
+_ProtectedEntry = tuple[str, bytes]
+_ProtectedGroup = tuple[_ProtectedEntry, ...]
+_ProtectedBlockSignature = tuple[
+    tuple[_ProtectedEntry, ...],
+    tuple[_ProtectedEntry, ...],
+    tuple[_ProtectedGroup, ...],
+]
+_T = TypeVar("_T")
 
 
 class AssemblyErrorReason(str, Enum):
@@ -109,6 +119,38 @@ def _protected_signature(data: bytes, plan: SourcePlan, position: int) -> tuple[
         tuple(sorted(movable_singles)),
         tuple(tuple(items) for items in groups.values()),
     )
+
+
+def _block_protected_signature(data: bytes, block: Block) -> _ProtectedBlockSignature:
+    ordered_singles: list[tuple[str, bytes]] = []
+    movable_singles: list[tuple[str, bytes]] = []
+    groups: dict[int, list[tuple[str, bytes]]] = {}
+    regions = sorted(
+        (region for field in block.fields for region in field.protected_regions),
+        key=lambda region: region.span.start,
+    )
+    for region in regions:
+        entry = (region.kind.value, data[region.span.start : region.span.end])
+        if region.group is None:
+            if region.kind in {ProtectedKind.INLINE_CODE, ProtectedKind.TEMPLATE}:
+                movable_singles.append(entry)
+            else:
+                ordered_singles.append(entry)
+        else:
+            groups.setdefault(region.group, []).append(entry)
+    return (
+        tuple(ordered_singles),
+        tuple(sorted(movable_singles)),
+        tuple(tuple(items) for items in groups.values()),
+    )
+
+
+def _is_subsequence(required: tuple[_T, ...], actual: tuple[_T, ...]) -> bool:
+    position = 0
+    for item in actual:
+        if position < len(required) and item == required[position]:
+            position += 1
+    return position == len(required)
 
 
 def _non_field_slices(data: bytes, plan: SourcePlan) -> tuple[bytes, ...]:
@@ -232,11 +274,33 @@ def verify_protected_fragments(
                 if source_slice != target_slice
             )
             raise ProtectedMismatch(mismatch)
-    for position in range(len(source_fields)):
-        if _protected_signature(source, source_plan, position) != _protected_signature(
-            target, target_plan, position
+    if exact_non_field_slices:
+        for position in range(len(source_fields)):
+            if _protected_signature(source, source_plan, position) != _protected_signature(
+                target, target_plan, position
+            ):
+                raise ProtectedMismatch(position + 1)
+        return
+
+    if tuple(block.kind for block in source_plan.blocks) != tuple(
+        block.kind for block in target_plan.blocks
+    ):
+        raise ProtectedMismatch(1)
+    for position, (source_block, target_block) in enumerate(
+        zip(source_plan.blocks, target_plan.blocks, strict=True), 1
+    ):
+        source_ordered, source_movable, source_groups = _block_protected_signature(
+            source, source_block
+        )
+        target_ordered, target_movable, target_groups = _block_protected_signature(
+            target, target_block
+        )
+        if (
+            not _is_subsequence(source_ordered, target_ordered)
+            or Counter(source_movable) - Counter(target_movable)
+            or not _is_subsequence(source_groups, target_groups)
         ):
-            raise ProtectedMismatch(position + 1)
+            raise ProtectedMismatch(position)
 
 
 def assemble_candidate(

@@ -203,6 +203,25 @@ def test_missing_final_lf_is_restored_at_each_chunk_boundary() -> None:
     assert build_markdown_plan(SNAPSHOT, PATH, candidate).blocks == plan.blocks
 
 
+def test_translated_abbreviation_is_not_treated_as_mutated_source_path() -> None:
+    source = (
+        "  * `enable_strict_user_management` — включает строгие правила "
+        "(т.е. только администратор);\n"
+    ).encode()
+    plan, request = prepared(source)
+    token = request.placeholders[0].token
+    response = (
+        f"* {token} — enables strict rules (i.e., only an administrator);\n"
+    )
+
+    candidate = restore_document(source, plan, request, (response,))
+
+    assert candidate == (
+        b"* `enable_strict_user_management` "
+        b"\xe2\x80\x94 enables strict rules (i.e., only an administrator);\n"
+    )
+
+
 def test_final_lf_restoration_does_not_tolerate_block_kind_change() -> None:
     source = b"# First\n\n# Second\n"
     plan, request = prepared(source)
