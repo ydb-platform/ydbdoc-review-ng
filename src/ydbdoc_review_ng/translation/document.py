@@ -101,6 +101,30 @@ def _placeholder_block_masks(
     return tuple(masks)
 
 
+def _placeholder_field_masks(
+    spans: dict[str, tuple[int, int]],
+    plan: SourcePlan,
+    token_bits: dict[str, int],
+    /,
+) -> tuple[int, ...]:
+    masks: list[int] = []
+    for field in fields_of(plan):
+        mask = 0
+        for token, (start, end) in spans.items():
+            if field.span.start <= start and end <= field.span.end:
+                mask |= token_bits[token]
+        masks.append(mask)
+    return tuple(masks)
+
+
+def _region_masks_compatible(source_masks: tuple[int, ...], target_masks: tuple[int, ...], /) -> bool:
+    if len(source_masks) == len(target_masks):
+        return source_masks == target_masks
+    if len(source_masks) > len(target_masks):
+        return _merged_block_masks_match(source_masks, target_masks)
+    return _merged_block_masks_match(target_masks, source_masks)
+
+
 def _merged_block_masks_match(many: tuple[int, ...], few: tuple[int, ...], /) -> bool:
     reachable = {0}
     for expected in few:
@@ -127,11 +151,11 @@ def _placeholder_blocks_compatible(
     token_bits = {token: 1 << position for position, token in enumerate(source_spans)}
     source_masks = _placeholder_block_masks(source_spans, source_plan, token_bits)
     target_masks = _placeholder_block_masks(target_spans, target_plan, token_bits)
-    if len(source_masks) == len(target_masks):
-        return source_masks == target_masks
-    if len(source_masks) > len(target_masks):
-        return _merged_block_masks_match(source_masks, target_masks)
-    return _merged_block_masks_match(target_masks, source_masks)
+    source_field_masks = _placeholder_field_masks(source_spans, source_plan, token_bits)
+    target_field_masks = _placeholder_field_masks(target_spans, target_plan, token_bits)
+    return _region_masks_compatible(
+        source_masks, target_masks
+    ) and _region_masks_compatible(source_field_masks, target_field_masks)
 
 
 @dataclass(frozen=True, slots=True)

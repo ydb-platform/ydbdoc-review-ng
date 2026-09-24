@@ -4,6 +4,7 @@ import pytest
 
 from ydbdoc_review_ng.domain import GitSha, RepoPath, RepositoryId, SnapshotRef
 from ydbdoc_review_ng.parser.markdown import build_markdown_plan
+from ydbdoc_review_ng.plan import ProtectedKind
 from ydbdoc_review_ng.translation.document import (
     DocumentTranslationError,
     build_document_prompt,
@@ -288,6 +289,30 @@ def test_block_merge_does_not_hide_inline_code_move_between_fields() -> None:
     response = (
         f"First {second}.\n\n"
         f"Second {first}.\nThird paragraph.\n"
+    )
+
+    with pytest.raises(DocumentTranslationError, match="placeholder_mismatch"):
+        restore_document(source, plan, request, (response,))
+
+
+def test_block_merge_does_not_hide_inline_code_swap_between_fields_in_yfm_block() -> None:
+    source = (
+        b'{% note info "Title `A`" %}\n'
+        b"Body `B`\n"
+        b"{% endnote %}\n\n"
+        b"Second paragraph.\n\nThird paragraph.\n"
+    )
+    plan, request = prepared(source)
+    first, second = (
+        item.token
+        for item in request.placeholders
+        if item.kind is ProtectedKind.INLINE_CODE
+    )
+    response = request.chunks[0].text
+    response = response.replace(first, "TEMP", 1).replace(second, first, 1)
+    response = response.replace("TEMP", second, 1).replace(
+        "Second paragraph.\n\nThird paragraph.",
+        "Second paragraph.\nThird paragraph.",
     )
 
     with pytest.raises(DocumentTranslationError, match="placeholder_mismatch"):
