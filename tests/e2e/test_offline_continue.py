@@ -84,7 +84,7 @@ def test_review_cli_repairs_only_unresolved_path_then_updates_one_verdict(capsys
     assert invoke(services, 43) == 0
     assert services.rows[following.continuation_id]["status"] == "closed"
     assert len(services.comments) == 1
-    assert services.comments[0]["body"].startswith("GREEN\n")
+    assert services.comments[0]["body"].startswith("🟢 GREEN\n")
     assert CONTEXT not in services.comments[0]["body"]
     captured = capsys.readouterr()
     assert CONTEXT not in captured.out + captured.err

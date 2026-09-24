@@ -428,7 +428,7 @@ def test_pending_success_uses_full_review_single_repair_and_captures_red():
     assert following.job_id == result.job_id
     assert following.created_at == saved.created_at
     assert services.rows[saved.continuation_id]["status"] == "closed"
-    assert services.comments[-1]["body"].startswith("RED\n")
+    assert services.comments[-1]["body"].startswith("🔴 RED\n")
     assert services.commits == 2
 
 

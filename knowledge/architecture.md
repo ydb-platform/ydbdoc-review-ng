@@ -33,7 +33,10 @@ semantic stop наследует первоначальный expiry. Infrastruc
 ## Разделение ответственности
 
 - Локальный детерминированный слой проверяет strict JSON, exact field IDs,
-  placeholders/container pairs, source-fragment restoration и повторный parse.
+  placeholders/container pairs, source-fragment restoration, повторный parse и
+  простые build-breaking дефекты Markdown. Невалидный большой translate chunk
+  после одной correction один раз делится по top-level block boundary; невалидный
+  child или маленький chunk не публикуется.
 - В `doc_verify` exact protected-fragment invariant отвергает ручное изменение
   URL/path/code относительно authoritative source без navigation graph или link
   resolver.
@@ -45,6 +48,11 @@ semantic stop наследует первоначальный expiry. Infrastruc
 - YDB хранит job, versioned continuation checkpoint и каждую начатую model attempt с request, response при наличии,
   status/error и cost. Job всегда завершается terminal status/error, включая
   ранние failures. TTL текстов составляет 14 дней.
+- Единственный QA comment является коротким русским пользовательским резюме:
+  цветной вердикт, стоимость текущей job, до десяти конкретных исправлений и
+  краткая инструкция `doc_continue` при семантическом RED. SHA, накопительные
+  breakdown и внутренние диагностические данные остаются в YDB и публично не
+  выводятся.
 - Budget gate выполняется только перед новым `doc_translate`. Его дневной `SUM`
   включает все известные costs трёх workflow и ролей, в том числе
   `doc_verify` critic/repair; unknown cost не подменяется нулём. Gate идёт после

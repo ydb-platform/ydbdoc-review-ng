@@ -239,14 +239,21 @@ def test_missing_blank_line_at_chunk_boundary_is_cosmetic() -> None:
     assert len(build_markdown_plan(SNAPSHOT, PATH, candidate).blocks) != len(plan.blocks)
 
 
-def test_missing_blank_line_with_placeholder_is_cosmetic() -> None:
-    source = b"First paragraph.\n\nSecond [guide](guide.md).\n"
+def test_missing_blank_line_between_top_level_blocks_is_rejected() -> None:
+    source = b"* First item.\n\n## Second [guide](guide.md)\n"
     plan, request = prepared(source)
     response = request.chunks[0].text.replace("\n\n", "\n", 1)
 
-    candidate = restore_document(source, plan, request, (response,))
+    with pytest.raises(DocumentTranslationError, match="markdown_invalid"):
+        restore_document(source, plan, request, (response,))
 
-    assert candidate == b"First paragraph.\nSecond [guide](guide.md).\n"
+
+def test_empty_markdown_link_is_rejected_before_publication() -> None:
+    source = b"Read the guide.\n"
+    plan, request = prepared(source)
+
+    with pytest.raises(DocumentTranslationError, match="markdown_invalid"):
+        restore_document(source, plan, request, ("Read the [guide]().\n",))
 
 
 def test_whole_document_response_rejects_invented_link() -> None:

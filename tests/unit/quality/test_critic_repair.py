@@ -1548,6 +1548,7 @@ def test_critic_request_contains_full_source_target_and_link_purpose_boundary() 
     assert "Always include field_ids in every finding" in built.prompt
     assert "Use [] when no safe exact field mapping exists" in built.prompt
     assert "List each field ID at most once" in built.prompt
+    assert "Write reason and expected_correction in Russian" in built.prompt
     assert SOURCE.decode() not in repr(built)
     assert target.decode() not in repr(built)
 

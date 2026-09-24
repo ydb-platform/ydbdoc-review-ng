@@ -95,7 +95,7 @@ def test_shipped_composition_translates_then_verifies_current_pr_without_retrans
     )
     assert services.files["ydb/docs/en/core/page.md"] == b"# Translated\n"
     assert len(services.comments) == 1
-    assert services.comments[0]["body"].startswith("GREEN\n")
+    assert services.comments[0]["body"].startswith("🟢 GREEN\n")
     events = services.events
     assert (
         next(
@@ -1226,7 +1226,7 @@ def test_t017_n04_real_translate_reviews_escaped_quoted_frontmatter() -> None:
     assert result == 0
     assert services.files["ydb/docs/en/core/page.md"] == target
     assert ("MODEL", ("verdict", "findings")) in services.events
-    assert services.comments[0]["body"].startswith("GREEN\n")
+    assert services.comments[0]["body"].startswith("🟢 GREEN\n")
 
 
 def test_t017_n04_real_verify_reviews_escaped_quoted_frontmatter() -> None:
@@ -1268,7 +1268,7 @@ def test_t017_n04_real_verify_reviews_escaped_quoted_frontmatter() -> None:
     assert [event for event in services.events if event[0] == "MODEL"] == [
         ("MODEL", ("verdict", "findings"))
     ]
-    assert services.comments[0]["body"].startswith("GREEN\n")
+    assert services.comments[0]["body"].startswith("🟢 GREEN\n")
 
 
 def test_t017_n05_truncated_http_response_is_audited_once_with_unknown_cost() -> None:
@@ -1804,7 +1804,7 @@ def test_model_repair_is_published_before_final_critic_and_only_then_pr():
         or (method == "POST" and path.endswith(("/git/commits", "/pulls")))
     ]
     assert significant == ["MODEL", "commits", "CRITIC", "REPAIR", "commits", "MODEL", "pulls"]
-    assert "Current job cost: 0.06 RUB" in services.comments[0]["body"]
+    assert "Стоимость запуска: 0.06 RUB" in services.comments[0]["body"]
 
 
 def test_runtime_never_reports_green_after_branch_moves_during_critic():

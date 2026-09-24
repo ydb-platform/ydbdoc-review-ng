@@ -4,8 +4,7 @@ from decimal import Decimal
 import pytest
 
 from ydbdoc_review_ng.application import ImmutableRunSnapshot, WorkflowCandidate
-from ydbdoc_review_ng.domain import GitSha, Mode, ModelRole, RepoPath
-from ydbdoc_review_ng.persistence import AttemptCostRecord
+from ydbdoc_review_ng.domain import GitSha, Mode, RepoPath
 from ydbdoc_review_ng.publication import (
     FileChange,
     GitPublicationAdapter,
@@ -266,8 +265,8 @@ def test_verify_reports_on_existing_pr_without_requiring_publication():
         review=review(),
     )
     assert backend.events == [("create_comment", 123)]
-    assert backend.comments[7].body.startswith("YELLOW")
-    assert "unknown" in backend.comments[7].body
+    assert backend.comments[7].body.startswith("🟡 YELLOW")
+    assert "неизвестна" in backend.comments[7].body
 
 
 def test_report_cannot_label_an_old_commit_as_current_head():
@@ -350,7 +349,7 @@ def test_one_bot_comment_created_then_updated_without_copying_transcripts():
         ("create_comment", 123),
         ("update_comment", 123, 7),
     ]
-    assert backend.comments[7].body.startswith("GREEN")
+    assert backend.comments[7].body.startswith("🟢 GREEN")
     assert SECRET not in backend.comments[7].body
     assert backend.comments[99].body.endswith("user quote")
 
@@ -405,10 +404,10 @@ def test_t017_f11_pat_authored_verify_reports_update_one_marker_comment() -> Non
 
     assert mutations == ["POST", "PATCH"]
     assert len(comments) == 1
-    assert comments[0]["body"].startswith("GREEN")
+    assert comments[0]["body"].startswith("🟢 GREEN")
 
 
-def test_report_contains_all_human_fields_cost_and_checked_shas():
+def test_red_report_is_short_russian_and_actionable_without_internal_details():
     finding = Finding(
         True, "Meaning reversed", "Preserve negation", "does not delete", PATH.value, 19
     )
@@ -416,71 +415,69 @@ def test_report_contains_all_human_fields_cost_and_checked_shas():
         review(Verdict.RED, (finding,)), COMMIT, ReportContext(SOURCE, TARGET, Decimal("1.25")), ()
     )
     for value in [
-        "RED",
+        "🔴 RED",
         PATH.value,
-        ":19",
+        "строка 19",
         "does not delete",
         "Meaning reversed",
         "Preserve negation",
-        "1.25",
+        "1.25 RUB",
+        "/ydbdoc continue",
+        "doc_continue",
+    ]:
+        assert value in report
+    for internal in [
+        "CI:",
+        "Source SHA",
+        "Target SHA",
+        "Commit SHA",
         SOURCE.value,
         TARGET.value,
         COMMIT.value,
+        "Cumulative",
     ]:
-        assert value in report
-    assert report.startswith("RED")
+        assert internal not in report
+    assert report.startswith("🔴 RED")
     assert SECRET not in report
 
 
-def test_report_shows_cumulative_costs_per_article_shared_and_historical() -> None:
-    other = RepoPath("ydb/docs/en/core/other.md")
-    costs = (
-        AttemptCostRecord(PATH, ModelRole.TRANSLATE, Decimal("1.20")),
-        AttemptCostRecord(PATH, ModelRole.CRITIC, Decimal("0.30")),
-        AttemptCostRecord(PATH, ModelRole.FINAL_CRITIC, Decimal("0.10")),
-        AttemptCostRecord(other, ModelRole.TRANSLATE, Decimal("2.00")),
-        AttemptCostRecord(other, ModelRole.REPAIR, None),
-        AttemptCostRecord(None, ModelRole.DIRECTION, Decimal("0.05")),
-        AttemptCostRecord(None, ModelRole.TRANSLATE, Decimal("3.00")),
+def test_red_report_bounds_findings_and_names_files_with_omitted_items() -> None:
+    other = "ydb/docs/en/core/other.md"
+    findings = tuple(
+        Finding(
+            True,
+            f"problem {index}",
+            f"fix {index}",
+            f"snippet {index}",
+            other if index % 2 else PATH.value,
+            index + 1,
+        )
+        for index in range(25)
     )
 
     report = render_report(
-        review(), COMMIT, ReportContext(SOURCE, TARGET, Decimal("0.40"), costs), ()
+        review(Verdict.RED, findings),
+        COMMIT,
+        ReportContext(SOURCE, TARGET, Decimal("0.40")),
+        (),
     )
 
-    assert "Current job cost: 0.40 RUB" in report
-    assert (
-        f"- {PATH.value}: translation 1.20 RUB; critic 0.40 RUB; "
-        "repair not called; total 1.60 RUB"
-    ) in report
-    assert (
-        f"- {other.value}: translation 2.00 RUB; critic not called; "
-        "repair unknown; total unknown"
-    ) in report
-    assert "Shared PR-wide cost: direction 0.05 RUB" in report
-    assert (
-        "Unattributed historical cost: translation 3.00 RUB; critic not called; "
-        "repair not called; total 3.00 RUB"
-    ) in report
-    assert "Cumulative PR total: unknown" in report
+    assert report.count("- строка ") == 10
+    assert "Ещё 15 замечаний не показаны" in report
+    assert PATH.value in report
+    assert other in report
+    assert len(report) < 12_000
 
 
 def test_report_never_renders_unknown_cost_as_zero() -> None:
     report = render_report(
         review(),
         COMMIT,
-        ReportContext(
-            SOURCE,
-            TARGET,
-            None,
-            (AttemptCostRecord(PATH, ModelRole.TRANSLATE, None),),
-        ),
+        ReportContext(SOURCE, TARGET, None),
         (),
     )
 
-    assert "Current job cost: unknown" in report
-    assert "translation unknown" in report
-    assert "Cumulative PR total: unknown" in report
+    assert "Стоимость запуска: неизвестна" in report
     assert "0 RUB" not in report
 
 
@@ -590,14 +587,14 @@ def test_byte_identical_repair_does_not_skip_report_for_already_published_change
 @pytest.mark.parametrize(
     "checks,status,word",
     [
-        ((), "YELLOW", "missing"),
+        ((), "YELLOW", "не запускалась"),
         (
             (
                 CheckResult("doc_verify", COMMIT, "success"),
                 CheckResult("build-docs", COMMIT, "pending"),
             ),
             "YELLOW",
-            "pending",
+            "выполняется",
         ),
         (
             (
@@ -605,7 +602,7 @@ def test_byte_identical_repair_does_not_skip_report_for_already_published_change
                 CheckResult("build-docs", COMMIT, "success"),
             ),
             "YELLOW",
-            "SHA",
+            "устаревший результат",
         ),
         (
             (
@@ -613,7 +610,7 @@ def test_byte_identical_repair_does_not_skip_report_for_already_published_change
                 CheckResult("build-docs", COMMIT, "failure"),
             ),
             "RED",
-            "failure",
+            "завершилась с ошибкой",
         ),
         (
             (
@@ -621,7 +618,7 @@ def test_byte_identical_repair_does_not_skip_report_for_already_published_change
                 CheckResult("build-docs", COMMIT, "success"),
             ),
             "GREEN",
-            "success",
+            "успешно",
         ),
     ],
 )
@@ -629,6 +626,8 @@ def test_readiness_requires_both_success_on_exact_current_head(checks, status, w
     readiness = merge_readiness(COMMIT, checks)
     assert readiness.status == status
     assert word in readiness.reason
-    assert render_report(review(), COMMIT, ReportContext(SOURCE, TARGET, None), checks).startswith(
-        status
-    )
+    icon = {"GREEN": "🟢", "YELLOW": "🟡", "RED": "🔴"}[status]
+    report = render_report(review(), COMMIT, ReportContext(SOURCE, TARGET, None), checks)
+    assert report.startswith(f"{icon} {status}")
+    if status == "YELLOW":
+        assert "После завершения проверок повторно запустите `doc_verify`" in report

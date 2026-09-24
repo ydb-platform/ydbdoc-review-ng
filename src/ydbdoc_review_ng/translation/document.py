@@ -21,6 +21,10 @@ from ydbdoc_review_ng.plan import (
 
 _TOKEN = re.compile(r"\[\[YDBDOC_PROTECTED_[0-9]+\]\]")
 _PLACEHOLDER_LIKE = re.compile(r"\[\[YDBDOC_PROTECTED_[^\]\r\n]{0,64}\]\]")
+_PLACEHOLDER_RESIDUE = re.compile(r"YDBDOC_PROTECTED_[0-9]+")
+_EMPTY_LINK = re.compile(r"\]\(\s*\)")
+_ATX_HEADING = re.compile(r"^ {0,3}#{1,6}(?:\s|$)")
+_TOP_LEVEL_LIST_ITEM = re.compile(r"^(?:[*+-]|[0-9]+[.)])\s+")
 RAW_MARKDOWN_RESPONSE_MAX_CHARACTERS = 16_000
 CORRECTION_SOURCE_EXCERPT_MAX_CHARACTERS = 160
 
@@ -35,6 +39,61 @@ def _response_tokens(value: str) -> tuple[str, ...]:
     if placeholder_like != tokens or value.count("[[YDBDOC_PROTECTED_") != len(tokens):
         raise DocumentTranslationError("document_response:placeholder_mismatch")
     return tokens
+
+
+def _markdown_style_problems(value: bytes, /) -> tuple[tuple[str, int | None], ...]:
+    text = value.decode("utf-8")
+    problems: list[tuple[str, int | None]] = []
+    for match in _EMPTY_LINK.finditer(text):
+        problems.append(("empty_link", text[: match.start()].count("\n") + 1))
+
+    lines = text.splitlines()
+    fence: str | None = None
+    outside_fence: list[bool] = []
+    for line in lines:
+        stripped = line.lstrip()
+        marker = stripped[:3]
+        outside_fence.append(fence is None)
+        if marker in {"```", "~~~"}:
+            if fence is None:
+                fence = marker
+            elif marker == fence:
+                fence = None
+
+    for index, line in enumerate(lines):
+        if not outside_fence[index]:
+            continue
+        if _ATX_HEADING.match(line):
+            if index and lines[index - 1].strip():
+                problems.append(("blank_before_heading", index + 1))
+            if index + 1 < len(lines) and lines[index + 1].strip():
+                problems.append(("blank_after_heading", index + 1))
+        if (
+            _TOP_LEVEL_LIST_ITEM.match(line)
+            and (index == 0 or not _TOP_LEVEL_LIST_ITEM.match(lines[index - 1]))
+            and index
+            and lines[index - 1].strip()
+        ):
+            problems.append(("blank_before_list", index + 1))
+    return tuple(problems)
+
+
+def _validate_publishable_markdown(source: bytes, target: bytes, /) -> None:
+    """Reject deterministic Markdown defects introduced by translation."""
+    target_text = target.decode("utf-8")
+    if _PLACEHOLDER_RESIDUE.search(target_text):
+        raise DocumentTranslationError(
+            "document_response:markdown_invalid:unrestored_placeholder"
+        )
+    allowed = Counter(problem for problem, _line_number in _markdown_style_problems(source))
+    seen: Counter[str] = Counter()
+    for problem, line_number in _markdown_style_problems(target):
+        seen[problem] += 1
+        if seen[problem] > allowed[problem]:
+            line = "" if line_number is None else f":line_{line_number}"
+            raise DocumentTranslationError(
+                f"document_response:markdown_invalid{line}:{problem}"
+            )
 
 
 def _restore_placeholders(
@@ -382,6 +441,7 @@ def verify_document_candidate(
 
     if target_plan.diagnostics:
         raise DocumentTranslationError("document_response:structure_mismatch")
+    _validate_publishable_markdown(source, target)
     verify_protected_fragments(
         source,
         source_plan,
@@ -664,6 +724,8 @@ def validate_chunk_response(
         verify_document_candidate(
             source_chunk, source_plan_value, candidate_chunk, target_plan_value
         )
+    except DocumentTranslationError:
+        raise
     except (ProtectedMismatch, TypeError, ValueError, yaml.YAMLError):
         raise DocumentTranslationError("document_response:structure_mismatch") from None
 

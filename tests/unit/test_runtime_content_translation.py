@@ -22,7 +22,6 @@ from ydbdoc_review_ng.locales import PairKey
 from ydbdoc_review_ng.models import AttemptError, ModelCallResult, ModelRequest
 from ydbdoc_review_ng.parser.markdown import build_markdown_plan
 from ydbdoc_review_ng.publication import FileChange, PublicationPlan
-from ydbdoc_review_ng.quality import Verdict
 from ydbdoc_review_ng.runtime import RecordedModels, RuntimeSource
 from ydbdoc_review_ng.runtime_content import (
     Document,
@@ -77,6 +76,17 @@ class EchoChunkModels:
     def invoke(self, request: ModelRequest, /) -> ModelCallResult:
         self.calls.append(request)
         return ModelCallResult(_source_from_prompt(request.prompt), None, ())
+
+
+class InvalidTwiceThenEchoModels:
+    def __init__(self, invalid: str) -> None:
+        self.invalid = invalid
+        self.calls: list[ModelRequest] = []
+
+    def invoke(self, request: ModelRequest, /) -> ModelCallResult:
+        self.calls.append(request)
+        response = self.invalid if len(self.calls) <= 2 else _source_from_prompt(request.prompt)
+        return ModelCallResult(response, None, ())
 
 
 def _heading_block(number: int, length: int) -> str:
@@ -560,7 +570,7 @@ def test_non_final_parent_does_not_trigger_adaptive_split() -> None:
     assert len(models.calls) == 1
 
 
-def test_content_filter_on_technical_correction_publishes_primary_response_red() -> None:
+def test_content_filter_on_technical_correction_does_not_publish_invalid_response() -> None:
     document = document_for(b"# See [guide](guide.md).\n# Next heading\n")
     prepared = prepare_document(document.source, document.plan, max_characters=100_000)
     missing_placeholder = prepared.placeholders[0]
@@ -568,17 +578,11 @@ def test_content_filter_on_technical_correction_publishes_primary_response_red()
     models = ScriptedModels([invalid, ModelCallResult(None, AttemptError.CONTENT_FILTER, ())])
     content = content_with(models)
 
-    _accepted, accepted_document = content._translate_document(document)
+    with pytest.raises(RuntimeBoundaryError, match="translation_model_failed"):
+        content._translate_document(document)
 
     assert len(models.calls) == 2
     assert "Important correction" in models.calls[1].prompt
-    assert accepted_document.translated_markdown == "# See guide](guide.md).\n# Next heading\n"
-    finding = content.translation_findings[document.entry.pair.target_path][0]
-    assert missing_placeholder.token in finding.reason
-    assert "[" in finding.reason
-    assert finding.searchable_snippet == "# See guide](guide.md)."
-    assert finding.target_line == 1
-    assert "rerun doc_verify" in finding.expected_correction
 
 
 def test_complete_markdown_response_gets_exactly_one_technical_correction() -> None:
@@ -590,7 +594,8 @@ def test_complete_markdown_response_gets_exactly_one_technical_correction() -> N
     models = ScriptedModels([invalid, invalid])
     content = content_with(models)
 
-    accepted, accepted_document = content._translate_document(document)
+    with pytest.raises(InvalidTranslationResponse, match="translation_response_invalid"):
+        content._translate_document(document)
 
     assert len(models.calls) == 2
     assert "Important correction" not in models.calls[0].prompt
@@ -601,17 +606,9 @@ def test_complete_markdown_response_gets_exactly_one_technical_correction() -> N
     assert placeholder.token in correction
     assert "`CPUTime`" in correction
     assert "reorder" in correction
-    assert accepted.as_dict() == {}
-    assert accepted_document.translated_markdown == "# Use  now.\n"
-    finding = content.translation_findings[document.entry.pair.target_path][0]
-    assert placeholder.token in finding.reason
-    assert "`CPUTime`" in finding.reason
-    assert finding.searchable_snippet == "# Use  now."
-    assert finding.target_line == 1
-    assert "rerun doc_verify" in finding.expected_correction
 
 
-def test_invalid_correction_falls_back_to_primary_missing_only_response() -> None:
+def test_invalid_correction_does_not_fall_back_to_primary_invalid_response() -> None:
     document = document_for(b"# Use `CPUTime` now.\n")
     prepared = prepare_document(document.source, document.plan, max_characters=100_000)
     placeholder = prepared.placeholders[0]
@@ -622,24 +619,20 @@ def test_invalid_correction_falls_back_to_primary_missing_only_response() -> Non
     models = ScriptedModels([primary, duplicated_correction])
     content = content_with(models)
 
-    _accepted, accepted_document = content._translate_document(document)
+    with pytest.raises(InvalidTranslationResponse, match="translation_response_invalid"):
+        content._translate_document(document)
 
     assert len(models.calls) == 2
-    assert accepted_document.translated_markdown == "# Use  now.\n"
-    finding = content.translation_findings[document.entry.pair.target_path][0]
-    assert placeholder.token in finding.reason
-    assert "`CPUTime`" in finding.reason
-    assert document.entry.pair.target_path in content.translation_unvalidated_paths
 
 
-def test_exhausted_missing_placeholder_publishes_red_despite_malformed_markdown() -> None:
+def test_exhausted_missing_placeholder_rejects_malformed_markdown() -> None:
     source = (
         b"* [First](a.md) uses `CPUTime`.\n"
         b"* [Second](b.md) uses `REPLACE INTO`.\n"
     )
     document = document_for(source)
     prepared = prepare_document(document.source, document.plan, max_characters=100_000)
-    first_open, first_close, missing_code, second_open, second_close, second_code = (
+    first_open, first_close, _missing_code, second_open, second_close, second_code = (
         item.token for item in prepared.placeholders
     )
     malformed = (
@@ -649,20 +642,13 @@ def test_exhausted_missing_placeholder_publishes_red_despite_malformed_markdown(
     models = ScriptedModels([malformed, malformed])
     content = content_with(models)
 
-    _accepted, accepted_document = content._translate_document(document)
+    with pytest.raises(InvalidTranslationResponse, match="translation_response_invalid"):
+        content._translate_document(document)
 
     assert len(models.calls) == 2
-    assert accepted_document.translated_markdown == (
-        "* [First](a.md) uses . [\n"
-        "* ](b.md)Second uses `REPLACE INTO`.\n"
-    )
-    finding = content.translation_findings[document.entry.pair.target_path][0]
-    assert missing_code in finding.reason
-    assert "`CPUTime`" in finding.reason
-    assert "rerun doc_verify" in finding.expected_correction
 
 
-def test_missing_placeholder_red_bypasses_malformed_frontmatter_derivation() -> None:
+def test_missing_placeholder_does_not_bypass_malformed_frontmatter() -> None:
     source = b'---\ntitle: "Use `CPUTime`"\n---\n'
     document = document_for(source)
     prepared = prepare_document(document.source, document.plan, max_characters=100_000)
@@ -673,11 +659,10 @@ def test_missing_placeholder_red_bypasses_malformed_frontmatter_derivation() -> 
     models = ScriptedModels([invalid, invalid])
     content = content_with(models)
 
-    _accepted, accepted_document = content._translate_document(document)
+    with pytest.raises(InvalidTranslationResponse, match="translation_response_invalid"):
+        content._translate_document(document)
 
     assert len(models.calls) == 2
-    assert accepted_document.translated_markdown == '---\ntitle: "Use \n---\n'
-    assert document.entry.pair.target_path in content.translation_unvalidated_paths
 
 
 @pytest.mark.parametrize(
@@ -700,54 +685,35 @@ def test_malformed_unknown_placeholder_remains_terminal_after_correction(
         content._translate_document(document)
 
     assert len(models.calls) == 2
-    assert document.entry.pair.target_path not in content.translation_unvalidated_paths
 
 
-def test_validate_plan_allows_only_unvalidated_missing_placeholder_red() -> None:
+def test_validate_plan_never_allows_unvalidated_translation_bytes() -> None:
     document = document_for(b"# Source\n")
     target_path = document.entry.pair.target_path
     invalid = b'---\ntitle: "unterminated\n---\n'
     content = content_with(ScriptedModels([]))
     content.documents = (document,)
-    content.translation_unvalidated_paths.add(target_path)
     candidate = WorkflowCandidate(pack({target_path.value: invalid}), None)
     plan = PublicationPlan((FileChange(target_path, None, invalid),), ())
 
-    content.validate_plan(cast(ImmutableRunSnapshot, object()), candidate, plan)
-
-    content.translation_unvalidated_paths.clear()
     with pytest.raises(yaml.YAMLError):
         content.validate_plan(cast(ImmutableRunSnapshot, object()), candidate, plan)
 
 
-def test_lost_placeholder_candidate_is_reviewed_red_without_critic_call() -> None:
+def test_lost_placeholder_candidate_is_not_created() -> None:
     document = document_for(b"# Use `CPUTime` now.\n")
     prepared = prepare_document(document.source, document.plan, max_characters=100_000)
     placeholder = next(item for item in prepared.placeholders if item.source_bytes == b"`CPUTime`")
     invalid = prepared.chunks[0].text.replace(placeholder.token, "", 1)
     models = ScriptedModels([invalid, invalid])
     content = content_with(models)
-    plans = cast(
-        FrozenSourcePlans,
-        SimpleNamespace(
-            preparation=SimpleNamespace(for_translation=True),
-            manifest=None,
-            documents=(document,),
-            fixed_files=(),
-        ),
-    )
-    candidate = content._translate_documents(plans, (document,), (), ())
+    with pytest.raises(InvalidTranslationResponse, match="translation_response_invalid"):
+        content._translate_document(document)
 
-    review = content.review(cast(ImmutableRunSnapshot, object()), candidate)
-
-    assert review.final.verdict is Verdict.RED
-    assert len(review.final.findings) == 1
-    assert placeholder.token in review.final.findings[0].reason
-    assert "`CPUTime`" in review.final.findings[0].reason
     assert len(models.calls) == 2
 
 
-def test_reordered_link_pairs_publish_parseable_candidate_red() -> None:
+def test_reordered_link_pairs_are_not_published() -> None:
     document = document_for(b"Read [one](one.md), then [two](two.md).\n")
     prepared = prepare_document(document.source, document.plan, max_characters=100_000)
     first_open, first_close, second_open, second_close = (
@@ -757,18 +723,13 @@ def test_reordered_link_pairs_publish_parseable_candidate_red() -> None:
     models = ScriptedModels([reordered, reordered])
     content = content_with(models)
 
-    _accepted, accepted_document = content._translate_document(document)
+    with pytest.raises(InvalidTranslationResponse, match="translation_response_invalid"):
+        content._translate_document(document)
 
-    assert accepted_document.translated_markdown == ("Read [two](two.md), after [one](one.md).\n")
     assert len(models.calls) == 2
-    finding = content.translation_findings[document.entry.pair.target_path][0]
-    assert "moved protected placeholder" in finding.reason
-    assert "one.md" in finding.reason or "two.md" in finding.reason
-    assert finding.searchable_snippet == "Read [two](two.md), after [one](one.md)."
-    assert finding.target_line == 1
 
 
-def test_live_nested_link_reorder_witness_publishes_red() -> None:
+def test_live_nested_link_reorder_witness_is_not_published() -> None:
     document = document_for("* [Добавлена](issue) поддержка [репликации](guide).\n".encode())
     prepared = prepare_document(document.source, document.plan, max_characters=100_000)
     outer_open, outer_close, inner_open, inner_close = (
@@ -781,18 +742,11 @@ def test_live_nested_link_reorder_witness_publishes_red() -> None:
     models = ScriptedModels([reordered, reordered])
     content = content_with(models)
 
-    _accepted, accepted_document = content._translate_document(document)
-
-    assert accepted_document.translated_markdown == (
-        "* [Support for [replication](guide) has been added](issue).\n"
-    )
-    finding = content.translation_findings[document.entry.pair.target_path][0]
-    assert "moved protected placeholder" in finding.reason
-    assert "](issue)" in finding.reason
-    assert "Support for [replication](guide)" in finding.searchable_snippet
+    with pytest.raises(InvalidTranslationResponse, match="translation_response_invalid"):
+        content._translate_document(document)
 
 
-def test_exhausted_invalid_large_chunk_is_not_split_or_retried_again() -> None:
+def test_exhausted_invalid_large_chunk_is_split_once_and_validated() -> None:
     source = content_filter_witness() + b"## Use `CPUTime` now.\n"
     document = document_for(source)
     prepared = prepare_document(
@@ -806,14 +760,14 @@ def test_exhausted_invalid_large_chunk_is_not_split_or_retried_again() -> None:
     parent = prepared.chunks[0]
     placeholder = next(item for item in prepared.placeholders if item.source_bytes == b"`CPUTime`")
     invalid = parent.text.replace(placeholder.token, "", 1)
-    models = ScriptedModels([invalid, invalid])
+    models = InvalidTwiceThenEchoModels(invalid)
     content = content_with(models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "250000"})
 
     _accepted, accepted_document = content._translate_document(document)
 
-    assert len(models.calls) == 2
+    assert len(models.calls) == 4
     assert "Important correction" in models.calls[1].prompt
-    assert accepted_document.translated_markdown.encode() == source.replace(b"`CPUTime`", b"")
+    assert accepted_document.translated_markdown.encode() == source
 
 
 def test_provider_failure_is_not_semantically_retried() -> None:

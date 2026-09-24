@@ -5,12 +5,13 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Protocol
 
-from ydbdoc_review_ng.domain import GitSha, Mode, ModelRole
-from ydbdoc_review_ng.persistence import AttemptCostRecord
+from ydbdoc_review_ng.domain import GitSha, Mode
 from ydbdoc_review_ng.publication import GitPublicationAdapter, PublicationContext, PublicationError
 from ydbdoc_review_ng.quality import QualityReviewResult, Verdict
 
 QA_MARKER = "<!-- ydbdoc-current-qa -->"
+_MAX_REPORTED_FINDINGS = 10
+_STATUS_ICONS = {"GREEN": "🟢", "YELLOW": "🟡", "RED": "🔴"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,18 +35,20 @@ def merge_readiness(head: GitSha, checks: tuple[CheckResult, ...]) -> Readiness:
         named = tuple(check for check in checks if check.name == name)
         current = tuple(check for check in named if check.head_sha == head)
         if not current:
-            reasons.append(f"{name}: stale SHA" if named else f"{name}: missing")
+            reasons.append(
+                f"{name}: устаревший результат" if named else f"{name}: не запускалась"
+            )
             waiting = True
         elif any(
             check.status in {"failure", "cancelled", "timed_out", "error"} for check in current
         ):
-            reasons.append(f"{name}: failure")
+            reasons.append(f"{name}: завершилась с ошибкой")
             failed = True
         elif any(check.status != "success" for check in current):
-            reasons.append(f"{name}: pending or incomplete")
+            reasons.append(f"{name}: выполняется")
             waiting = True
         else:
-            reasons.append(f"{name}: success")
+            reasons.append(f"{name}: успешно")
     return Readiness("RED" if failed else "YELLOW" if waiting else "GREEN", "; ".join(reasons))
 
 
@@ -54,86 +57,15 @@ class ReportContext:
     source_sha: GitSha
     target_sha: GitSha
     job_cost_rub: Decimal | None
-    attempt_costs: tuple[AttemptCostRecord, ...] = ()
 
 
 def _line(value: str) -> str:
     return " ".join(value.split())
 
 
-def _cost(records: tuple[AttemptCostRecord, ...]) -> str:
-    if not records:
-        return "not called"
-    if any(record.cost_rub is None for record in records):
-        return "unknown"
-    total = Decimal(0)
-    for record in records:
-        assert record.cost_rub is not None
-        total += record.cost_rub
-    return f"{total} RUB"
-
-
-def _role_costs(records: tuple[AttemptCostRecord, ...]) -> str:
-    groups = (
-        ("translation", frozenset({ModelRole.TRANSLATE})),
-        ("critic", frozenset({ModelRole.CRITIC, ModelRole.FINAL_CRITIC})),
-        ("repair", frozenset({ModelRole.REPAIR})),
-    )
-    parts = [
-        f"{name} {_cost(tuple(record for record in records if record.role in roles))}"
-        for name, roles in groups
-    ]
-    parts.append(f"total {_cost(records)}")
-    return "; ".join(parts)
-
-
-def _cumulative_cost_lines(records: tuple[AttemptCostRecord, ...]) -> list[str]:
-    paths = sorted(
-        {record.target_path for record in records if record.target_path is not None},
-        key=lambda path: path.value,
-    )
-    lines = ["Cumulative PR costs by article:"]
-    if paths:
-        for path in paths:
-            article = tuple(record for record in records if record.target_path == path)
-            lines.append(f"- {path.value}: {_role_costs(article)}")
-    else:
-        lines.append("- none")
-    shared = tuple(
-        record
-        for record in records
-        if record.target_path is None and record.role is ModelRole.DIRECTION
-    )
-    historical = tuple(
-        record
-        for record in records
-        if record.target_path is None and record.role is not ModelRole.DIRECTION
-    )
-    lines.append(f"Shared PR-wide cost: direction {_cost(shared)}")
-    lines.append(f"Unattributed historical cost: {_role_costs(historical)}")
-    lines.append(f"Cumulative PR total: {_cost(records)}")
-    return lines
-
-
-def render_report(
-    review: QualityReviewResult,
-    commit_sha: GitSha,
-    context: ReportContext,
-    checks: tuple[CheckResult, ...],
-) -> str:
-    readiness = merge_readiness(commit_sha, checks)
-    status = "RED" if review.final.verdict is Verdict.RED else readiness.status
-    cost = "unknown" if context.job_cost_rub is None else f"{context.job_cost_rub} RUB"
-    lines = [
-        status,
-        f"CI: {readiness.reason}",
-        f"Current job cost: {cost}",
-        *_cumulative_cost_lines(context.attempt_costs),
-        f"Source SHA: {context.source_sha.value}",
-        f"Target SHA: {context.target_sha.value}",
-        f"Commit SHA: {commit_sha.value}",
-    ]
-    for finding in review.final.findings:
+def _finding_lines(review: QualityReviewResult) -> list[str]:
+    findings = review.final.findings
+    for finding in findings:
         if (
             type(finding.target_line) is not int
             or finding.target_line <= 0
@@ -148,10 +80,76 @@ def render_report(
             )
         ):
             raise PublicationError("invalid_finding")
+
+    lines = ["### Что исправить"]
+    shown = findings[:_MAX_REPORTED_FINDINGS]
+    current_path: str | None = None
+    for finding in shown:
+        path = _line(finding.target_path)[:240]
+        if path != current_path:
+            lines.append(f"**`{path}`**")
+            current_path = path
         lines.append(
-            f"- {_line(finding.target_path)}:{finding.target_line} | "
-            f'"{_line(finding.searchable_snippet)[:160]}" | '
-            f"{_line(finding.reason)} | Action: {_line(finding.expected_correction)}"
+            f"- строка {finding.target_line}, `"
+            f"{_line(finding.searchable_snippet)[:120]}`: "
+            f"{_line(finding.reason)[:240]} Исправление: "
+            f"{_line(finding.expected_correction)[:240]}"
+        )
+    omitted = len(findings) - len(shown)
+    if omitted:
+        paths = sorted({_line(item.target_path)[:240] for item in findings})
+        omitted_paths = ", ".join(f"`{path}`" for path in paths[:10])
+        extra_paths = "" if len(paths) <= 10 else f" и ещё {len(paths) - 10} файлов"
+        lines.append(
+            f"Ещё {omitted} замечаний не показаны. "
+            f"Затронутые файлы: {omitted_paths}{extra_paths}."
+        )
+    if not findings:
+        lines.append("- Проверка вернула RED без конкретного замечания.")
+    return lines
+
+
+def render_report(
+    review: QualityReviewResult,
+    commit_sha: GitSha,
+    context: ReportContext,
+    checks: tuple[CheckResult, ...],
+) -> str:
+    readiness = merge_readiness(commit_sha, checks)
+    status = "RED" if review.final.verdict is Verdict.RED else readiness.status
+    cost = "неизвестна" if context.job_cost_rub is None else f"{context.job_cost_rub} RUB"
+    lines = [
+        f"{_STATUS_ICONS[status]} {status}",
+        f"Стоимость запуска: {cost}",
+    ]
+    if review.final.verdict is Verdict.RED:
+        lines.extend(_finding_lines(review))
+        lines.extend(
+            (
+                "### Как продолжить",
+                (
+                    "Оставьте комментарий, начинающийся с `/ydbdoc continue`, "
+                    "добавьте нужный контекст следующими строками и поставьте "
+                    "label `doc_continue`."
+                ),
+            )
+        )
+    elif readiness.status == "GREEN":
+        lines.append("Перевод проверен. Исправления не требуются.")
+    elif readiness.status == "YELLOW":
+        lines.extend(
+            (
+                f"Проверки: {readiness.reason}.",
+                "После завершения проверок повторно запустите `doc_verify`.",
+            )
+        )
+    else:
+        lines.extend(
+            (
+                "### Что исправить",
+                f"- Обязательные проверки: {readiness.reason}.",
+                "Исправьте ошибку проверки и повторно запустите `doc_verify`.",
+            )
         )
     return "\n".join(lines)
 

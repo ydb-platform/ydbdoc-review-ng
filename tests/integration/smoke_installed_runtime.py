@@ -96,7 +96,7 @@ def run() -> None:
         assert saved["status"] == "closed"
     assert services.files["ydb/docs/en/core/page.md"] == b"# Translated\n"
     assert len(services.comments) == 1
-    assert services.comments[0]["body"].startswith("GREEN\n")
+    assert services.comments[0]["body"].startswith("🟢 GREEN\n")
     assert [job["mode"] for job in services.jobs.values()] == [
         "doc_translate",
         "doc_verify",

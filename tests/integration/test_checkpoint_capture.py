@@ -299,7 +299,7 @@ def test_two_invalid_current_field_responses_preserve_first_map_and_pending_orde
     assert services.commits == 0 and services.audit[-1]["status"] == "failed"
 
 
-def test_twice_lost_known_placeholder_publishes_red_with_manual_action() -> None:
+def test_twice_lost_known_placeholder_stops_before_publication() -> None:
     services = CaptureServices(names=("a",))
     source_path = "ydb/docs/ru/core/a.md"
     target_path = "ydb/docs/en/core/a.md"
@@ -307,25 +307,16 @@ def test_twice_lost_known_placeholder_publishes_red_with_manual_action() -> None
         files[source_path] = b"# Source `CPUTime`\n"
         files[target_path] = b"# Old\n"
 
-    result = services.translate()
+    with pytest.raises(WorkflowError):
+        services.translate()
 
-    assert result.verdict is Verdict.RED
     assert services.roles == ["translate", "translate"]
     assert services.critics == 0
-    assert services.commits == 1
-    assert services.files[target_path] == b"# Translated\n"
-    comment = services.comments[-1]["body"]
-    assert "RED\n" in comment
-    assert "[[YDBDOC_PROTECTED_" in comment
-    assert "`CPUTime`" in comment
-    assert target_path in comment
-    assert "source line 1" in comment
-    assert "# Translated" in comment
-    assert "line 1" in comment
-    assert "rerun doc_verify" in comment
+    assert services.commits == 0
+    assert services.files[target_path] == b"# Old\n"
     checkpoint = services.checkpoint()
-    assert checkpoint.state.stage is ContinuationStage.REVIEW
-    assert checkpoint.state.review_paths == (RepoPath(target_path),)
+    assert checkpoint.state.stage is ContinuationStage.TRANSLATION
+    assert checkpoint.state.pending_paths == (RepoPath(target_path),)
 
 
 @pytest.mark.parametrize("mode", ["translate", "verify"])
@@ -353,7 +344,7 @@ def test_review_red_saves_final_repair_map_exact_published_candidate_and_unresol
         {p: services.files[p] for p in [f"ydb/docs/en/core/{n}.md" for n in services.names]}
     )
     assert checkpoint.state.candidate_sha256 == candidate_sha256(candidate)
-    assert services.saved_after_comment and services.comments[-1]["body"].startswith("RED\n")
+    assert services.saved_after_comment and services.comments[-1]["body"].startswith("🔴 RED\n")
     assert services.audit[-1]["status"] in {"succeeded", "failed"}
 
 

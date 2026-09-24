@@ -168,8 +168,7 @@ def test_green_review_only_updates_current_verdict_and_consumes_without_commit(c
     assert services.rows[saved.continuation_id]["status"] == "closed"
     assert services.rows[saved.continuation_id]["consumed_by_job_id"] == result.job_id
     assert services.jobs[result.job_id]["status"] == "succeeded"
-    assert len(services.comments) == 1 and services.comments[0]["body"].startswith("GREEN\n")
-    assert saved.target_sha.value in services.comments[0]["body"]
+    assert len(services.comments) == 1 and services.comments[0]["body"].startswith("🟢 GREEN\n")
     assert all(CONTEXT in prompt for _, prompt in services.prompts)
     prompt = services.prompts[0][1]
     source = prompt.split("<authoritative-source>\n")[1].split("</authoritative-source>")[0]
@@ -234,8 +233,7 @@ def test_repair_merges_complete_document_before_final_critic():
     assert services.parents == [[saved.target_sha.value]]
     assert all(CONTEXT in prompt for _, prompt in services.prompts)
     assert all(CONTEXT.encode() not in value for value in services.files.values())
-    assert len(services.comments) == 1 and services.comments[0]["body"].startswith("RED\n")
-    assert result.final_commit_sha.value in services.comments[0]["body"]
+    assert len(services.comments) == 1 and services.comments[0]["body"].startswith("🔴 RED\n")
     second = services.resume()
     assert second.verdict is Verdict.GREEN and second.final_commit_sha == result.final_commit_sha
     assert services.commits == services.initial_commits + 1
@@ -539,8 +537,8 @@ def test_head_change_during_comment_write_fails_without_consuming_checkpoint(
     # The completed remote write remains visible but is tied to the failed run's SHA.
     assert len(services.comments) == 1
     comment_id = services.comments[0]["id"]
-    assert services.comments[0]["body"].startswith(verdict.upper() + "\n")
-    assert saved.target_sha.value in services.comments[0]["body"]
+    icon = "🟢" if verdict == "green" else "🔴"
+    assert services.comments[0]["body"].startswith(f"{icon} {verdict.upper()}\n")
     # Restoring the exact saved head makes a later run valid. It updates that same comment.
     services.change_head = False
     services.branch_head = saved.target_sha.value
@@ -549,7 +547,7 @@ def test_head_change_during_comment_write_fails_without_consuming_checkpoint(
     assert services.jobs[result.job_id]["status"] == "succeeded"
     assert services.rows[saved.continuation_id]["status"] == "closed"
     assert len(services.comments) == 1 and services.comments[0]["id"] == comment_id
-    assert services.comments[0]["body"].startswith("GREEN\n")
+    assert services.comments[0]["body"].startswith("🟢 GREEN\n")
     assert services.roles == ["critic", "critic"]
 
 
@@ -612,7 +610,7 @@ def test_green_review_waiting_for_ci_reports_yellow_and_closes_semantic_checkpoi
     services.waiting_ci = True
     result = services.resume()
     assert result.verdict is Verdict.GREEN
-    assert services.comments[0]["body"].startswith("YELLOW\n")
+    assert services.comments[0]["body"].startswith("🟡 YELLOW\n")
     assert services.rows[saved.continuation_id]["status"] == "closed"
 
 
