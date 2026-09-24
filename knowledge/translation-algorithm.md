@@ -52,7 +52,11 @@ chunk после correction делится по безопасной грани�
 Невалидный child делится тем же способом, пока диапазон source blocks строго
 уменьшается и остаётся безопасная граница; успешные соседние chunks повторно не
 переводятся. Потерянный placeholder и build-breaking Markdown никогда не
-публикуются. При `doc_verify`
+публикуются. Финальный deterministic gate накладывает candidate на trusted
+checkout base-ветки, запускает полный официальный Diplodoc build и отклоняет
+любые `ERR`/`WARN` до commit/push. Это проверяет реальные YFM, TOC, include,
+anchors и Markdown rules вместо дальнейшего расширения собственного parser.
+После build checkout восстанавливается. При `doc_verify`
 те же protected fragments сверяются с текущим target: ручное изменение URL, path
 или code относительно authoritative source отвергается.
 
@@ -69,17 +73,20 @@ Scanner различает маркеры и те же символы внутр
 
 ## Проверка качества
 
-После первой валидной публикации critic сравнивает authoritative source и final
-target целиком или крупными осмысленными блоками. При превышении provider limit
+После первой валидной публикации critic-editor сравнивает protected authoritative
+source и protected final target целиком или крупными осмысленными блоками. При превышении provider limit
 source и target сразу делятся на соответствующие упорядоченные excerpt-пары.
 Полный большой target не повторяется в каждом prompt, чтобы critic не терял
 соответствующий фрагмент среди нерелевантных разделов. RED любого excerpt делает
 общий verdict RED, findings
-объединяются без повторов. Critic проверяет точность, полноту, термины и ссылки.
-Для исправимого finding разрешена одна repair
-attempt, которая возвращает целый исправленный Markdown. Затем обязательны
-восстановление protected fragments, локальные validators, parse и final critic.
-Следующих repair attempts нет.
+объединяются без повторов. В том же ответе critic-editor возвращает полный
+`corrected_markdown`; при GREEN он обязан точно повторить target. Отдельного
+model repair call нет. Для одного RED разрешено применить одно такое исправление.
+Затем обязательны восстановление protected fragments и локальные validators.
+Только валидный и действительно изменённый candidate проходит полный Diplodoc
+build, публикацию и независимый read-only final critic. Для отсутствующего,
+невалидного или побайтно неизменного исправления остаётся первичный RED без
+нового commit и final critic. Следующих repair attempts нет.
 
 Технический transport retry может быть bounded, но не превращается в
 сохраняемую state machine или механизм продолжения.

@@ -13,12 +13,13 @@
 
 `doc_translate` идёт линейно: create job audit → authorize → snapshot →
 budget → direction/scope → parse → translate → validate/assemble/reparse →
-commit/push → critic → optional single repair/revalidate/new commit/final critic
+commit/push → critic-editor → optional revalidate/new commit/final critic
 → PR verdict → terminal job status.
 
 `doc_verify` создаёт job audit, берёт текущую translation branch и authoritative
-source, запускает те же validators и critic, при необходимости делает один
-repair commit в ту же branch, обновляет verdict и terminal job status. Budget
+source, запускает те же validators и critic-editor, при необходимости применяет
+его единственное валидное изменённое исправление в ту же branch и только для
+него запускает независимый final critic, затем обновляет verdict и terminal job status. Budget
 gate у него отсутствует.
 
 `doc_continue` в `1.1.0` создаёт audit, проверяет label actor и последний допустимый
@@ -28,7 +29,7 @@ gate у него отсутствует.
 Для source PR неоднозначность остаётся fail-closed.
 Replay читает только сохранённые source/base SHA и проверяет scope/field IDs
 и exact translation head. Три stage: direction retry, перевод pending документов
-с accepted maps и critic/одна repair только unresolved review paths. Source-only
+с accepted maps и critic-editor только для unresolved review paths. Source-only
 assembly и обычные проверки сохраняются. GREEN закрывает checkpoint; повторный
 semantic stop наследует первоначальный expiry. Infrastructure failure не является
 новым semantic checkpoint. Общей resumable state machine нет.
@@ -43,6 +44,10 @@ semantic stop наследует первоначальный expiry. Infrastruc
   после одной correction рекурсивно делится по top-level block boundary, пока
   диапазон source blocks строго уменьшается; неделимый невалидный chunk не
   публикуется.
+- Publication validator накладывает candidate на trusted base checkout и до
+  каждого commit запускает полный официальный Diplodoc build. Любой `ERR` или
+  `WARN` запрещает публикацию; privileged workflow не checkout-ит и не исполняет
+  содержимое source PR.
 - В `doc_verify` exact protected-fragment invariant отвергает ручное изменение
   URL/path/code относительно authoritative source без navigation graph или link
   resolver.
@@ -64,7 +69,7 @@ semantic stop наследует первоначальный expiry. Infrastruc
   выводятся.
 - Budget gate выполняется только перед новым `doc_translate`. Его дневной `SUM`
   включает все известные costs трёх workflow и ролей, в том числе
-  `doc_verify` critic/repair; unknown cost не подменяется нулём. Gate идёт после
+  `doc_verify` critic-editor/final critic; unknown cost не подменяется нулём. Gate идёт после
   authorization/snapshot и до любого model call, включая mixed-locale
   direction call.
 

@@ -480,15 +480,22 @@ class CriticExecutor:
                             "field_ids": [self.context.request.requested_ids[0]],
                         }
                     ],
+                    "corrected_markdown": request.prompt.split(
+                        "<final-target>\n", 1
+                    )[1]
+                    .split("</final-target>", 1)[0]
+                    .replace("# ", "# Repaired: ", 1),
                 }
             )
-        elif role == "repair":
-            current = request.prompt.split("<current-target>\n", 1)[1].split(
-                "</current-target>", 1
-            )[0]
-            text = current.replace("# ", "# Repaired: ", 1)
         else:
-            text = json.dumps({"verdict": "GREEN", "findings": []})
+            values = {"verdict": "GREEN", "findings": []}
+            if request.schema is not None and "corrected_markdown" in request.schema[
+                "properties"
+            ]:
+                values["corrected_markdown"] = request.prompt.split(
+                    "<final-target>\n", 1
+                )[1].split("</final-target>", 1)[0]
+            text = json.dumps(values)
         return ModelCallResult(text, None, ())
 
 
@@ -725,9 +732,9 @@ def test_repair_is_validated_and_published_before_final_critic(
 
     assert result.repair_applied
     assert case.backend.commit_count == 2
-    repair_index = case.events.index("repair")
-    assert case.events[repair_index : repair_index + 4] == [
-        "repair",
+    editor_index = case.events.index("critic")
+    assert case.events[editor_index : editor_index + 4] == [
+        "critic",
         "validate",
         "publish",
         "final_critic",

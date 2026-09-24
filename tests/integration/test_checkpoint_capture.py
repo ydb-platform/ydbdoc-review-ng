@@ -189,6 +189,7 @@ class CaptureServices(RuntimeServices):
             role = "critic"
             self.critics += 1
             props = schema["properties"]["findings"]["items"]["properties"]
+            editable = "corrected_markdown" in schema["properties"]
             path = props["target_path"]["const"]
             red = (
                 self.stop == "rename_red"
@@ -209,6 +210,16 @@ class CaptureServices(RuntimeServices):
                 ]
                 if values["findings"][0]["repairable"]:
                     values["findings"][0]["field_ids"] = props["field_ids"]["items"]["enum"]
+            if editable:
+                current = raw_repair_context(prompt, "final-target")
+                values["corrected_markdown"] = (
+                    rewrite_markdown(current, "Corrected")
+                    if red and values["findings"][0]["repairable"]
+                    else current
+                )
+                if self.failure == "repair" and red and values["findings"][0]["repairable"]:
+                    self.roles.append(role)
+                    raise TimeoutError("transport failed")
         elif prompt.startswith("Compare"):
             role = "direction"
             values = dict.fromkeys(schema["properties"], "undetermined")
@@ -549,7 +560,7 @@ def test_infrastructure_failure_does_not_leave_open_checkpoint(failure):
     assert not any(row["status"] == "open" for row in services.rows.values())
     assert services.audit[-1]["status"] == "failed"
     if failure == "repair":
-        assert services.roles[-1] == "repair"
+        assert services.roles[-1] == "critic"
 
 
 def test_lost_terminal_ack_and_failed_close_cannot_be_resumed():

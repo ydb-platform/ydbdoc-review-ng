@@ -67,14 +67,13 @@ def test_review_cli_repairs_only_unresolved_path_then_updates_one_verdict(capsys
     services.outcomes = {EN + "b.md": ["repair", "red"]}
     assert invoke(services, 43) == 1
     following = services.checkpoint()
-    assert services.roles == ["critic", "repair", "critic"]
+    assert services.roles == ["critic", "critic"]
     assert {path for _, path, _ in services.calls} == {EN + "b.md"}
     assert services.files[EN + "a.md"] == green
     assert services.files[EN + "b.md"] == b"# Repaired b\n\nTranslated\n"
     assert following.expires_at == old.expires_at
     assert services.timeline == [
         "critic",
-        "repair",
         "commit",
         "push",
         "critic",

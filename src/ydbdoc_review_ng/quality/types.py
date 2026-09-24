@@ -28,6 +28,7 @@ class Finding:
 class CriticResult:
     verdict: Verdict
     findings: tuple[Finding, ...]
+    corrected_markdown: str | None = field(default=None, repr=False)
 
 
 class RepairErrorReason(str, Enum):

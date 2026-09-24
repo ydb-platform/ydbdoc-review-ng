@@ -48,6 +48,32 @@ class FakeExecutor:
         response = next(self.responses)
         if response is None:
             return ModelCallResult(None, self._failure(), ())
+        if "Act as a critic-editor" in request.prompt:
+            try:
+                payload = json.loads(response)
+            except json.JSONDecodeError:
+                payload = None
+            if isinstance(payload, dict) and "corrected_markdown" not in payload:
+                findings = payload.get("findings")
+                if isinstance(findings, list):
+                    for item in findings:
+                        if isinstance(item, dict):
+                            item.pop("field_ids", None)
+                if payload.get("verdict") == "GREEN":
+                    correction = request.prompt.split("<final-target>\n", 1)[1].split(
+                        "</final-target>", 1
+                    )[0]
+                else:
+                    try:
+                        correction = next(self.responses)
+                    except StopIteration:
+                        correction = request.prompt.split("<final-target>\n", 1)[1].split(
+                            "</final-target>", 1
+                        )[0]
+                    if correction is None:
+                        return ModelCallResult(None, self._failure(), ())
+                payload["corrected_markdown"] = correction
+                response = json.dumps(payload, ensure_ascii=False)
         return ModelCallResult(response, None, ())
 
     @staticmethod
@@ -75,6 +101,25 @@ def raw_document(candidate: bytes, path: RepoPath = PATH) -> str:
 
 def critic_json(verdict: str, findings: list[dict[str, object]]) -> str:
     return json.dumps({"verdict": verdict, "findings": findings}, ensure_ascii=False)
+
+
+def critic_editor_json(
+    verdict: str,
+    findings: list[dict[str, object]],
+    corrected_markdown: str,
+) -> str:
+    return json.dumps(
+        {
+            "verdict": verdict,
+            "findings": findings,
+            "corrected_markdown": corrected_markdown,
+        },
+        ensure_ascii=False,
+    )
+
+
+def current_editor_target(request: ModelRequest) -> str:
+    return request.prompt.split("<final-target>\n", 1)[1].split("</final-target>", 1)[0]
 
 
 def finding(
@@ -127,6 +172,47 @@ def test_green_uses_one_critic_and_does_not_attempt_repair() -> None:
     assert [call.role.value for call in executor.calls] == ["critic"]
     assert executor.calls[0].target_path == PATH
     assert PATH.value in executor.calls[0].prompt
+
+
+def test_primary_critic_applies_its_own_correction_without_repair_call() -> None:
+    plan, request, values, target = prepared()
+    field_id = request.fields[1].field_id
+    corrected_values = {
+        **values,
+        field_id: values[field_id].replace("Прочитайте", "Обязательно прочитайте"),
+    }
+    corrected = assemble_candidate(SOURCE, plan, request, corrected_values)
+    executor = FakeExecutor(
+        critic_editor_json(
+            "RED",
+            [
+                finding(
+                    repairable=True,
+                    snippet="Прочитайте",
+                    line=3,
+                )
+            ],
+            raw_document(corrected),
+        ),
+        critic_json("GREEN", []),
+    )
+
+    result = review_translation(
+        executor,
+        model="model",
+        source=SOURCE,
+        source_plan=plan,
+        translation_request=request,
+        target=target,
+        target_path=PATH,
+        source_locale=Locale.EN,
+        target_locale=Locale.RU,
+    )
+
+    assert result.final_candidate == corrected
+    assert result.repair_applied
+    assert [call.role.value for call in executor.calls] == ["critic", "final_critic"]
+    assert executor.calls[0].schema is not None
 
 
 def test_large_critic_reviews_corresponding_source_and_target_excerpts() -> None:
@@ -197,15 +283,14 @@ def test_formatting_drift_reaches_critic_without_deterministic_repair() -> None:
 
 
 def test_repair_prompt_aligns_reordered_source_tokens_in_one_pass() -> None:
-    from ydbdoc_review_ng.quality.repair import _repair_requests
-    from ydbdoc_review_ng.quality.types import Finding
+    from ydbdoc_review_ng.quality.repair import _editor_requests
 
     source = b"* Views `a` and `b` received `c`.\n"
     target = b"* Column `c` added to `a` and `b`, i.e., views.\n"
     plan = build_markdown_plan(SNAPSHOT, SOURCE_PATH, source)
     request = build_translation_request(source, plan)
 
-    _requests, _document, _source_blocks, target_blocks = _repair_requests(
+    _requests, _document, _source_blocks, target_blocks = _editor_requests(
         model="model",
         source=source,
         source_plan=plan,
@@ -213,17 +298,7 @@ def test_repair_prompt_aligns_reordered_source_tokens_in_one_pass() -> None:
         target_path=PATH,
         source_locale=Locale.EN,
         target_locale=Locale.RU,
-        findings=(
-            Finding(
-                True,
-                "Clarify the translated list item.",
-                "Use corrected wording.",
-                "Column",
-                PATH.value,
-                1,
-                (request.requested_ids[0],),
-            ),
-        ),
+        requested_ids=request.requested_ids,
         operator_context=None,
         max_characters=100_000,
     )
@@ -278,13 +353,14 @@ def test_full_document_repair_restores_source_fragments_before_exposing_map(inva
         operator_context="Private guidance",
         before_repaired_map=published_maps.append,
     )
-    repair_prompt = executor.calls[1].prompt
-    assert executor.calls[1].schema is None
-    assert all(field.field_id not in repair_prompt for field in request.fields)
-    assert "<authoritative-source>" in repair_prompt
-    assert "<current-target>" in repair_prompt
-    assert "/docs/guide" not in repair_prompt
-    assert [call.role.value for call in executor.calls] == ["critic", "repair", "final_critic"]
+    editor_prompt = executor.calls[0].prompt
+    assert executor.calls[0].schema is not None
+    assert all(field.field_id not in editor_prompt for field in request.fields)
+    assert "<authoritative-source>" in editor_prompt
+    assert "<final-target>" in editor_prompt
+    assert "/docs/guide" not in editor_prompt
+    expected_roles = ["critic"] if invalid_placeholder else ["critic", "final_critic"]
+    assert [call.role.value for call in executor.calls] == expected_roles
     assert all(call.target_path == PATH for call in executor.calls)
     assert all("Private guidance" in call.prompt for call in executor.calls)
     if invalid_placeholder:
@@ -355,8 +431,8 @@ def test_raw_repair_accepts_field_local_inline_code_grammar_order() -> None:
 
     assert result.repair_applied
     assert result.final_candidate == repaired
-    assert [call.role.value for call in executor.calls] == ["critic", "repair", "final_critic"]
-    assert "source top-level block" in executor.calls[1].prompt
+    assert [call.role.value for call in executor.calls] == ["critic", "final_critic"]
+    assert "protected placeholder" in executor.calls[0].prompt
 
 
 def test_raw_repair_rejects_link_groups_that_exchange_source_endpoints() -> None:
@@ -422,9 +498,9 @@ def test_repair_transport_failure_is_terminal_before_final_critic() -> None:
         None,
         critic_json("RED", [finding(repairable=False, snippet="Установка YDB", line=1)]),
     )
-    with pytest.raises(QualityExecutionError, match="repair"):
+    with pytest.raises(QualityExecutionError, match="critic"):
         review(executor)
-    assert [call.role.value for call in executor.calls] == ["critic", "repair"]
+    assert [call.role.value for call in executor.calls] == ["critic"]
 
 
 def test_quality_returns_final_validated_map_including_repaired_values() -> None:
@@ -522,15 +598,14 @@ def test_repairable_red_repairs_once_and_critics_actual_repaired_candidate() -> 
     assert result.repair_error is None
     assert result.primary.verdict is Verdict.RED
     assert result.final.verdict is Verdict.GREEN
-    assert [call.role.value for call in executor.calls] == ["critic", "repair", "final_critic"]
-    assert executor.calls[1].schema is None
-    assert field_id not in executor.calls[1].prompt
-    assert "<authoritative-source>" in executor.calls[1].prompt
-    assert "<current-target>" in executor.calls[1].prompt
-    assert "Перевод пропускает обязательное условие." in executor.calls[1].prompt
-    assert events == ["critic", "repair", "repair_validated_and_published", "final_critic"]
-    assert expected.decode() in executor.calls[2].prompt
-    assert target.decode() not in executor.calls[2].prompt
+    assert [call.role.value for call in executor.calls] == ["critic", "final_critic"]
+    assert executor.calls[0].schema is not None
+    assert field_id not in executor.calls[0].prompt
+    assert "<authoritative-source>" in executor.calls[0].prompt
+    assert "<final-target>" in executor.calls[0].prompt
+    assert events == ["critic", "repair_validated_and_published", "final_critic"]
+    assert expected.decode() in executor.calls[1].prompt
+    assert target.decode() not in executor.calls[1].prompt
 
 
 @pytest.mark.parametrize(
@@ -602,36 +677,31 @@ def test_oversized_repair_uses_minimum_ordered_structural_chunks_within_limit() 
         for field in request.fields
     }
     target = assemble_candidate(source, plan, request, target_values)
-    first_id = request.requested_ids[0]
-    limit = 1_450
+    limit = 3_000
 
     class ChunkExecutor:
         def __init__(self) -> None:
             self.calls: list[ModelRequest] = []
+            self.editor_calls = 0
 
         def invoke(self, model_request: ModelRequest, /) -> ModelCallResult:
             self.calls.append(model_request)
-            if model_request.role.value == "critic":
+            if "Act as a critic-editor" in model_request.prompt:
+                self.editor_calls += 1
+                problems = (
+                    [finding(repairable=True, snippet="Target section 1", line=1)]
+                    if self.editor_calls == 1
+                    else []
+                )
                 return ModelCallResult(
-                    critic_json(
-                        "RED",
-                        [
-                            finding(
-                                repairable=True,
-                                snippet="Target section 1",
-                                line=1,
-                                field_ids=[first_id],
-                            )
-                        ],
+                    critic_editor_json(
+                        "RED" if problems else "GREEN",
+                        problems,
+                        current_editor_target(model_request),
                     ),
                     None,
                     (),
                 )
-            if model_request.role.value == "repair":
-                current = model_request.prompt.split("<current-target>\n", 1)[1].split(
-                    "</current-target>", 1
-                )[0]
-                return ModelCallResult(current, None, ())
             return ModelCallResult(critic_json("GREEN", []), None, ())
 
     executor = ChunkExecutor()
@@ -648,10 +718,12 @@ def test_oversized_repair_uses_minimum_ordered_structural_chunks_within_limit() 
         max_request_characters=limit,
     )
 
-    repair_calls = [call for call in executor.calls if call.role.value == "repair"]
+    repair_calls = [
+        call for call in executor.calls if "Act as a critic-editor" in call.prompt
+    ]
     assert result.final_candidate == target
     assert len(repair_calls) == 2
-    assert all(call.schema is None for call in repair_calls)
+    assert all(call.schema is not None for call in repair_calls)
     assert all(len(call.prompt) <= limit for call in repair_calls)
     assert "Source section 1" in repair_calls[0].prompt
     assert "Source section 4" in repair_calls[-1].prompt
@@ -673,8 +745,6 @@ def test_large_repair_uses_response_safe_chunks_and_restores_exact_target() -> N
             for field in request.fields
         },
     )
-    first_id = request.requested_ids[0]
-
     class LargeRepairExecutor:
         def __init__(self) -> None:
             self.calls: list[ModelRequest] = []
@@ -682,24 +752,18 @@ def test_large_repair_uses_response_safe_chunks_and_restores_exact_target() -> N
 
         def invoke(self, model_request: ModelRequest, /) -> ModelCallResult:
             self.calls.append(model_request)
-            if model_request.role.value == "repair":
-                current = model_request.prompt.split("<current-target>\n", 1)[1].split(
-                    "</current-target>", 1
-                )[0]
-                return ModelCallResult(current, None, ())
-            self.critic_calls += 1
-            if self.critic_calls == 1:
+            if "Act as a critic-editor" in model_request.prompt:
+                self.critic_calls += 1
+                problems = (
+                    [finding(repairable=True, snippet="Target section 000", line=1)]
+                    if self.critic_calls == 1
+                    else []
+                )
                 return ModelCallResult(
-                    critic_json(
-                        "RED",
-                        [
-                            finding(
-                                repairable=True,
-                                snippet="Target section 000",
-                                line=1,
-                                field_ids=[first_id],
-                            )
-                        ],
+                    critic_editor_json(
+                        "RED" if problems else "GREEN",
+                        problems,
+                        current_editor_target(model_request),
                     ),
                     None,
                     (),
@@ -720,10 +784,11 @@ def test_large_repair_uses_response_safe_chunks_and_restores_exact_target() -> N
         max_request_characters=250_000,
     )
 
-    repair_calls = tuple(call for call in executor.calls if call.role.value == "repair")
+    repair_calls = tuple(
+        call for call in executor.calls if "Act as a critic-editor" in call.prompt
+    )
     target_chunks = tuple(
-        call.prompt.split("<current-target>\n", 1)[1].split("</current-target>", 1)[0]
-        for call in repair_calls
+        current_editor_target(call) for call in repair_calls
     )
     source_chunks = tuple(
         call.prompt.split("<authoritative-source>\n", 1)[1].split(
@@ -732,7 +797,7 @@ def test_large_repair_uses_response_safe_chunks_and_restores_exact_target() -> N
         for call in repair_calls
     )
     assert len(repair_calls) > 1
-    assert all(call.max_tokens == 8_000 and call.schema is None for call in repair_calls)
+    assert all(call.max_tokens == 8_000 and call.schema is not None for call in repair_calls)
     assert all(max(len(source_chunk), len(target_chunk)) <= 16_000 for source_chunk, target_chunk in zip(source_chunks, target_chunks, strict=True))
     assert all(
         max(len(source_left + source_right), len(target_left + target_right)) > 16_000
@@ -759,8 +824,6 @@ def test_exhausted_content_filter_splits_aligned_repair_and_runs_final_critic() 
     assert len(plan.blocks) == 111
     request = build_translation_request(source, plan)
     target = source
-    first_id = request.requested_ids[0]
-
     class AdaptiveRepairExecutor:
         def __init__(self) -> None:
             self.calls: list[ModelRequest] = []
@@ -769,27 +832,20 @@ def test_exhausted_content_filter_splits_aligned_repair_and_runs_final_critic() 
 
         def invoke(self, model_request: ModelRequest, /) -> ModelCallResult:
             self.calls.append(model_request)
-            if model_request.role.value == "repair":
+            if "Act as a critic-editor" in model_request.prompt:
                 self.repair_calls += 1
                 if self.repair_calls == 1:
                     return ModelCallResult(None, AttemptError.CONTENT_FILTER, ())
-                current = model_request.prompt.split("<current-target>\n", 1)[1].split(
-                    "</current-target>", 1
-                )[0]
-                return ModelCallResult(current, None, ())
-            self.critic_calls += 1
-            if self.critic_calls == 1:
+                problems = (
+                    [finding(repairable=True, snippet="Block 000", line=1)]
+                    if self.repair_calls == 2
+                    else []
+                )
                 return ModelCallResult(
-                    critic_json(
-                        "RED",
-                        [
-                            finding(
-                                repairable=True,
-                                snippet="Block 000",
-                                line=1,
-                                field_ids=[first_id],
-                            )
-                        ],
+                    critic_editor_json(
+                        "RED" if problems else "GREEN",
+                        problems,
+                        current_editor_target(model_request),
                     ),
                     None,
                     (),
@@ -810,7 +866,9 @@ def test_exhausted_content_filter_splits_aligned_repair_and_runs_final_critic() 
         max_request_characters=250_000,
     )
 
-    repair_calls = tuple(call for call in executor.calls if call.role.value == "repair")
+    repair_calls = tuple(
+        call for call in executor.calls if "Act as a critic-editor" in call.prompt
+    )
     source_chunks = tuple(
         call.prompt.split("<authoritative-source>\n", 1)[1].split(
             "</authoritative-source>", 1
@@ -818,22 +876,17 @@ def test_exhausted_content_filter_splits_aligned_repair_and_runs_final_critic() 
         for call in repair_calls
     )
     target_chunks = tuple(
-        call.prompt.split("<current-target>\n", 1)[1].split(
-            "</current-target>", 1
-        )[0]
-        for call in repair_calls
+        current_editor_target(call) for call in repair_calls
     )
     assert tuple(map(len, source_chunks)) == (15_801, 7_870, 7_931)
     assert tuple(map(len, target_chunks)) == (15_801, 7_870, 7_931)
     assert source_chunks[1] + source_chunks[2] == source_chunks[0]
     assert result.final_candidate == target
-    assert result.repair_applied
+    assert not result.repair_applied
     assert [call.role.value for call in executor.calls] == [
         "critic",
-        "repair",
-        "repair",
-        "repair",
-        "final_critic",
+        "critic",
+        "critic",
     ]
 
 
@@ -846,8 +899,6 @@ def test_repair_content_filter_uses_only_boundary_with_uneven_children() -> None
     plan = build_markdown_plan(SNAPSHOT, SOURCE_PATH, source)
     request = build_translation_request(source, plan)
     target = source
-    first_id = request.requested_ids[0]
-
     class UnevenRepairExecutor:
         def __init__(self) -> None:
             self.calls: list[ModelRequest] = []
@@ -856,27 +907,20 @@ def test_repair_content_filter_uses_only_boundary_with_uneven_children() -> None
 
         def invoke(self, model_request: ModelRequest, /) -> ModelCallResult:
             self.calls.append(model_request)
-            if model_request.role.value == "repair":
+            if "Act as a critic-editor" in model_request.prompt:
                 self.repair_calls += 1
                 if self.repair_calls == 1:
                     return ModelCallResult(None, AttemptError.CONTENT_FILTER, ())
-                current = model_request.prompt.split("<current-target>\n", 1)[1].split(
-                    "</current-target>", 1
-                )[0]
-                return ModelCallResult(current, None, ())
-            self.critic_calls += 1
-            if self.critic_calls == 1:
+                problems = (
+                    [finding(repairable=True, snippet="Block 001", line=1)]
+                    if self.repair_calls == 2
+                    else []
+                )
                 return ModelCallResult(
-                    critic_json(
-                        "RED",
-                        [
-                            finding(
-                                repairable=True,
-                                snippet="Block 001",
-                                line=1,
-                                field_ids=[first_id],
-                            )
-                        ],
+                    critic_editor_json(
+                        "RED" if problems else "GREEN",
+                        problems,
+                        current_editor_target(model_request),
                     ),
                     None,
                     (),
@@ -897,7 +941,9 @@ def test_repair_content_filter_uses_only_boundary_with_uneven_children() -> None
         max_request_characters=250_000,
     )
 
-    repair_calls = tuple(call for call in executor.calls if call.role.value == "repair")
+    repair_calls = tuple(
+        call for call in executor.calls if "Act as a critic-editor" in call.prompt
+    )
     source_chunks = tuple(
         call.prompt.split("<authoritative-source>\n", 1)[1].split(
             "</authoritative-source>", 1
@@ -905,10 +951,7 @@ def test_repair_content_filter_uses_only_boundary_with_uneven_children() -> None
         for call in repair_calls
     )
     target_chunks = tuple(
-        call.prompt.split("<current-target>\n", 1)[1].split(
-            "</current-target>", 1
-        )[0]
-        for call in repair_calls
+        current_editor_target(call) for call in repair_calls
     )
     assert tuple(map(len, source_chunks)) == (10_000, 9_000, 1_000)
     assert tuple(map(len, target_chunks)) == (10_000, 9_000, 1_000)
@@ -916,10 +959,8 @@ def test_repair_content_filter_uses_only_boundary_with_uneven_children() -> None
     assert result.final_candidate == target
     assert [call.role.value for call in executor.calls] == [
         "critic",
-        "repair",
-        "repair",
-        "repair",
-        "final_critic",
+        "critic",
+        "critic",
     ]
 
 
@@ -960,7 +1001,7 @@ def test_repair_derives_current_field_values_from_actual_target() -> None:
     assert "Прочитайте полностью" in result.final_candidate.decode()
 
 
-def test_repair_prompt_contains_complete_source_target_and_findings() -> None:
+def test_critic_editor_prompt_contains_complete_source_and_target() -> None:
     source_sentinel = ("SOURCE-OUTSIDE-SELECTED-FIELD " * 500).strip()
     target_sentinel = ("TARGET-OUTSIDE-SELECTED-FIELD " * 500).strip()
     source = f"{source_sentinel}\n\nRepair [this field](/docs/selected).\n".encode()
@@ -1020,23 +1061,18 @@ def test_repair_prompt_contains_complete_source_target_and_findings() -> None:
         operator_context="Use the operator's exact terminology.",
     )
 
-    critic_prompt = executor.calls[0].prompt
-    repair_request = executor.calls[1]
-    repair_prompt = repair_request.prompt
+    editor_request = executor.calls[0]
+    editor_prompt = editor_request.prompt
     assert result.repair_applied
-    assert source.decode() in critic_prompt
-    assert target.decode() in critic_prompt
-    assert repair_request.schema is None
-    assert selected.field_id not in repair_prompt
-    assert "Перевод пропускает обязательное условие." in repair_prompt
-    assert "Добавить пропущенное условие без изменения URL." in repair_prompt
-    assert PATH.value in repair_prompt
-    assert "en -> ru" in repair_prompt
-    assert "Use the operator's exact terminology." in repair_prompt
-    assert source_sentinel in repair_prompt
-    assert target_sentinel in repair_prompt
-    assert "<authoritative-source>" in repair_prompt
-    assert "<current-target>" in repair_prompt
+    assert editor_request.schema is not None
+    assert selected.field_id not in editor_prompt
+    assert PATH.value in editor_prompt
+    assert "en -> ru" in editor_prompt
+    assert "Use the operator's exact terminology." in editor_prompt
+    assert source_sentinel in editor_prompt
+    assert target_sentinel in editor_prompt
+    assert "<authoritative-source>" in editor_prompt
+    assert "<final-target>" in editor_prompt
 
 
 def test_cosmetic_block_merge_still_gets_one_critic_repair() -> None:
@@ -1075,7 +1111,7 @@ def test_cosmetic_block_merge_still_gets_one_critic_repair() -> None:
 
     assert result.repair_applied
     assert result.final_candidate == repaired
-    assert [call.role.value for call in executor.calls] == ["critic", "repair", "final_critic"]
+    assert [call.role.value for call in executor.calls] == ["critic", "final_critic"]
 
 
 def test_large_cosmetic_block_merge_keeps_repair_chunked() -> None:
@@ -1086,19 +1122,22 @@ def test_large_cosmetic_block_merge_keeps_repair_chunked() -> None:
     first_repair = "C" * 8_500 + "\n"
     second_repair = "D" * 8_500 + "\n"
     executor = FakeExecutor(
-        critic_json(
+        critic_editor_json(
             "RED",
             [
                 finding(
                     repairable=True,
                     snippet="X" * 20,
                     line=1,
-                    field_ids=[request.fields[0].field_id],
                 )
             ],
+            first_repair,
         ),
-        first_repair,
-        second_repair,
+        critic_editor_json(
+            "RED",
+            [finding(repairable=True, snippet="Y" * 20, line=2)],
+            second_repair,
+        ),
         critic_json("GREEN", []),
     )
 
@@ -1118,8 +1157,7 @@ def test_large_cosmetic_block_merge_keeps_repair_chunked() -> None:
     assert result.final_candidate == (first_repair + second_repair).encode()
     assert [call.role.value for call in executor.calls] == [
         "critic",
-        "repair",
-        "repair",
+        "critic",
         "final_critic",
     ]
 
@@ -1176,18 +1214,25 @@ def test_t017_n04_repair_preserves_logical_escaped_title_in_untouched_field() ->
         request,
         {title_id: 'A "quoted" title', description_id: "Corrected description"},
     )
-    assert [call.role.value for call in executor.calls] == ["critic", "repair", "final_critic"]
+    assert [call.role.value for call in executor.calls] == ["critic", "final_critic"]
 
 
 def test_unrepairable_red_uses_one_critic() -> None:
+    _plan, _request, _values, target = prepared()
     executor = FakeExecutor(
-        critic_json("RED", [finding(repairable=False, snippet="Прочитайте", line=3)])
+        critic_editor_json(
+            "RED",
+            [finding(repairable=False, snippet="Прочитайте", line=3)],
+            raw_document(target),
+        ),
+        critic_json("RED", [finding(repairable=False, snippet="Прочитайте", line=3)]),
     )
 
     result = review(executor)
 
     assert result.final.verdict is Verdict.RED
-    assert not result.repair_attempted
+    assert result.repair_attempted
+    assert not result.repair_applied
     assert [call.role.value for call in executor.calls] == ["critic"]
 
 
@@ -1220,13 +1265,12 @@ def test_mixed_findings_repair_only_locally_safe_mapped_fields() -> None:
     result = review(executor)
 
     assert result.repair_attempted and result.repair_applied
-    repair_request = executor.calls[1]
-    assert repair_request.schema is None
-    assert unsafe_id not in repair_request.prompt
-    assert SOURCE.decode() not in repair_request.prompt
-    assert "Прочитайте" in repair_request.prompt
-    assert "Перевод пропускает обязательное условие." in repair_request.prompt
-    assert "<authoritative-source>" in repair_request.prompt
+    editor_request = executor.calls[0]
+    assert editor_request.schema is not None
+    assert unsafe_id not in editor_request.prompt
+    assert SOURCE.decode() not in editor_request.prompt
+    assert "Прочитайте" in editor_request.prompt
+    assert "<authoritative-source>" in editor_request.prompt
     assert result.final.verdict is Verdict.RED
 
 
@@ -1262,9 +1306,11 @@ def test_invalid_repair_retains_original_and_still_runs_one_final_critic() -> No
     assert result.repaired_candidate is None
     assert result.final_candidate == target
     assert result.final.verdict is Verdict.RED
-    assert [call.role.value for call in executor.calls] == ["critic", "repair", "final_critic"]
+    assert [call.role.value for call in executor.calls] == ["critic"]
     assert callback_candidates == []
-    assert target.decode() in executor.calls[2].prompt
+    assert "<final-target>" in executor.calls[0].prompt
+    assert "Прочитайте" in executor.calls[0].prompt
+    assert "/docs/guide" not in executor.calls[0].prompt
 
 
 def test_repair_callback_failure_prevents_final_critic() -> None:
@@ -1304,7 +1350,7 @@ def test_repair_callback_failure_prevents_final_critic() -> None:
             before_final_critic=fail_publication,
         )
 
-    assert [call.role.value for call in executor.calls] == ["critic", "repair"]
+    assert [call.role.value for call in executor.calls] == ["critic"]
 
 
 def test_invalid_placeholder_repair_retains_original_and_reports_invalid_response() -> None:
@@ -1323,7 +1369,7 @@ def test_invalid_placeholder_repair_retains_original_and_reports_invalid_respons
 
     assert result.repair_error is RepairErrorReason.INVALID_RESPONSE
     assert result.final_candidate == target
-    assert len(executor.calls) == 3
+    assert len(executor.calls) == 1
 
 
 def test_lone_surrogate_repair_retains_original_and_runs_final_critic() -> None:
@@ -1356,18 +1402,25 @@ def test_lone_surrogate_repair_retains_original_and_runs_final_critic() -> None:
     assert result.repaired_candidate is None
     assert result.final_candidate == target
     assert result.repair_error is RepairErrorReason.INVALID_RESPONSE
-    assert [call.role.value for call in executor.calls] == ["critic", "repair", "final_critic"]
+    assert [call.role.value for call in executor.calls] == ["critic"]
 
 
 def test_repairable_but_unmapped_red_does_not_guess_a_repair_field() -> None:
+    _plan, _request, _values, target = prepared()
     executor = FakeExecutor(
-        critic_json("RED", [finding(repairable=True, snippet="Прочитайте", line=3)])
+        critic_editor_json(
+            "RED",
+            [finding(repairable=True, snippet="Прочитайте", line=3)],
+            raw_document(target),
+        ),
+        critic_json("RED", [finding(repairable=True, snippet="Прочитайте", line=3)]),
     )
 
     result = review(executor)
 
     assert result.final.verdict is Verdict.RED
-    assert not result.repair_attempted
+    assert result.repair_attempted
+    assert not result.repair_applied
     assert len(executor.calls) == 1
 
 
@@ -1398,6 +1451,19 @@ def test_critic_parser_rejects_malformed_extra_duplicate_and_inconsistent_result
     assert caught.value.reason is reason
     assert raw not in str(caught.value)
     assert raw not in repr(caught.value)
+
+
+def test_green_critic_editor_cannot_modify_target() -> None:
+    with pytest.raises(CriticResponseError) as caught:
+        parse_critic_response(
+            critic_editor_json("GREEN", [], "changed"),
+            target_path=PATH,
+            requested_ids=(),
+            editable=True,
+            current_target="unchanged",
+        )
+
+    assert caught.value.reason is CriticResponseErrorReason.INCONSISTENT_RESULT
 
 
 @pytest.mark.parametrize(
@@ -1527,11 +1593,12 @@ def test_critic_duplicate_ids_reach_one_raw_document_repair() -> None:
 
     result = review(executor)
 
-    assert result.repair_applied
-    assert result.primary.findings[0].field_ids == (second_id,)
-    assert executor.calls[1].schema is None
-    assert second_id not in executor.calls[1].prompt
-    assert [call.role.value for call in executor.calls] == ["critic", "repair", "final_critic"]
+    assert result.repair_attempted
+    assert not result.repair_applied
+    assert result.primary.findings[0].field_ids == ()
+    assert executor.calls[0].schema is not None
+    assert second_id not in executor.calls[0].prompt
+    assert [call.role.value for call in executor.calls] == ["critic"]
 
 
 @pytest.mark.parametrize(

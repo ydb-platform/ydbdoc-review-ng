@@ -214,6 +214,29 @@ def test_external_composite_installs_the_repository_that_contains_the_action(
     assert (install_root / "pyproject.toml").is_file()
 
 
+def test_external_composite_prepares_trusted_diplodoc_build_before_runtime() -> None:
+    action = yaml.safe_load((ROOT / ".github/actions/doc-review/action.yml").read_bytes())
+    steps = action["runs"]["steps"]
+    runtime_index = next(
+        index for index, step in enumerate(steps) if "-m ydbdoc_review_ng.cli" in step.get("run", "")
+    )
+    checkout_index = next(
+        index for index, step in enumerate(steps) if step.get("name") == "Checkout trusted YDB base"
+    )
+    install_index = next(
+        index for index, step in enumerate(steps) if step.get("name") == "Install Diplodoc CLI"
+    )
+
+    assert checkout_index < install_index < runtime_index
+    assert steps[checkout_index]["with"] == {
+        "persist-credentials": False,
+        "sparse-checkout": "ydb/docs",
+    }
+    assert steps[install_index]["run"] == "npm install --global '@diplodoc/cli@stable'"
+    runtime = steps[runtime_index]
+    assert runtime["env"]["YDBDOC_DOCS_ROOT"] == "${{ github.workspace }}/ydb/docs"
+
+
 def test_ci_has_read_only_offline_quality_contract() -> None:
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 

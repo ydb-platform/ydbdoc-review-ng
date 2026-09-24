@@ -417,7 +417,6 @@ def test_pending_success_uses_full_review_single_repair_and_captures_red():
         "translate",
         "translate",
         "critic",
-        "repair",
         "critic",
         "critic",
         "critic",

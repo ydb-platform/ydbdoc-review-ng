@@ -189,11 +189,15 @@ class RuntimeServices:
         else:
             properties = schema["schema"]["properties"]
             self.events.append(("MODEL", tuple(properties)))
-            values = (
-                {"verdict": "GREEN", "findings": []}
-                if "verdict" in properties
-                else {key: "Translated" for key in properties}
-            )
+            if "verdict" in properties:
+                values = {"verdict": "GREEN", "findings": []}
+                if "corrected_markdown" in properties:
+                    prompt = body["messages"][-1]["text"]
+                    values["corrected_markdown"] = raw_repair_context(
+                        prompt, "final-target"
+                    )
+            else:
+                values = {key: "Translated" for key in properties}
             text = json.dumps(values)
         return HttpResponse(
             200,
@@ -298,6 +302,7 @@ class InstalledContinueServices(RuntimeServices):
         response = super().model(request)
         schema = json.loads(request.body).get("jsonSchema")
         if self.stop_review and schema is not None and "verdict" in schema["schema"]["properties"]:
+            properties = schema["schema"]["properties"]
             values = {
                 "verdict": "RED",
                 "findings": [
@@ -311,6 +316,9 @@ class InstalledContinueServices(RuntimeServices):
                     }
                 ],
             }
+            if "corrected_markdown" in properties:
+                prompt = json.loads(request.body)["messages"][-1]["text"]
+                values["corrected_markdown"] = raw_repair_context(prompt, "final-target")
             body = json.loads(response.body)
             body["result"]["alternatives"][0]["message"]["text"] = json.dumps(values)
             return HttpResponse(200, json.dumps(body).encode(), Decimal("0.01"))

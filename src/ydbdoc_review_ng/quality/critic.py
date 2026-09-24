@@ -56,7 +56,13 @@ def _object(
     return result
 
 
-def critic_schema(target_path: RepoPath, requested_ids: tuple[str, ...], /) -> dict[str, object]:
+def critic_schema(
+    target_path: RepoPath,
+    requested_ids: tuple[str, ...],
+    /,
+    *,
+    editable: bool = False,
+) -> dict[str, object]:
     finding_properties: dict[str, object] = {
         "repairable": {"type": "boolean"},
         "reason": {"type": "string", "minLength": 1},
@@ -77,13 +83,18 @@ def critic_schema(target_path: RepoPath, requested_ids: tuple[str, ...], /) -> d
         "required": list(finding_properties),
         "additionalProperties": False,
     }
+    properties: dict[str, object] = {
+        "verdict": {"type": "string", "enum": ["GREEN", "RED"]},
+        "findings": {"type": "array", "items": finding},
+    }
+    required = ["verdict", "findings"]
+    if editable:
+        properties["corrected_markdown"] = {"type": "string"}
+        required.append("corrected_markdown")
     return {
         "type": "object",
-        "properties": {
-            "verdict": {"type": "string", "enum": ["GREEN", "RED"]},
-            "findings": {"type": "array", "items": finding},
-        },
-        "required": ["verdict", "findings"],
+        "properties": properties,
+        "required": required,
         "additionalProperties": False,
     }
 
@@ -101,6 +112,7 @@ def build_critic_request(
     source_is_excerpt: bool = False,
     target_is_excerpt: bool = False,
     operator_context: str | None = None,
+    editable: bool = False,
 ) -> ModelRequest:
     if type(source) is not bytes or type(target) is not bytes:
         raise TypeError("source and target must be exact bytes")
@@ -125,9 +137,19 @@ def build_critic_request(
         )
     else:
         source_scope_instruction = ""
+    edit_instruction = (
+        "Act as a critic-editor. Return corrected_markdown as the complete corrected target "
+        "shown below. If the translation is GREEN, copy the current target byte-for-byte into "
+        "corrected_markdown. If it is RED, fix every concrete material defect you report in "
+        "that same corrected_markdown. Preserve every protected placeholder exactly once and "
+        "do not add, remove, rename, or reorder placeholders. "
+        if editable
+        else ""
+    )
     prompt = (
         "Compare the authoritative source with the complete translated target. "
         f"{source_scope_instruction}"
+        f"{edit_instruction}"
         "Use RED only for a concrete, currently present, material translation defect: "
         "wrong or reversed meaning; missing user-facing information; untranslated user-facing "
         "prose; wrong technical terminology that can mislead use; or broken or purpose-changing "
@@ -160,8 +182,15 @@ def build_critic_request(
     if operator_context is not None:
         prompt += "\n<operator-context>\n" + operator_context + "</operator-context>"
     role = ModelRole.FINAL_CRITIC if final else ModelRole.CRITIC
-    schema = cast(FrozenJson, critic_schema(target_path, requested_ids))
-    return ModelRequest(role, model, prompt, schema, target_path=target_path)
+    schema = cast(FrozenJson, critic_schema(target_path, requested_ids, editable=editable))
+    return ModelRequest(
+        role,
+        model,
+        prompt,
+        schema,
+        8000 if editable else 2000,
+        target_path,
+    )
 
 
 def parse_critic_response(
@@ -169,6 +198,8 @@ def parse_critic_response(
     *,
     target_path: RepoPath,
     requested_ids: tuple[str, ...],
+    editable: bool = False,
+    current_target: str | None = None,
 ) -> CriticResult:
     if type(raw) not in {str, bytes}:
         raise TypeError("raw must be exact str or bytes")
@@ -180,7 +211,12 @@ def parse_critic_response(
         raise CriticResponseError(CriticResponseErrorReason.ROOT_NOT_OBJECT)
     if _has_duplicate(value):
         raise CriticResponseError(CriticResponseErrorReason.DUPLICATE_KEY)
-    document = _object(value, frozenset({"verdict", "findings"}))
+    expected = frozenset(
+        {"verdict", "findings", "corrected_markdown"}
+        if editable
+        else {"verdict", "findings"}
+    )
+    document = _object(value, expected)
     raw_verdict = document["verdict"]
     if type(raw_verdict) is not str or raw_verdict not in {"GREEN", "RED"}:
         raise CriticResponseError(CriticResponseErrorReason.INVALID_VERDICT)
@@ -246,4 +282,12 @@ def parse_critic_response(
     verdict = Verdict(raw_verdict)
     if (verdict is Verdict.GREEN and findings) or (verdict is Verdict.RED and not findings):
         raise CriticResponseError(CriticResponseErrorReason.INCONSISTENT_RESULT)
-    return CriticResult(verdict, tuple(findings))
+    corrected_markdown: str | None = None
+    if editable:
+        raw_correction = document["corrected_markdown"]
+        if type(raw_correction) is not str or current_target is None:
+            raise CriticResponseError(CriticResponseErrorReason.INVALID_FINDING)
+        corrected_markdown = raw_correction
+        if verdict is Verdict.GREEN and corrected_markdown != current_target:
+            raise CriticResponseError(CriticResponseErrorReason.INCONSISTENT_RESULT)
+    return CriticResult(verdict, tuple(findings), corrected_markdown)

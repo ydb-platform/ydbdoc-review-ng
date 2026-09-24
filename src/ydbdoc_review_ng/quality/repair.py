@@ -1,14 +1,13 @@
-"""Bounded quality orchestration: one critic, at most one repair, one final critic."""
+"""Bounded quality orchestration: one critic-editor and one final critic."""
 
 from __future__ import annotations
 
-import json
 import re
 from collections.abc import Callable
 from typing import Protocol
 
 from ydbdoc_review_ng.continuation import AcceptedMap
-from ydbdoc_review_ng.domain import Locale, ModelRole, RepoPath
+from ydbdoc_review_ng.domain import Locale, RepoPath
 from ydbdoc_review_ng.models import AttemptError, ModelCallResult, ModelRequest
 from ydbdoc_review_ng.parser.markdown import build_markdown_plan
 from ydbdoc_review_ng.plan import BlockKind, ProtectedKind, SourcePlan, fields_of
@@ -247,87 +246,33 @@ def _invoke_critic(
     return CriticResult(verdict, tuple(findings))
 
 
-def _safe_repair_findings(
-    findings: tuple[Finding, ...],
-    source_plan: SourcePlan,
-    target: bytes,
-) -> tuple[tuple[Finding, ...], tuple[str, ...]]:
-    target_plan = build_markdown_plan(source_plan.source_snapshot, source_plan.source_path, target)
-    source_fields = fields_of(source_plan)
-    target_fields = fields_of(target_plan)
-    positions = {field.field_id.value: position for position, field in enumerate(source_fields)}
-    selected_findings: list[Finding] = []
-    selected_ids: set[str] = set()
-    for finding in findings:
-        if not finding.repairable or not finding.field_ids:
-            continue
-        safe = True
-        for field_id in finding.field_ids:
-            position = positions.get(field_id)
-            if position is None or position >= len(target_fields):
-                safe = False
-                break
-            target_field = target_fields[position]
-            field_text = target[target_field.span.start : target_field.span.end].decode("utf-8")
-            if (
-                not target_field.lines.start <= finding.target_line <= target_field.lines.end
-                or finding.searchable_snippet not in field_text
-            ):
-                safe = False
-                break
-        if safe:
-            selected_findings.append(finding)
-            selected_ids.update(finding.field_ids)
-    ordered = tuple(
-        field.field_id for field in source_fields if field.field_id.value in selected_ids
-    )
-    return tuple(selected_findings), tuple(item.value for item in ordered)
-
-
-def _repair_prompt(
+def _editor_request(
     *,
+    model: str,
     source_text: str,
     target_text: str,
     target_path: RepoPath,
     source_locale: Locale,
     target_locale: Locale,
-    findings: tuple[Finding, ...],
+    requested_ids: tuple[str, ...],
     operator_context: str | None = None,
-) -> str:
-    problems = [
-        {
-            "reason": finding.reason,
-            "expected_correction": finding.expected_correction,
-            "searchable_snippet": finding.searchable_snippet,
-            "target_path": finding.target_path,
-            "target_line": finding.target_line,
-        }
-        for finding in findings
-    ]
-    prompt = (
-        "Repair the complete translated Markdown for the listed problems. Return Markdown only, "
-        "without JSON, explanations, or an outer code fence. Preserve Markdown/YFM structure "
-        "with each placeholder exactly once in its source top-level block. Independent "
-        "inline-code/template may move in-field for grammar; all others retain source "
-        "order/pairing. "
-        "The source is authoritative for protected bytes; the current target is linguistic "
-        "context only.\n"
-        f"Direction: {source_locale.value} -> {target_locale.value}\n"
-        f"Target path: {target_path.value}\n"
-        f"Problems: {json.dumps(problems, ensure_ascii=False)}\n"
-        "<authoritative-source>\n"
-        f"{source_text}"
-        "</authoritative-source>\n"
-        "<current-target>\n"
-        f"{target_text}"
-        "</current-target>"
+) -> ModelRequest:
+    return build_critic_request(
+        model=model,
+        source=source_text.encode(),
+        target=target_text.encode(),
+        target_path=target_path,
+        source_locale=source_locale,
+        target_locale=target_locale,
+        requested_ids=requested_ids,
+        source_is_excerpt=True,
+        target_is_excerpt=True,
+        operator_context=operator_context,
+        editable=True,
     )
-    if operator_context is not None:
-        prompt += "\n<operator-context>\n" + operator_context + "</operator-context>"
-    return prompt
 
 
-def _repair_requests(
+def _editor_requests(
     *,
     model: str,
     source: bytes,
@@ -336,7 +281,7 @@ def _repair_requests(
     target_path: RepoPath,
     source_locale: Locale,
     target_locale: Locale,
-    findings: tuple[Finding, ...],
+    requested_ids: tuple[str, ...],
     operator_context: str | None,
     max_characters: int,
 ) -> tuple[
@@ -437,18 +382,17 @@ def _repair_requests(
             if block_start <= item.source_start and item.source_end <= block_end
         )
         chunk = DocumentChunk(source_text, start, end, tokens)
-        prompt = _repair_prompt(
+        request = _editor_request(
+            model=model,
             source_text=source_text,
             target_text=target_text,
             target_path=target_path,
             source_locale=source_locale,
             target_locale=target_locale,
-            findings=findings,
+            requested_ids=requested_ids,
             operator_context=operator_context,
         )
-        return chunk, ModelRequest(
-            ModelRole.REPAIR, model, prompt, None, 8000, target_path
-        )
+        return chunk, request
 
     if not source_blocks:
         chunk, request = unit(0, 0)
@@ -510,7 +454,7 @@ def review_translation(
     before_repaired_map: Callable[[AcceptedMap], None] | None = None,
     max_request_characters: int = 200_000,
 ) -> QualityReviewResult:
-    """Review the actual candidate and apply no more than one source-only repair."""
+    """Let one critic edit the candidate, then independently review any correction."""
     if accepted_map is None and not full_repair:
         try:
             target_translations = _derive_target_translations(
@@ -535,21 +479,20 @@ def review_translation(
         if accepted_map is not None or not full_repair
         else ()
     )
-    primary = _invoke_critic(
-        executor,
-        model=model,
-        source=source,
-        target=target,
-        target_path=target_path,
-        source_locale=source_locale,
-        target_locale=target_locale,
-        requested_ids=translation_request.requested_ids,
-        final=False,
-        operator_context=operator_context,
-        before_model_call=before_model_call,
-    )
-    repair_findings, repair_ids = _safe_repair_findings(primary.findings, source_plan, target)
-    if not repair_ids or not allow_repair:
+    if not allow_repair:
+        primary = _invoke_critic(
+            executor,
+            model=model,
+            source=source,
+            target=target,
+            target_path=target_path,
+            source_locale=source_locale,
+            target_locale=target_locale,
+            requested_ids=translation_request.requested_ids,
+            final=False,
+            operator_context=operator_context,
+            before_model_call=before_model_call,
+        )
         return QualityReviewResult(
             target,
             None,
@@ -561,8 +504,7 @@ def review_translation(
             None,
             accepted_maps,
         )
-
-    repair_requests, document_request, source_blocks, target_blocks = _repair_requests(
+    editor_requests, document_request, source_blocks, target_blocks = _editor_requests(
         model=model,
         source=source,
         source_plan=source_plan,
@@ -570,7 +512,7 @@ def review_translation(
         target_path=target_path,
         source_locale=source_locale,
         target_locale=target_locale,
-        findings=repair_findings,
+        requested_ids=translation_request.requested_ids,
         operator_context=operator_context,
         max_characters=max_request_characters,
     )
@@ -578,65 +520,102 @@ def review_translation(
     repaired_candidate: bytes | None = None
     effective_chunks: list[DocumentChunk] = []
     responses: list[str] = []
+    editor_results: list[CriticResult] = []
 
-    def child_repair_request(chunk: DocumentChunk) -> ModelRequest:
-        prompt = _repair_prompt(
+    def child_editor_request(chunk: DocumentChunk) -> ModelRequest:
+        request = _editor_request(
+            model=model,
             source_text=chunk.text,
             target_text="".join(target_blocks[chunk.block_start : chunk.block_end]),
             target_path=target_path,
             source_locale=source_locale,
             target_locale=target_locale,
-            findings=repair_findings,
+            requested_ids=translation_request.requested_ids,
             operator_context=operator_context,
         )
-        if len(prompt) > max_request_characters:
+        if len(request.prompt) > max_request_characters:
             raise QualityInputError
-        return ModelRequest(ModelRole.REPAIR, model, prompt, None, 8000, target_path)
+        return request
 
-    def invoke_repair(request: ModelRequest) -> ModelCallResult:
+    def invoke_editor(request: ModelRequest) -> ModelCallResult:
         if before_model_call is not None:
             before_model_call()
         return executor.invoke(request)
 
-    for chunk, repair_request in zip(document_request.chunks, repair_requests, strict=True):
-        repair_response = invoke_repair(repair_request)
-        if not repair_response.success or repair_response.text is None:
+    def accept_editor_response(
+        chunk: DocumentChunk, response: ModelCallResult, /
+    ) -> None:
+        if not response.success or response.text is None:
+            raise QualityExecutionError("critic")
+        current_target = "".join(target_blocks[chunk.block_start : chunk.block_end])
+        result = parse_critic_response(
+            response.text,
+            target_path=target_path,
+            requested_ids=translation_request.requested_ids,
+            editable=True,
+            current_target=current_target,
+        )
+        correction = result.corrected_markdown
+        assert correction is not None
+        editor_results.append(result)
+        validate_chunk_response(chunk, document_request.placeholders, correction)
+        effective_chunks.append(chunk)
+        responses.append(correction)
+
+    for chunk, editor_request in zip(document_request.chunks, editor_requests, strict=True):
+        editor_response = invoke_editor(editor_request)
+        if not editor_response.success or editor_response.text is None:
             children = (
                 split_content_filter_chunk(
                     chunk,
                     source_blocks,
                     aligned_block_texts=target_blocks,
                 )
-                if repair_response.failure is AttemptError.CONTENT_FILTER
+                if editor_response.failure is AttemptError.CONTENT_FILTER
                 else None
             )
             if children is None:
-                raise QualityExecutionError("repair")
+                raise QualityExecutionError("critic")
             for child in children:
-                child_response = invoke_repair(child_repair_request(child))
-                if not child_response.success or child_response.text is None:
-                    raise QualityExecutionError("repair")
+                child_response = invoke_editor(child_editor_request(child))
                 try:
-                    validate_chunk_response(
-                        child, document_request.placeholders, child_response.text
-                    )
+                    accept_editor_response(child, child_response)
                 except DocumentTranslationError:
                     repair_error = RepairErrorReason.INVALID_RESPONSE
                     break
-                effective_chunks.append(child)
-                responses.append(child_response.text)
             if repair_error is not None:
                 break
             continue
         try:
-            validate_chunk_response(
-                chunk, document_request.placeholders, repair_response.text
-            )
+            accept_editor_response(chunk, editor_response)
         except DocumentTranslationError:
             repair_error = RepairErrorReason.INVALID_RESPONSE
             break
-        effective_chunks.append(chunk)
-        responses.append(repair_response.text)
+
+    findings: list[Finding] = []
+    for result in editor_results:
+        for finding in result.findings:
+            if finding not in findings:
+                findings.append(finding)
+    primary = CriticResult(
+        Verdict.RED
+        if any(result.verdict is Verdict.RED for result in editor_results)
+        else Verdict.GREEN,
+        tuple(findings),
+    )
+    if primary.verdict is Verdict.GREEN:
+        return QualityReviewResult(
+            target,
+            None,
+            target,
+            primary,
+            primary,
+            False,
+            False,
+            repair_error,
+            accepted_maps,
+        )
+
     if repair_error is None:
         try:
             effective_request = DocumentTranslationRequest(
@@ -645,6 +624,19 @@ def review_translation(
             repaired_candidate = restore_document(
                 source, source_plan, effective_request, tuple(responses)
             )
+            if repaired_candidate == target:
+                repaired_candidate = None
+                return QualityReviewResult(
+                    target,
+                    None,
+                    target,
+                    primary,
+                    primary,
+                    True,
+                    False,
+                    repair_error,
+                    accepted_maps,
+                )
             try:
                 target_translations = _derive_target_translations(
                     source,
@@ -665,6 +657,18 @@ def review_translation(
             repair_error = RepairErrorReason.ASSEMBLY_FAILED
             repaired_candidate = None
     final_candidate = repaired_candidate if repaired_candidate is not None else target
+    if repaired_candidate is None:
+        return QualityReviewResult(
+            target,
+            None,
+            target,
+            primary,
+            primary,
+            True,
+            False,
+            repair_error,
+            accepted_maps,
+        )
     if repaired_candidate is not None and before_repaired_map is not None:
         before_repaired_map(accepted_maps[0])
     if repaired_candidate is not None and before_final_critic is not None:

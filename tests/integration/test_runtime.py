@@ -103,7 +103,11 @@ def test_shipped_composition_translates_then_verifies_current_pr_without_retrans
             for i, event in enumerate(events)
             if event == ("POST", "/repos/ydb-platform/ydb/git/refs")
         )
-        < next(i for i, event in enumerate(events) if event == ("MODEL", ("verdict", "findings")))
+        < next(
+            i
+            for i, event in enumerate(events)
+            if event == ("MODEL", ("verdict", "findings", "corrected_markdown"))
+        )
         < next(
             i
             for i, event in enumerate(events)
@@ -133,7 +137,7 @@ def test_shipped_composition_translates_then_verifies_current_pr_without_retrans
         == 0
     )
     assert [event for event in services.events if event[0] == "MODEL"] == [
-        ("MODEL", ("verdict", "findings"))
+        ("MODEL", ("verdict", "findings", "corrected_markdown"))
     ]
     assert not any(
         "/git/" in path and method in {"POST", "PATCH"} for method, path in services.events
@@ -260,6 +264,12 @@ def test_runtime_preserves_list_formatting_drift_through_critic() -> None:
                         }
                     ],
                 }
+                if "corrected_markdown" in schema["properties"]:
+                    values["corrected_markdown"] = (
+                        "* Parent translated\n"
+                        "* [[YDBDOC_PROTECTED_0001]] — corrected item "
+                        "(i.e., only an administrator)\n"
+                    )
                 text = json.dumps(values)
             else:
                 self.raw_calls += 1
@@ -323,14 +333,17 @@ def test_runtime_preserves_list_formatting_drift_through_critic() -> None:
     )
 
     assert exit_code == 0
-    assert services.raw_calls == 2
+    assert services.raw_calls == 1
     assert services.files["ydb/docs/en/core/page.md"] == (
         b"* Parent translated\n"
         b"* `enable_strict_user_management` "
         b"\xe2\x80\x94 corrected item (i.e., only an administrator)\n"
     )
-    assert services.events.count(("MODEL", ("verdict", "findings"))) == 2
-    assert services.events.count(("REPAIR", "markdown")) == 1
+    assert services.events.count(
+        ("MODEL", ("verdict", "findings", "corrected_markdown"))
+    ) == 1
+    assert services.events.count(("MODEL", ("verdict", "findings"))) == 1
+    assert services.events.count(("REPAIR", "markdown")) == 0
 
 
 class ContentFilterServices(RuntimeServices):
@@ -910,7 +923,9 @@ def test_t017_r07_already_renamed_noop_checks_entire_pinned_target(
     services = _T017R07Services("renamed", target_state)
 
     assert _run_t017_r07(services) == expected_exit
-    assert (("MODEL", ("verdict", "findings")) in services.events) is expects_critic
+    assert (
+        ("MODEL", ("verdict", "findings", "corrected_markdown")) in services.events
+    ) is expects_critic
     if expected_exit:
         assert services.audit[-1]["error"] in {"load_candidate_failed", "validate_failed"}
 
@@ -1167,6 +1182,11 @@ class _T017N04Services(RuntimeServices):
             values = {"page.md": "ru_to_en"}
         elif "verdict" in properties:
             values = {"verdict": "GREEN", "findings": []}
+            if "corrected_markdown" in properties:
+                prompt = body["messages"][-1]["text"]
+                values["corrected_markdown"] = prompt.split(
+                    "<final-target>\n", 1
+                )[1].split("</final-target>", 1)[0]
         else:
             values = {field_id: 'A "quoted" title' for field_id in properties}
         return HttpResponse(
@@ -1232,7 +1252,7 @@ def test_t017_n04_real_translate_reviews_escaped_quoted_frontmatter() -> None:
 
     assert result == 0
     assert services.files["ydb/docs/en/core/page.md"] == target
-    assert ("MODEL", ("verdict", "findings")) in services.events
+    assert ("MODEL", ("verdict", "findings", "corrected_markdown")) in services.events
     assert services.comments[0]["body"].startswith("🟢 GREEN\n")
 
 
@@ -1273,7 +1293,7 @@ def test_t017_n04_real_verify_reviews_escaped_quoted_frontmatter() -> None:
 
     assert result == 0
     assert [event for event in services.events if event[0] == "MODEL"] == [
-        ("MODEL", ("verdict", "findings"))
+        ("MODEL", ("verdict", "findings", "corrected_markdown"))
     ]
     assert services.comments[0]["body"].startswith("🟢 GREEN\n")
 
@@ -1772,6 +1792,14 @@ def test_model_repair_is_published_before_final_critic_and_only_then_pr():
                     }
                 ],
             }
+            if "corrected_markdown" in schema["properties"]:
+                prompt = body["messages"][-1]["text"]
+                current = prompt.split("<final-target>\n", 1)[1].split(
+                    "</final-target>", 1
+                )[0]
+                values["corrected_markdown"] = current.replace(
+                    "# Translated", "# Corrected", 1
+                )
             return HttpResponse(
                 200,
                 json.dumps(
@@ -1810,8 +1838,8 @@ def test_model_repair_is_published_before_final_critic_and_only_then_pr():
         if method in {"CRITIC", "REPAIR", "MODEL"}
         or (method == "POST" and path.endswith(("/git/commits", "/pulls")))
     ]
-    assert significant == ["MODEL", "commits", "CRITIC", "REPAIR", "commits", "MODEL", "pulls"]
-    assert "Стоимость запуска: 0.06 RUB" in services.comments[0]["body"]
+    assert significant == ["MODEL", "commits", "CRITIC", "commits", "MODEL", "pulls"]
+    assert "Стоимость запуска: 0.04 RUB" in services.comments[0]["body"]
 
 
 def test_runtime_never_reports_green_after_branch_moves_during_critic():

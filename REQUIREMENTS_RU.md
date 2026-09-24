@@ -33,7 +33,7 @@
 
 Продолжение не является восстановлением произвольного упавшего процесса.
 Продолжаемыми состояниями являются только `direction_undetermined`, незавершённый
-перевод отдельных документов и RED после critic/единственной repair-попытки.
+перевод отдельных документов и RED после единственного прохода critic-editor.
 Transport, persistence, GitHub и прочие инфраструктурные ошибки завершают job и
 требуют нового запуска. Ручная правка translation branch с последующим
 `doc_verify` остаётся допустимым альтернативным путём.
@@ -200,21 +200,28 @@ fenced block защищён. Нельзя обещать полноценную 
 отдельный эквивалентный AST, глобальный navigation graph, link resolver или
 сложную publication lattice.
 
-## 5. Critic и repair
+## 5. Critic-editor и final critic
 
-Смысловую корректность проверяет model critic. Prompt получает authoritative
-source и финальный target в достаточном контексте и проверяет:
+Смысловую корректность проверяет model critic-editor. Prompt получает
+authoritative source и финальный target в достаточном контексте и проверяет:
 
 - полноту и точность перевода;
 - отсутствие смысловых и терминологических искажений;
 - сохранение назначения и работоспособности ссылок;
 - отсутствие непереведённой пользовательской прозы.
 
-Если полный critic prompt превышает безопасный лимит provider, source и target
-сразу делятся по ближайшим границам абзацев на соответствующие упорядоченные
+Source-owned technical fragments перед вызовом critic-editor заменяются теми же
+protected placeholders, что использует переводчик. Ответ содержит verdict,
+findings и полный `corrected_markdown` текущего документа или структурного
+чанка. При `GREEN` `corrected_markdown` обязан побайтно совпасть с переданным
+target. При `RED` critic-editor сам исправляет найденные дефекты в этом же
+ответе; отдельного model call роли repair нет.
+
+Если полный prompt превышает безопасный лимит provider, source и target сразу
+делятся по границам top-level Markdown blocks на соответствующие упорядоченные
 excerpt-пары. Полный большой target не повторяется в каждом запросе: это
 перегружает контекст и провоцирует ложные сообщения о пропущенном тексте,
-который фактически находится в другом месте документа. Critic проверяет только
+который фактически находится в другом месте документа. Critic-editor проверяет только
 соответствующую excerpt-пару. Итог RED, если RED вернул хотя бы один excerpt;
 findings
 объединяются без повторов. Обычный помещающийся документ проверяется одним
@@ -224,11 +231,15 @@ URL и path уже защищены локальными инвариантам�
 и работоспособность в контексте, но не подменяет их и не запускает отдельную
 детерминированную link/anchor/navigation систему.
 
-При исправимом замечании допускается ровно одна model repair попытка. Repair
-получает authoritative source, текущий целый target и замечания и возвращает
-целый исправленный Markdown, а не карту отдельных полей. После восстановления
-source placeholders candidate проходит обязательные детерминированные проверки
-и повторный critic. Актуальный verdict всегда публикуется в PR.
+Для одной job применяется не более одного RED-исправления critic-editor. После
+восстановления source placeholders candidate проходит обязательные
+детерминированные проверки и полный Diplodoc build. Если исправленный candidate
+валиден и действительно отличается от опубликованного target, отдельный final
+critic без права редактирования независимо проверяет уже исправленный candidate.
+Для отсутствующего, невалидного или побайтно неизменного исправления сохраняется
+первичный RED, новый commit и final critic не запускаются.
+Critic-editor не подтверждает собственное исправление как итоговый GREEN.
+Следующих model repair attempts нет. Актуальный verdict всегда публикуется в PR.
 
 ## 6. Линейная оркестрация
 
@@ -249,9 +260,10 @@ source placeholders candidate проходит обязательные дете
    собранный Markdown/YFM. Для невалидного результата разрешена одна техническая
    повторная попытка по правилам раздела 4.
 6. Сделать commit и push в translation branch.
-7. Запустить critic для authoritative source и опубликованного target.
-8. При исправимых замечаниях выполнить одну repair попытку, повторить сборку и
-   проверки, сделать новый commit и снова вызвать critic.
+7. Запустить critic-editor для authoritative source и опубликованного target.
+8. При RED восстановить его исправленный Markdown. Только если результат валиден
+   и изменён, повторить сборку и проверки, сделать новый commit и вызвать
+   независимый final critic; иначе сохранить первичный RED без нового commit.
 9. Создать или обновить translation PR, записать актуальный verdict и terminal
    job status.
 
@@ -260,13 +272,14 @@ source placeholders candidate проходит обязательные дете
 1. Создать job audit record, затем авторизовать запуск и взять текущий SHA
    translation branch.
 2. Получить соответствующий authoritative source snapshot.
-3. Выполнить те же локальные проверки и critic без нового перевода.
-4. При исправимом замечании выполнить одну repair попытку, заново проверить и
-   сделать commit в ту же branch.
+3. Выполнить те же локальные проверки и critic-editor без нового перевода.
+4. При RED восстановить исправленный Markdown. Только если результат валиден и
+   изменён, заново проверить, сделать commit в ту же branch и вызвать независимый
+   final critic; иначе сохранить первичный RED без нового commit.
 5. Создать или обновить один актуальный PR comment с итоговым verdict и
    записать terminal job status.
 
-У `doc_verify` нет budget gate. Его critic и repair costs сохраняются и входят
+У `doc_verify` нет budget gate. Его critic-editor и final critic costs сохраняются и входят
 в дневную сумму, которую проверит следующий `doc_translate`.
 
 ### 6.3 `doc_continue`
@@ -291,16 +304,16 @@ source placeholders candidate проходит обязательные дете
 5. Для `direction_undetermined` повторить только direction call с operator
    context. Для незавершённого перевода вызвать модель только для pending
    документов, объединив новые валидные документы с сохранёнными accepted
-   documents. Для RED review повторить critic/одну repair-попытку только для
-   проблемных
+   documents. Для RED review повторить critic-editor только для проблемных
    документов, используя точный опубликованный candidate checkpoint.
 6. Candidate всегда заново собирается из accepted/new полных документов;
    protected fragments восстанавливаются из source. Существующий target допустим
    как справочный контекст translate и как точный ранее опубликованный candidate
-   для critic/repair, но не как шаблон склейки или источник технических
+   для critic-editor, но не как шаблон склейки или источник технических
    fragments.
-7. После тех же детерминированных проверок сделать commit в ту же translation
-   branch, вызвать final critic и обновить единственный verdict. GREEN закрывает
+7. Валидное изменённое исправление сохранить commit в ту же translation branch,
+   вызвать final critic и обновить единственный verdict. Без такого исправления
+   сохранить первичный RED без commit и final critic. GREEN закрывает
    checkpoint. Если остаётся поддерживаемое семантическое препятствие, записать
    следующий checkpoint с тем же первоначальным expiry; продление TTL запрещено.
 
@@ -342,7 +355,7 @@ GitHub, worktree и model calls.
 ноль. Request и response не выводятся в публичные логи, GitHub comments или
 artifacts.
 
-Каждый вызов translate, critic, final critic и repair сохраняет `target_path`
+Каждый вызов translate, critic-editor и final critic сохраняет `target_path`
 статьи. Общий direction call не относится к отдельной статье и сохраняет
 `target_path = NULL`. Накопительная стоимость полного цикла связывается по
 закреплённому `source_sha`, потому что `doc_translate` запускается на исходном
@@ -399,7 +412,7 @@ paths, несовместимые stage fields и несовпадение diges
 
 Перед началом нового `doc_translate` для следующего PR конвейер суммирует все
 известные costs за текущую календарную дату Europe/Moscow: обе workflow, все
-роли и в том числе `doc_verify` critic/repair. `NULL`/unknown не превращается в
+роли и в том числе `doc_verify` critic-editor/final critic. `NULL`/unknown не превращается в
 ноль и не добавляется в числовой `SUM`; это сумма известных costs. Если сумма
 уже не меньше `YDBDOC_DAILY_BUDGET_RUB`, translation job завершается ошибкой:
 «квота на сегодня исчерпана, попробуйте позже». Иначе job выполняется целиком,
@@ -431,6 +444,12 @@ gate не выполняется. Конкурентная атомарная re
 - Заголовок создаваемого translation PR имеет формат
   `PR #<source_pr> translation`.
 - Commit/push выполняется только после обязательных локальных проверок.
+- Перед первым commit/push и перед commit исправления critic-editor candidate накладывается на
+  trusted checkout base-ветки и полностью собирается официальным Diplodoc CLI
+  той же stable-линии, что использует `build-docs` YDB. Любая строка `ERR` или
+  `WARN`, ненулевой exit либо невозможность запустить compiler запрещает
+  публикацию. После проверки checkout восстанавливается; source PR checkout и
+  его исполняемые файлы в privileged job не используются.
 - В translation PR поддерживается один актуальный QA comment.
 - QA comment является коротким пользовательским резюме на русском языке. Он
   показывает цветной вердикт `GREEN`, `YELLOW` или `RED` и стоимость текущей

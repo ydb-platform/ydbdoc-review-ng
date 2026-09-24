@@ -86,6 +86,7 @@ class ReviewServices(LifecycleServices):
         prompt = body["messages"][-1]["text"]
         path = prompt.split("Target path: ", 1)[1].split("\n", 1)[0]
         role = "repair" if schema is None else "critic"
+        editable = schema is not None and "corrected_markdown" in schema["properties"]
         self.roles.append(role)
         self.prompts.append((role, prompt))
         self.calls.append((role, path, schema))
@@ -110,6 +111,28 @@ class ReviewServices(LifecycleServices):
                     ids = schema["properties"]["findings"]["items"]["properties"]["field_ids"]
                     finding["field_ids"] = ids["items"]["enum"][:1]
                 values["findings"].append(finding)
+            if editable:
+                current = raw_repair_context(prompt, "final-target")
+                source = raw_repair_context(prompt, "authoritative-source")
+                if outcome != "repair" or self.repair_uses_current_values:
+                    correction = current
+                elif current.startswith("# Whole pinned translation"):
+                    correction = source.replace("Source", "Repaired")
+                else:
+                    repaired_heading = source.splitlines(keepends=True)[0].replace(
+                        "Source", "Repaired"
+                    )
+                    correction = repaired_heading + "".join(
+                        current.splitlines(keepends=True)[1:]
+                    )
+                values["corrected_markdown"] = (
+                    self.repair_payload if self.repair_payload is not None else correction
+                )
+                if self.failure == "repair" and outcome == "repair":
+                    raise TimeoutError("model unavailable")
+                if self.move_after == "repair" and outcome == "repair":
+                    self.branch_head = "f" * 40
+                    self.snapshots[self.branch_head] = dict(self.files)
         else:
             current = raw_repair_context(prompt, "current-target")
             source = raw_repair_context(prompt, "authoritative-source")
@@ -194,10 +217,9 @@ def test_repair_merges_complete_document_before_final_critic():
     result = services.resume()
     following = services.checkpoint()
     assert result.verdict is Verdict.RED and result.repair_applied
-    assert services.roles == ["critic", "repair", "critic"]
+    assert services.roles == ["critic", "critic"]
     assert services.timeline == [
         "critic",
-        "repair",
         "commit",
         "push",
         "critic",
@@ -211,10 +233,10 @@ def test_repair_merges_complete_document_before_final_critic():
         following.state.accepted_documents[1].translated_markdown
         == "# Repaired b\n\nTranslated\n"
     )
-    repair_prompt = services.prompts[1][1]
-    assert services.calls[1][2] is None
+    repair_prompt = services.prompts[0][1]
+    assert services.calls[0][2] is not None
     assert "Source b" in raw_repair_context(repair_prompt, "authoritative-source")
-    assert "Translated" in raw_repair_context(repair_prompt, "current-target")
+    assert "Translated" in raw_repair_context(repair_prompt, "final-target")
     assert "Source detail b" in repair_prompt
     assert following.target_sha == result.final_commit_sha
     assert following.state.candidate_sha256 == candidate_sha256(
@@ -237,7 +259,7 @@ def test_repair_merges_complete_document_before_final_critic():
     second = services.resume()
     assert second.verdict is Verdict.GREEN and second.final_commit_sha == result.final_commit_sha
     assert services.commits == services.initial_commits + 1
-    assert services.roles == ["critic", "repair", "critic", "critic"]
+    assert services.roles == ["critic", "critic", "critic"]
     assert services.rows[following.continuation_id]["status"] == "closed"
 
 
@@ -251,13 +273,14 @@ def test_continuation_repair_publishes_exact_model_markdown():
             replacement = None
             if role == "translate" and "Nested source item" in prompt:
                 replacement = "* Parent translated\n* Nested translated item\n"
-            elif role == "repair" and "Nested source item" in prompt:
-                replacement = "* Parent corrected\n* Nested translated item\n"
             elif role == "critic" and self.continuing and "Nested source item" in prompt:
                 payload = json.loads(response.body)
                 values = json.loads(payload["result"]["alternatives"][0]["message"]["text"])
                 if values["findings"]:
                     values["findings"][0]["searchable_snippet"] = "Parent translated"
+                    values["corrected_markdown"] = (
+                        "* Parent corrected\n* Nested translated item\n"
+                    )
                     payload["result"]["alternatives"][0]["message"]["text"] = json.dumps(
                         values
                     )
@@ -280,7 +303,7 @@ def test_continuation_repair_publishes_exact_model_markdown():
 
     expected = b"* Parent corrected\n* Nested translated item\n"
     assert result.verdict is Verdict.GREEN and result.repair_applied
-    assert services.roles == ["critic", "repair", "critic"]
+    assert services.roles == ["critic", "critic"]
     assert services.files[EN + "b.md"] == expected
     assert services.snapshots[result.final_commit_sha.value][EN + "b.md"] == expected
 
@@ -297,7 +320,6 @@ def test_saved_order_and_single_repair_across_unresolved_documents():
     assert result.verdict is Verdict.RED
     assert [(role, path) for role, path, _ in services.calls] == [
         ("critic", EN + "c.md"),
-        ("repair", EN + "c.md"),
         ("critic", EN + "c.md"),
         ("critic", EN + "b.md"),
     ]
@@ -370,16 +392,16 @@ def test_pinned_rename_review_never_derives_maps_from_target_and_replays_metadat
     result = services.resume()
     assert result.verdict is Verdict.RED
     assert services.roles == (
-        ["critic", "repair", "critic", "critic"] if repair else ["critic", "critic"]
+        ["critic", "critic", "critic"] if repair else ["critic", "critic"]
     )
     if repair:
-        repair_prompt = services.prompts[1][1]
-        assert services.calls[1][2] is None
+        repair_prompt = services.prompts[0][1]
+        assert services.calls[0][2] is not None
         assert "Source detail a" in raw_repair_context(
             repair_prompt, "authoritative-source"
         )
         assert "Whole pinned detail" in raw_repair_context(
-            repair_prompt, "current-target"
+            repair_prompt, "final-target"
         )
     following = services.checkpoint()
     assert following.state.review_paths == saved.state.review_paths[:1]
@@ -436,9 +458,9 @@ def test_infrastructure_failure_preserves_old_checkpoint(failure):
         services.roles
         == {
             "critic": ["critic"],
-            "repair": ["critic", "repair"],
-            "publish": ["critic", "repair"],
-            "report": ["critic", "repair", "critic"],
+            "repair": ["critic"],
+            "publish": ["critic"],
+            "report": ["critic", "critic"],
             "attempt": ["critic"],
         }[failure]
     )
@@ -452,12 +474,12 @@ def test_head_movement_blocks_later_models_publication_and_verdict(move_after):
     services.outcomes = {EN + "b.md": ["repair"]}
     with pytest.raises(application.WorkflowError):
         services.resume()
-    assert services.roles == (["critic"] if move_after == "critic" else ["critic", "repair"])
+    assert services.roles == ["critic"]
     assert "report" not in services.timeline and "commit" not in services.timeline
     assert services.rows[saved.continuation_id]["status"] == "open"
 
 
-def test_invalid_repair_keeps_candidate_and_still_gets_final_critic():
+def test_invalid_critic_edit_keeps_candidate_without_final_critic():
     services = ReviewServices(names=("a", "b"))
     saved = services.start_review()
     before = dict(services.files)
@@ -465,7 +487,7 @@ def test_invalid_repair_keeps_candidate_and_still_gets_final_critic():
     services.repair_payload = json.dumps({})
     result = services.resume()
     assert result.verdict is Verdict.RED and not result.repair_applied
-    assert services.roles == ["critic", "repair", "critic"]
+    assert services.roles == ["critic"]
     assert services.files == before and services.commits == services.initial_commits
     assert services.checkpoint().state.accepted_documents == saved.state.accepted_documents
 
@@ -476,11 +498,11 @@ def test_byte_identical_selected_repair_reports_existing_sha_without_empty_commi
     services.outcomes = {EN + "b.md": ["repair", "green"]}
     services.repair_uses_current_values = True
     result = services.resume()
-    assert result.verdict is Verdict.GREEN and result.repair_applied
+    assert result.verdict is Verdict.RED and not result.repair_applied
     assert result.final_commit_sha == saved.target_sha
-    assert services.roles == ["critic", "repair", "critic"]
+    assert services.roles == ["critic"]
     assert services.commits == services.initial_commits
-    assert services.timeline == ["critic", "repair", "critic", "report"]
+    assert services.timeline == ["critic", "report", "checkpoint"]
     assert services.rows[saved.continuation_id]["status"] == "closed"
 
 
@@ -576,7 +598,7 @@ def test_pinned_branch_change_during_repair_commit_cannot_create_or_update_ref(m
                 )
             )
     assert services.roles == (
-        ["critic", "repair"] if mode == "continue" else ["critic", "critic", "repair"]
+        ["critic"] if mode == "continue" else ["critic", "critic"]
     )
     assert services.timeline[-1] == "commit"
     assert services.commits == services.initial_commits + 1

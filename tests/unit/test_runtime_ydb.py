@@ -168,3 +168,36 @@ def test_create_runtime_composes_distinct_github_read_and_mutation_credentials(m
 
     assert credentials == [("read-token", "mutation-token")]
     runtime.shutdown()
+
+
+def test_create_runtime_runs_diplodoc_after_candidate_validation(monkeypatch, tmp_path) -> None:
+    import ydbdoc_review_ng.runtime as runtime_module
+    import ydbdoc_review_ng.runtime_content as content_module
+
+    events = []
+    captured = {}
+
+    def validate_content(self, snapshot, candidate, plan):
+        events.append("candidate")
+
+    def make_diplodoc(docs_root):
+        assert docs_root == tmp_path / "ydb/docs"
+        return lambda plan: events.append("diplodoc")
+
+    def make_publisher(github, build_plan, validate_plan):
+        captured["validate_plan"] = validate_plan
+        return SimpleNamespace()
+
+    executor = SimpleNamespace(execute=lambda statement, parameters: [], close=lambda: None)
+    monkeypatch.setattr(content_module.RuntimeContent, "validate_plan", validate_content)
+    monkeypatch.setattr(runtime_module, "DiplodocBuildValidator", make_diplodoc)
+    monkeypatch.setattr(runtime_module, "GitPublicationAdapter", make_publisher)
+
+    runtime = runtime_module.create_runtime(
+        environment={"YDBDOC_DOCS_ROOT": str(tmp_path / "ydb/docs")},
+        ydb_executor=executor,
+    )
+    captured["validate_plan"](object(), object(), object())
+
+    assert events == ["candidate", "diplodoc"]
+    runtime.shutdown()

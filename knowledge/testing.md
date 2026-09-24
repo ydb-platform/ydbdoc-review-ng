@@ -26,7 +26,7 @@
 раннем failure и success обоих workflow; отсутствие GitHub/worktree/model
 effects после failed mandatory validation при разрешённых YDB audit writes;
 budget gate только перед новым `doc_translate`; включение известных
-`doc_verify` critic/repair costs в следующий дневной SUM; `NULL` для unknown
+`doc_verify` critic-editor/final critic costs в следующий дневной SUM; `NULL` для unknown
 cost и отдельный достоверный zero-cost case. Mixed-locale PR при исчерпанном
 бюджете обязан вернуть quota error при нуле direction и иных model calls.
 
