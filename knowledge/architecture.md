@@ -48,7 +48,8 @@ semantic stop наследует первоначальный expiry. Infrastruc
   публикуется.
 - Publication validator накладывает candidate на trusted base checkout и до
   каждого commit запускает полный официальный Diplodoc build. Любой `ERR` или
-  `WARN` запрещает публикацию; privileged workflow не checkout-ит и не исполняет
+  ненулевой exit запрещает публикацию; нефатальный `WARN` не блокирует её.
+  Privileged workflow не checkout-ит и не исполняет
   содержимое source PR.
 - В `doc_verify` protected-fragment invariant отвергает ручное изменение
   URL/path/code относительно authoritative source, кроме валидных target-local

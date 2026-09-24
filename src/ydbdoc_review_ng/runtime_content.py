@@ -90,9 +90,11 @@ from ydbdoc_review_ng.translation import (
     split_content_filter_chunk,
     validate_chunk_response,
     validate_translation_values,
-    verify_document_candidate,
 )
-from ydbdoc_review_ng.translation.document import _document_block_texts
+from ydbdoc_review_ng.translation.document import (
+    _document_block_texts,
+    _verify_with_localized_links,
+)
 
 if TYPE_CHECKING:
     from ydbdoc_review_ng.persistence import ContinuationCheckpoint
@@ -1068,7 +1070,16 @@ class RuntimeContent:
                 target_plan = build_markdown_plan(
                     document.plan.source_snapshot, accepted.target_path, target
                 )
-                verify_document_candidate(document.source, document.plan, target, target_plan)
+                _verify_with_localized_links(
+                    document.source,
+                    document.plan,
+                    target,
+                    target_plan,
+                    localized_links=(
+                        document.entry.target_content is not None
+                        or document.entry.rename_from_target_content is not None
+                    ),
+                )
                 try:
                     values = _derive_target_translations(
                         document.source,
@@ -1210,7 +1221,16 @@ class RuntimeContent:
             target_plan = build_markdown_plan(
                 document.plan.source_snapshot, document.entry.pair.target_path, target
             )
-            verify_document_candidate(document.source, document.plan, target, target_plan)
+            _verify_with_localized_links(
+                document.source,
+                document.plan,
+                target,
+                target_plan,
+                localized_links=(
+                    document.entry.target_content is not None
+                    or document.entry.rename_from_target_content is not None
+                ),
+            )
 
     def validate_candidate(
         self, snapshot: ImmutableRunSnapshot, candidate: WorkflowCandidate, /

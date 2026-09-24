@@ -757,6 +757,21 @@ def test_validate_plan_never_allows_unvalidated_translation_bytes() -> None:
         content.validate_plan(cast(ImmutableRunSnapshot, object()), candidate, plan)
 
 
+def test_validate_plan_accepts_localized_links_for_existing_target() -> None:
+    document = document_for(
+        b"See [query hints](./dev/optimization/hints.md).\n",
+        target=b"See [query hints](./dev/query-execution-optimization/query-hints.md).\n",
+    )
+    target_path = document.entry.pair.target_path
+    localized = b"See [query hints](./dev/query-execution-optimization/query-hints.md).\n"
+    content = content_with(ScriptedModels([]))
+    content.documents = (document,)
+    candidate = WorkflowCandidate(pack({target_path.value: localized}), None)
+    plan = PublicationPlan((FileChange(target_path, document.entry.target_content, localized),), ())
+
+    content.validate_plan(cast(ImmutableRunSnapshot, object()), candidate, plan)
+
+
 def test_lost_placeholder_candidate_is_not_created() -> None:
     document = document_for(b"# Use `CPUTime` now.\n")
     prepared = prepare_document(document.source, document.plan, max_characters=100_000)

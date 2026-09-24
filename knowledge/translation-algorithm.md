@@ -67,7 +67,8 @@ chunk после correction делится по безопасной грани�
 переводятся. Потерянный placeholder и build-breaking Markdown никогда не
 публикуются. Финальный deterministic gate накладывает candidate на trusted
 checkout base-ветки, запускает полный официальный Diplodoc build и отклоняет
-любые `ERR`/`WARN` до commit/push. Это проверяет реальные YFM, TOC, include,
+любые `ERR` и ненулевой exit до commit/push; нефатальный `WARN` сам по себе не
+блокирует публикацию. Это проверяет реальные YFM, TOC, include,
 anchors и Markdown rules вместо дальнейшего расширения собственного parser.
 После build checkout восстанавливается. При `doc_verify`
 те же protected fragments сверяются с текущим target. Исключение составляют

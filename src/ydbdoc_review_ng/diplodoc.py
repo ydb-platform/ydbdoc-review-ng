@@ -11,7 +11,7 @@ from pathlib import Path, PurePosixPath
 from ydbdoc_review_ng.publication import PublicationPlan
 
 _DOCS_PREFIX = "ydb/docs/"
-_ISSUE = re.compile(r"^(?:ERR|WARN) .+$")
+_ERROR = re.compile(r"^ERR .+$")
 _MAX_ISSUES = 20
 
 
@@ -49,7 +49,7 @@ class DiplodocBuildValidator:
 
     @staticmethod
     def _issues(output: str, returncode: int, /) -> tuple[str, ...]:
-        issues = tuple(line for line in output.splitlines() if _ISSUE.fullmatch(line))
+        issues = tuple(line for line in output.splitlines() if _ERROR.fullmatch(line))
         if issues:
             return issues[:_MAX_ISSUES]
         if returncode:

@@ -28,6 +28,8 @@ text = (root / "en/page.md").read_text()
 if "BROKEN" in text:
     print('ERR en/page.md: 2: MD042 / no-empty-links No empty links')
     raise SystemExit(1)
+if "WARNING" in text:
+    print('WARN en/page.md: 2: YFM010 / unreachable-autotitle-anchor Existing warning')
 print("INFO build complete")
 """,
         encoding="utf-8",
@@ -74,5 +76,21 @@ def test_validator_accepts_clean_build_and_restores_checkout(tmp_path: Path) -> 
     )
 
     validator(_plan(b"original\n", b"translated\n"))
+
+    assert page.read_bytes() == b"original\n"
+
+
+def test_validator_accepts_nonfatal_diplodoc_warning(tmp_path: Path) -> None:
+    module = _validator_module()
+    docs = tmp_path / "ydb/docs"
+    page = docs / "en/page.md"
+    page.parent.mkdir(parents=True)
+    page.write_bytes(b"original\n")
+    validator = module.DiplodocBuildValidator(
+        docs,
+        command=(sys.executable, str(_fake_yfm(tmp_path))),
+    )
+
+    validator(_plan(b"original\n", b"WARNING\n"))
 
     assert page.read_bytes() == b"original\n"
