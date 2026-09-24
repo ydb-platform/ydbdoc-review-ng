@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable
 from typing import Protocol
 
@@ -304,11 +305,18 @@ def _repair_requests(
     if unused_source:
         raise QualityInputError
     source_blocks = _document_block_texts(source, source_plan, source_document.placeholders)
+    target_token_pattern = (
+        re.compile("|".join(re.escape(token) for token in target_replacements))
+        if target_replacements
+        else None
+    )
 
     def align_target_tokens(block: str) -> str:
-        for token, replacement in target_replacements.items():
-            block = block.replace(token, replacement)
-        return block
+        if target_token_pattern is None:
+            return block
+        return target_token_pattern.sub(
+            lambda match: target_replacements[match.group(0)], block
+        )
 
     target_blocks = tuple(
         align_target_tokens(block)

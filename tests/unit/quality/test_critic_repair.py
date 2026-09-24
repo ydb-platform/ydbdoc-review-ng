@@ -162,6 +162,44 @@ def test_formatting_drift_reaches_critic_without_deterministic_repair() -> None:
     assert [call.role.value for call in executor.calls] == ["critic"]
 
 
+def test_repair_prompt_aligns_reordered_source_tokens_in_one_pass() -> None:
+    from ydbdoc_review_ng.quality.repair import _repair_requests
+    from ydbdoc_review_ng.quality.types import Finding
+
+    source = b"* Views `a` and `b` received `c`.\n"
+    target = b"* Column `c` added to `a` and `b`, i.e., views.\n"
+    plan = build_markdown_plan(SNAPSHOT, SOURCE_PATH, source)
+    request = build_translation_request(source, plan)
+
+    _requests, _document, _source_blocks, target_blocks = _repair_requests(
+        model="model",
+        source=source,
+        source_plan=plan,
+        target=target,
+        target_path=PATH,
+        source_locale=Locale.EN,
+        target_locale=Locale.RU,
+        findings=(
+            Finding(
+                True,
+                "Clarify the translated list item.",
+                "Use corrected wording.",
+                "Column",
+                PATH.value,
+                1,
+                (request.requested_ids[0],),
+            ),
+        ),
+        operator_context=None,
+        max_characters=100_000,
+    )
+
+    assert "".join(target_blocks) == (
+        "* Column [[YDBDOC_PROTECTED_0003]] added to "
+        "[[YDBDOC_PROTECTED_0001]] and [[YDBDOC_PROTECTED_0002]], i.e., views.\n"
+    )
+
+
 @pytest.mark.parametrize("invalid_placeholder", [False, True])
 def test_full_document_repair_restores_source_fragments_before_exposing_map(invalid_placeholder):
     plan, request, accepted, target = prepared()
