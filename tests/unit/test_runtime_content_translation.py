@@ -125,7 +125,7 @@ class NestedInvalidThenEchoModels:
         if call_number <= 2:
             return ModelCallResult(self.parent_invalid, None, ())
         source = _source_from_prompt(request.prompt)
-        if call_number in {4, 5}:
+        if call_number in {4, 5, 7, 8}:
             marker_start = source.index("[[YDBDOC_PROTECTED_")
             marker_end = source.index("]]", marker_start) + 2
             source = source[:marker_start] + source[marker_end:]
@@ -827,7 +827,7 @@ def test_invalid_adaptive_child_is_split_again_until_valid() -> None:
         models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "250000"}
     )._translate_document(document)
 
-    assert len(models.calls) == 7
+    assert len(models.calls) == 10
     assert accepted_document.translated_markdown.encode() == source
 
 

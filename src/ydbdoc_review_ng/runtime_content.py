@@ -969,6 +969,7 @@ class RuntimeContent:
             chunk: DocumentChunk,
             chunk_index: int,
             *,
+            is_adaptive_child: bool,
             use_target_reference: bool,
         ) -> None:
             accepted_response, failure, should_split = invoke_chunk(
@@ -985,6 +986,7 @@ class RuntimeContent:
                 if should_split
                 and (
                     failure is AttemptError.CONTENT_FILTER
+                    or is_adaptive_child
                     or len(chunk.text) >= _INVALID_RESPONSE_SPLIT_MIN_CHARACTERS
                 )
                 else None
@@ -994,7 +996,12 @@ class RuntimeContent:
                     raise InvalidTranslationResponse("translation_response_invalid")
                 raise RuntimeBoundaryError("translation_model_failed")
             for child in children:
-                translate_chunk(child, chunk_index, use_target_reference=False)
+                translate_chunk(
+                    child,
+                    chunk_index,
+                    is_adaptive_child=True,
+                    use_target_reference=False,
+                )
 
         for chunk_index, chunk in enumerate(prepared.chunks, 1):
             with traced(
@@ -1004,7 +1011,12 @@ class RuntimeContent:
                 chunk_index=chunk_index,
                 chunks_total=len(prepared.chunks),
             ):
-                translate_chunk(chunk, chunk_index, use_target_reference=True)
+                translate_chunk(
+                    chunk,
+                    chunk_index,
+                    is_adaptive_child=False,
+                    use_target_reference=True,
+                )
         try:
             effective_request = DocumentTranslationRequest(
                 tuple(effective_chunks), prepared.placeholders
