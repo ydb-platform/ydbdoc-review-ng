@@ -202,6 +202,38 @@ def test_exhausted_content_filter_splits_only_original_chunk_nearest_midpoint(
     )
 
 
+def test_content_filter_uses_only_boundary_even_when_one_child_exceeds_half_cap() -> None:
+    source = (_heading_block(1, 9_000) + _heading_block(2, 1_000)).encode()
+    document = document_for(source)
+    prepared = prepare_document(
+        source,
+        document.plan,
+        max_characters=250_000,
+        source_locale="ru",
+        target_locale="en",
+    )
+    assert [(len(chunk.text), chunk.block_end - chunk.block_start) for chunk in prepared.chunks] == [
+        (10_000, 2)
+    ]
+    models = ScriptedModels(
+        [
+            ModelCallResult(None, AttemptError.CONTENT_FILTER, ()),
+            prepared.chunks[0].text[:9_000],
+            prepared.chunks[0].text[9_000:],
+        ]
+    )
+
+    accepted = content_with(models).translate_document(document)
+
+    raw_requests = tuple(call.prompt.split("\n\n", 1)[1] for call in models.calls)
+    assert tuple(map(len, raw_requests)) == (10_000, 9_000, 1_000)
+    assert raw_requests[1] + raw_requests[2] == raw_requests[0]
+    assert (
+        assemble_candidate(document.source, document.plan, document.request, accepted.as_dict())
+        == source
+    )
+
+
 def test_content_filter_in_child_is_terminal_without_recursive_split() -> None:
     source = content_filter_witness()
     document = document_for(source)

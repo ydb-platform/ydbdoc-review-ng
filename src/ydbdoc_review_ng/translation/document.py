@@ -18,7 +18,6 @@ from ydbdoc_review_ng.plan import (
 _TOKEN = re.compile(r"\[\[YDBDOC_PROTECTED_[0-9]+\]\]")
 _PLACEHOLDER_LIKE = re.compile(r"\[\[YDBDOC_PROTECTED_[^\]\r\n]{0,64}\]\]")
 RAW_MARKDOWN_RESPONSE_MAX_CHARACTERS = 16_000
-CONTENT_FILTER_CHILD_MAX_CHARACTERS = RAW_MARKDOWN_RESPONSE_MAX_CHARACTERS // 2
 
 
 class DocumentTranslationError(ValueError):
@@ -75,19 +74,33 @@ def split_content_filter_chunk(
     if start < 0 or end > len(block_texts) or start >= end:
         return None
     candidates: list[tuple[int, int, str, str]] = []
+    aligned_parent = (
+        "".join(aligned_block_texts[start:end])
+        if aligned_block_texts is not None
+        else None
+    )
     for boundary in range(start + 1, end):
         left = "".join(block_texts[start:boundary])
         right = "".join(block_texts[boundary:end])
-        lengths = [len(left), len(right)]
+        if (
+            not left
+            or not right
+            or len(left) >= len(chunk.text)
+            or len(right) >= len(chunk.text)
+        ):
+            continue
         if aligned_block_texts is not None:
-            lengths.extend(
-                (
-                    len("".join(aligned_block_texts[start:boundary])),
-                    len("".join(aligned_block_texts[boundary:end])),
-                )
-            )
-        if max(lengths) <= CONTENT_FILTER_CHILD_MAX_CHARACTERS:
-            candidates.append((abs(len(left) - len(right)), boundary, left, right))
+            aligned_left = "".join(aligned_block_texts[start:boundary])
+            aligned_right = "".join(aligned_block_texts[boundary:end])
+            assert aligned_parent is not None
+            if (
+                not aligned_left
+                or not aligned_right
+                or len(aligned_left) >= len(aligned_parent)
+                or len(aligned_right) >= len(aligned_parent)
+            ):
+                continue
+        candidates.append((abs(len(left) - len(right)), boundary, left, right))
     if not candidates:
         return None
     _distance, boundary, left, right = min(candidates, key=lambda item: (item[0], item[1]))
