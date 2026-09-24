@@ -102,6 +102,7 @@ if TYPE_CHECKING:
     from ydbdoc_review_ng.runtime_continue import ContinueReplay
 
 _DIAGNOSTIC_PLACEHOLDER = re.compile(r"\[\[[A-Z_]+_[0-9]+\]\]")
+_PLACEHOLDER_PREFIX = "[[YDBDOC_PROTECTED_"
 
 
 def pack(files: Mapping[str, bytes | None]) -> bytes:
@@ -177,6 +178,8 @@ def _placeholder_differences(
             required_counts[token] -= 1
         else:
             unexpected.append(token)
+    if rejected_value.count(_PLACEHOLDER_PREFIX) != len(returned):
+        unexpected.append(_PLACEHOLDER_PREFIX)
     return tuple(missing), tuple(unexpected)
 
 
@@ -449,6 +452,7 @@ class RuntimeContent:
         self.accepted_documents: tuple[AcceptedDocument, ...] = ()
         self.accepted_maps: tuple[AcceptedMap, ...] = ()
         self.translation_findings: dict[RepoPath, tuple[Finding, ...]] = {}
+        self.translation_unvalidated_paths: set[RepoPath] = set()
         self.plans: FrozenSourcePlans | None = None
         self.review_paths: tuple[RepoPath, ...] | None = None
         self.review_operator_context: str | None = None
@@ -853,6 +857,7 @@ class RuntimeContent:
         effective_chunks: list[DocumentChunk] = []
         responses: list[str] = []
         degraded_findings: list[Finding] = []
+        unvalidated_missing = False
         by_placeholder = {item.token: item for item in prepared.placeholders}
 
         def candidate_location(
@@ -933,6 +938,7 @@ class RuntimeContent:
         def invoke_chunk(
             chunk: DocumentChunk, chunk_index: int
         ) -> tuple[str | None, AttemptError | None, bool]:
+            nonlocal unvalidated_missing
             note: str | None = None
             primary_missing_fallback: tuple[str, tuple[str, ...]] | None = None
             for attempt in (1, 2):
@@ -960,6 +966,7 @@ class RuntimeContent:
                 if not result.success or result.text is None:
                     if attempt == 2 and primary_missing_fallback is not None:
                         rejected, missing_tokens = primary_missing_fallback
+                        unvalidated_missing = True
                         for token in missing_tokens:
                             placeholder = by_placeholder[token]
                             source_text, source_line = document_placeholder_context(
@@ -1001,28 +1008,7 @@ class RuntimeContent:
                             and (missing or reordered)
                         ):
                             if missing:
-                                reduced = chunk.text
-                                for token in missing:
-                                    reduced = reduced.replace(token, "", 1)
-                                missing_set = set(missing)
-                                reduced_chunk = DocumentChunk(
-                                    reduced,
-                                    chunk.block_start,
-                                    chunk.block_end,
-                                    tuple(
-                                        token
-                                        for token in chunk.placeholders
-                                        if token not in missing_set
-                                    ),
-                                )
-                                try:
-                                    validate_chunk_response(
-                                        reduced_chunk, prepared.placeholders, result.text
-                                    )
-                                except DocumentTranslationError:
-                                    raise InvalidTranslationResponse(
-                                        "translation_response_invalid"
-                                    ) from None
+                                unvalidated_missing = True
                                 finding_tokens = missing
                             else:
                                 if not container_pairs_preserved(chunk, returned):
@@ -1109,28 +1095,7 @@ class RuntimeContent:
                         and missing
                         and not _unexpected
                     ):
-                        reduced = chunk.text
-                        for token in missing:
-                            reduced = reduced.replace(token, "", 1)
-                        missing_set = set(missing)
-                        reduced_chunk = DocumentChunk(
-                            reduced,
-                            chunk.block_start,
-                            chunk.block_end,
-                            tuple(
-                                token
-                                for token in chunk.placeholders
-                                if token not in missing_set
-                            ),
-                        )
-                        try:
-                            validate_chunk_response(
-                                reduced_chunk, prepared.placeholders, result.text
-                            )
-                        except DocumentTranslationError:
-                            pass
-                        else:
-                            primary_missing_fallback = (result.text, missing)
+                        primary_missing_fallback = (result.text, missing)
                     note = build_document_correction_note(
                         document.source,
                         chunk,
@@ -1186,32 +1151,30 @@ class RuntimeContent:
                     lambda match: by_placeholder[match.group()].source_bytes.decode("utf-8"),
                     rendered,
                 ).encode("utf-8")
-                target_plan = build_markdown_plan(
-                    document.plan.source_snapshot,
-                    entry.pair.target_path,
-                    candidate,
-                )
-                if target_plan.diagnostics:
-                    raise DocumentTranslationError("document_response:structure_mismatch")
             else:
                 candidate = restore_document(
                     document.source, document.plan, effective_request, tuple(responses)
                 )
-            try:
-                values = _derive_target_translations(
-                    document.source,
-                    document.plan,
-                    document.request,
-                    candidate,
-                    entry.pair.target_path,
-                )
-            except QualityInputError:
+            if unvalidated_missing:
                 values = {}
+            else:
+                try:
+                    values = _derive_target_translations(
+                        document.source,
+                        document.plan,
+                        document.request,
+                        candidate,
+                        entry.pair.target_path,
+                    )
+                except QualityInputError:
+                    values = {}
         except (DocumentTranslationError, ValueError, TypeError, UnicodeError):
             raise InvalidTranslationResponse("translation_response_invalid") from None
         accepted = AcceptedMap(entry.pair.target_path, tuple(sorted(values.items())))
         if degraded_findings:
             self.translation_findings[entry.pair.target_path] = tuple(degraded_findings)
+        if unvalidated_missing:
+            self.translation_unvalidated_paths.add(entry.pair.target_path)
         return accepted, AcceptedDocument(entry.pair.target_path, candidate.decode("utf-8"))
 
     @staticmethod
@@ -1381,6 +1344,8 @@ class RuntimeContent:
             target = files[document.entry.pair.target_path.value]
             if target is None:
                 raise RuntimeBoundaryError("candidate_target_missing")
+            if document.entry.pair.target_path in self.translation_unvalidated_paths:
+                continue
             target_plan = build_markdown_plan(
                 document.plan.source_snapshot, document.entry.pair.target_path, target
             )

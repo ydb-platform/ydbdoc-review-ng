@@ -6,8 +6,9 @@ from types import SimpleNamespace
 from typing import cast
 
 import pytest
+import yaml
 
-from ydbdoc_review_ng.application import ImmutableRunSnapshot
+from ydbdoc_review_ng.application import ImmutableRunSnapshot, WorkflowCandidate
 from ydbdoc_review_ng.continuation import AcceptedDocument
 from ydbdoc_review_ng.domain import (
     FilePair,
@@ -20,6 +21,7 @@ from ydbdoc_review_ng.domain import (
 from ydbdoc_review_ng.locales import PairKey
 from ydbdoc_review_ng.models import AttemptError, ModelCallResult, ModelRequest
 from ydbdoc_review_ng.parser.markdown import build_markdown_plan
+from ydbdoc_review_ng.publication import FileChange, PublicationPlan
 from ydbdoc_review_ng.quality import Verdict
 from ydbdoc_review_ng.runtime import RecordedModels, RuntimeSource
 from ydbdoc_review_ng.runtime_content import (
@@ -28,6 +30,7 @@ from ydbdoc_review_ng.runtime_content import (
     FrozenSourcePlans,
     InvalidTranslationResponse,
     RuntimeContent,
+    pack,
     unpack,
 )
 from ydbdoc_review_ng.runtime_github import RuntimeBoundaryError
@@ -518,6 +521,94 @@ def test_complete_markdown_response_gets_exactly_one_technical_correction() -> N
     assert finding.searchable_snippet == "# Use  now."
     assert finding.target_line == 1
     assert "rerun doc_verify" in finding.expected_correction
+
+
+def test_exhausted_missing_placeholder_publishes_red_despite_malformed_markdown() -> None:
+    source = (
+        b"* [First](a.md) uses `CPUTime`.\n"
+        b"* [Second](b.md) uses `REPLACE INTO`.\n"
+    )
+    document = document_for(source)
+    prepared = prepare_document(document.source, document.plan, max_characters=100_000)
+    first_open, first_close, missing_code, second_open, second_close, second_code = (
+        item.token for item in prepared.placeholders
+    )
+    malformed = (
+        f"* {first_open}First{first_close} uses . {second_open}\n"
+        f"* {second_close}Second uses {second_code}.\n"
+    )
+    models = ScriptedModels([malformed, malformed])
+    content = content_with(models)
+
+    _accepted, accepted_document = content._translate_document(document)
+
+    assert len(models.calls) == 2
+    assert accepted_document.translated_markdown == (
+        "* [First](a.md) uses . [\n"
+        "* ](b.md)Second uses `REPLACE INTO`.\n"
+    )
+    finding = content.translation_findings[document.entry.pair.target_path][0]
+    assert missing_code in finding.reason
+    assert "`CPUTime`" in finding.reason
+    assert "rerun doc_verify" in finding.expected_correction
+
+
+def test_missing_placeholder_red_bypasses_malformed_frontmatter_derivation() -> None:
+    source = b'---\ntitle: "Use `CPUTime`"\n---\n'
+    document = document_for(source)
+    prepared = prepare_document(document.source, document.plan, max_characters=100_000)
+    placeholder = prepared.placeholders[0]
+    invalid = prepared.chunks[0].text.replace(placeholder.token, "", 1).replace(
+        '"\n---\n', "\n---\n"
+    )
+    models = ScriptedModels([invalid, invalid])
+    content = content_with(models)
+
+    _accepted, accepted_document = content._translate_document(document)
+
+    assert len(models.calls) == 2
+    assert accepted_document.translated_markdown == '---\ntitle: "Use \n---\n'
+    assert document.entry.pair.target_path in content.translation_unvalidated_paths
+
+
+@pytest.mark.parametrize(
+    "malformed",
+    (
+        "# Use [[YDBDOC_PROTECTED_X]].\n",
+        "# Use [[YDBDOC_PROTECTED_X.\n",
+        "# Use [[YDBDOC_PROTECTED_0001.\n",
+        "# Use [[YDBDOC_PROTECTED_\n0001]].\n",
+    ),
+)
+def test_malformed_unknown_placeholder_remains_terminal_after_correction(
+    malformed: str,
+) -> None:
+    document = document_for(b"# Use `CPUTime`.\n")
+    models = ScriptedModels([malformed, malformed])
+    content = content_with(models)
+
+    with pytest.raises(InvalidTranslationResponse, match="translation_response_invalid"):
+        content._translate_document(document)
+
+    assert len(models.calls) == 2
+    assert document.entry.pair.target_path not in content.translation_unvalidated_paths
+
+
+def test_validate_plan_allows_only_unvalidated_missing_placeholder_red() -> None:
+    document = document_for(b"# Source\n")
+    target_path = document.entry.pair.target_path
+    invalid = b'---\ntitle: "unterminated\n---\n'
+    content = content_with(ScriptedModels([]))
+    content.documents = (document,)
+    content.translation_unvalidated_paths.add(target_path)
+    candidate = WorkflowCandidate(pack({target_path.value: invalid}), None)
+    plan = PublicationPlan((FileChange(target_path, None, invalid),), ())
+
+    content.validate_plan(cast(ImmutableRunSnapshot, object()), candidate, plan)
+
+    content.translation_unvalidated_paths.clear()
+    with pytest.raises(yaml.YAMLError):
+        content.validate_plan(cast(ImmutableRunSnapshot, object()), candidate, plan)
 
 
 def test_lost_placeholder_candidate_is_reviewed_red_without_critic_call() -> None:
