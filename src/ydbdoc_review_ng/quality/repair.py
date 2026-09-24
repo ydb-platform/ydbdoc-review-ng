@@ -386,11 +386,11 @@ def review_translation(
     elif accepted_map is not None:
         if accepted_map.target_path != target_path:
             raise QualityInputError
-        target_translations = _derive_target_translations(
-            source, source_plan, translation_request, target, target_path
-        )
-        if target_translations != accepted_map.as_dict():
-            raise QualityInputError
+        # The checkpoint already binds the accepted map to the immutable
+        # candidate.  Re-deriving it from target bytes would reject harmless
+        # Markdown formatting changes and, for a pinned rename, would treat the
+        # old target as a reconstruction source instead of review context.
+        target_translations = accepted_map.as_dict()
     else:
         # A deterministic pinned rename has no accepted map. Its bytes are
         # review context only; a repair must supply a complete new source map.
