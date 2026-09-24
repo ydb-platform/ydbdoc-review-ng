@@ -144,6 +144,123 @@ def test_shipped_composition_translates_then_verifies_current_pr_without_retrans
     )  # two jobs, three model attempts
 
 
+class ContentFilterServices(RuntimeServices):
+    def __init__(self, filtered_responses: int) -> None:
+        super().__init__()
+        self.filtered_responses = filtered_responses
+        self.raw_request_bodies: list[bytes] = []
+
+    def model(self, request):
+        from ydbdoc_review_ng.models import HttpResponse
+
+        body = json.loads(request.body)
+        if body.get("jsonSchema") is None and not body["messages"][-1]["text"].startswith(
+            "Repair"
+        ):
+            self.raw_request_bodies.append(request.body)
+            response = super().model(request)
+            if len(self.raw_request_bodies) <= self.filtered_responses:
+                document = json.loads(response.body)
+                document["result"]["alternatives"][0][
+                    "status"
+                ] = "ALTERNATIVE_STATUS_CONTENT_FILTER"
+                return HttpResponse(
+                    200,
+                    json.dumps(document).encode(),
+                    Decimal("0.01"),
+                )
+            return response
+        return super().model(request)
+
+
+def test_runtime_retries_one_content_filter_then_publishes_once() -> None:
+    from ydbdoc_review_ng.cli import main
+    from ydbdoc_review_ng.runtime import create_runtime
+
+    services = ContentFilterServices(filtered_responses=1)
+    runtime = create_runtime(
+        environment={
+            "GITHUB_ACTOR": "maintainer",
+            "YDBDOC_ALLOWED_ACTORS": "maintainer",
+            "YANDEX_API_KEY": "secret",
+            "YANDEX_FOLDER_ID": "folder",
+        },
+        ydb_executor=services,
+        github_transport=services.github,
+        model_transport=services.model,
+    )
+
+    exit_code = main(
+        ["translate", "--pr", "42", "--source-sha", services.source, "--budget-rub", "10"],
+        dispatcher=runtime,
+    )
+
+    attempts = [row for row in services.audit if "attempt_id" in row]
+    translation_attempts = [
+        row for row in attempts if row["role"] == "translate"
+    ]
+    assert exit_code == 0
+    assert services.files["ydb/docs/en/core/page.md"] == b"# Translated\n"
+    assert len(services.raw_request_bodies) == 2
+    assert services.raw_request_bodies[0] == services.raw_request_bodies[1]
+    assert [row["status"] for row in translation_attempts] == ["failed", "succeeded"]
+    assert [row["error"] for row in translation_attempts] == ["content_filter", None]
+    assert [row["cost_rub"] for row in translation_attempts] == [
+        Decimal("0.01"),
+        Decimal("0.01"),
+    ]
+    assert sum(
+        method in {"POST", "PATCH"} and "/git/refs" in path
+        for method, path in services.events
+    ) == 1
+
+
+def test_runtime_two_content_filters_fail_without_publication_or_checkpoint() -> None:
+    from ydbdoc_review_ng.cli import main
+    from ydbdoc_review_ng.runtime import create_runtime
+
+    services = ContentFilterServices(filtered_responses=2)
+    runtime = create_runtime(
+        environment={
+            "GITHUB_ACTOR": "maintainer",
+            "YDBDOC_ALLOWED_ACTORS": "maintainer",
+            "YANDEX_API_KEY": "secret",
+            "YANDEX_FOLDER_ID": "folder",
+        },
+        ydb_executor=services,
+        github_transport=services.github,
+        model_transport=services.model,
+    )
+
+    exit_code = main(
+        ["translate", "--pr", "42", "--source-sha", services.source, "--budget-rub", "10"],
+        dispatcher=runtime,
+    )
+
+    translation_attempts = [
+        row
+        for row in services.audit
+        if "attempt_id" in row and row["role"] == "translate"
+    ]
+    assert exit_code == 1
+    assert len(services.raw_request_bodies) == 2
+    assert services.raw_request_bodies[0] == services.raw_request_bodies[1]
+    assert [row["status"] for row in translation_attempts] == ["failed", "failed"]
+    assert [row["error"] for row in translation_attempts] == [
+        "content_filter",
+        "content_filter",
+    ]
+    assert [row["cost_rub"] for row in translation_attempts] == [
+        Decimal("0.01"),
+        Decimal("0.01"),
+    ]
+    assert not any(
+        method in {"POST", "PATCH"} for method, _path in services.events
+    )
+    assert all("continuation_id" not in row for row in services.audit)
+    assert services.audit[-1]["status"] == "failed"
+
+
 def test_t017_f04_pure_rename_rejects_changed_whole_fence_before_commit() -> None:
     from ydbdoc_review_ng.application import TranslateWorkflowInput, WorkflowError
     from ydbdoc_review_ng.domain import GitSha

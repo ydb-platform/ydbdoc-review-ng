@@ -153,7 +153,11 @@ def _parse_native(document: Mapping[str, object], role: ModelRole) -> _ParsedRes
     text = _string(message.get("text")) if message is not None else None
     response_role = _string(message.get("role")) if message is not None else None
     model = _string(result.get("modelVersion")) if result is not None else None
-    error = _semantic_error(status, "ALTERNATIVE_STATUS_FINAL", text, usage, role)
+    error = (
+        AttemptError.CONTENT_FILTER
+        if status == "ALTERNATIVE_STATUS_CONTENT_FILTER"
+        else _semantic_error(status, "ALTERNATIVE_STATUS_FINAL", text, usage, role)
+    )
     return _ParsedResponse(
         error=error,
         model=model,
@@ -181,7 +185,11 @@ def _parse_openai(document: Mapping[str, object], role: ModelRole) -> _ParsedRes
     status = _string(choice.get("finish_reason")) if choice is not None else None
     text = _string(message.get("content")) if message is not None else None
     response_role = _string(message.get("role")) if message is not None else None
-    error = _semantic_error(status, "stop", text, usage, role)
+    error = (
+        AttemptError.CONTENT_FILTER
+        if status == "content_filter"
+        else _semantic_error(status, "stop", text, usage, role)
+    )
     return _ParsedResponse(
         error=error,
         model=_string(document.get("model")),
@@ -362,7 +370,10 @@ class _BaseYandexClient:
             attempts.append(attempt)
             if error is None:
                 return ModelCallResult(parsed.text, None, tuple(attempts))
-            retryable = response.status_code in self._execution.retryable_statuses
+            retryable = (
+                error is AttemptError.CONTENT_FILTER
+                or response.status_code in self._execution.retryable_statuses
+            )
             if retryable and attempt_number < self._execution.max_attempts:
                 continue
             return ModelCallResult(None, error, tuple(attempts))

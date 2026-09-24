@@ -278,6 +278,10 @@ PR, а `doc_verify` на translation PR. Старые attempts без `target_pa
 приписываются статье задним числом и показываются отдельно как unattributed
 historical cost.
 
+Явный provider content-filter допускает ровно один повтор идентичного request в
+пределах `max_attempts = 2`; обе attempts аудируются и учитываются в cost, а
+truncation и прочие non-final статусы не повторяются.
+
 Для таблиц или строк с текстами настраивается TTL 14 дней средствами YDB.
 Checkpoint state содержит только frozen direction/scope digest, accepted
 полные документы, pending paths и данные, необходимые для проверки

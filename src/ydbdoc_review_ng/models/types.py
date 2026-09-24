@@ -45,6 +45,7 @@ class AttemptError(str, Enum):
     TRANSPORT = "transport"
     HTTP_STATUS = "http_status"
     MALFORMED_RESPONSE = "malformed_response"
+    CONTENT_FILTER = "content_filter"
     NON_FINAL = "non_final"
     EMPTY_TEXT = "empty_text"
     REASONING_NOT_DISABLED = "reasoning_not_disabled"
