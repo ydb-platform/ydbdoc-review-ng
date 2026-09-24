@@ -267,6 +267,33 @@ def test_block_merge_does_not_hide_link_move_between_other_blocks() -> None:
         restore_document(source, plan, request, (response,))
 
 
+def test_unrelated_block_merge_keeps_inline_code_mobility_in_one_field() -> None:
+    source = b"Views `a` and `b`.\n\nSecond paragraph.\n\nThird paragraph.\n"
+    plan, request = prepared(source)
+    first, second = (item.token for item in request.placeholders)
+    response = (
+        f"Views {second} and {first}.\n\n"
+        "Second paragraph.\nThird paragraph.\n"
+    )
+
+    candidate = restore_document(source, plan, request, (response,))
+
+    assert candidate == b"Views `b` and `a`.\n\nSecond paragraph.\nThird paragraph.\n"
+
+
+def test_block_merge_does_not_hide_inline_code_move_between_fields() -> None:
+    source = b"First `a`.\n\nSecond `b`.\n\nThird paragraph.\n"
+    plan, request = prepared(source)
+    first, second = (item.token for item in request.placeholders)
+    response = (
+        f"First {second}.\n\n"
+        f"Second {first}.\nThird paragraph.\n"
+    )
+
+    with pytest.raises(DocumentTranslationError, match="placeholder_mismatch"):
+        restore_document(source, plan, request, (response,))
+
+
 @pytest.mark.parametrize("invented", ("evil.md", "new_identifier"))
 def test_whole_document_response_rejects_invented_path_or_identifier(
     invented: str,

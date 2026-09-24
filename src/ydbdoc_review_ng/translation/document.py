@@ -558,7 +558,7 @@ def validate_chunk_response(
             candidate_spans, target_plan_value
         ):
             raise DocumentTranslationError("document_response:placeholder_mismatch")
-    elif response_tokens != chunk.placeholders or not _placeholder_blocks_compatible(
+    elif not _placeholder_blocks_compatible(
         source_spans, source_plan_value, candidate_spans, target_plan_value
     ):
         raise DocumentTranslationError("document_response:placeholder_mismatch")
