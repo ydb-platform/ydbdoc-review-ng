@@ -232,13 +232,54 @@ def test_runtime_preserves_list_formatting_drift_through_critic() -> None:
                 "(то есть только администратор)\n"
             ).encode()
             self.raw_calls = 0
+            self.critic_calls = 0
 
         def model(self, request):
             body = json.loads(request.body)
-            if body.get("jsonSchema") is not None:
-                return super().model(request)
-            self.raw_calls += 1
-            self.events.append(("MODEL", ("raw_markdown",)))
+            schema_wrapper = body.get("jsonSchema")
+            if schema_wrapper is not None:
+                self.critic_calls += 1
+                if self.critic_calls > 1:
+                    return super().model(request)
+                schema = schema_wrapper["schema"]
+                field_ids = schema["properties"]["findings"]["items"]["properties"][
+                    "field_ids"
+                ]["items"]["enum"]
+                self.events.append(("MODEL", tuple(schema["properties"])))
+                values = {
+                    "verdict": "RED",
+                    "findings": [
+                        {
+                            "repairable": True,
+                            "reason": "Clarify the translated list item.",
+                            "expected_correction": "Use corrected wording.",
+                            "searchable_snippet": "translated item",
+                            "target_path": "ydb/docs/en/core/page.md",
+                            "target_line": 2,
+                            "field_ids": [field_ids[-1]],
+                        }
+                    ],
+                }
+                text = json.dumps(values)
+            else:
+                self.raw_calls += 1
+                prompt = body["messages"][-1]["text"]
+                self.events.append(
+                    ("REPAIR", "markdown")
+                    if prompt.startswith("Repair")
+                    else ("MODEL", ("raw_markdown",))
+                )
+                text = (
+                    "* Parent translated\n"
+                    "* [[YDBDOC_PROTECTED_0001]] — corrected item "
+                    "(i.e., only an administrator)\n"
+                    if prompt.startswith("Repair")
+                    else (
+                        "* Parent translated\n"
+                        "* [[YDBDOC_PROTECTED_0001]] — translated item "
+                        "(i.e., only an administrator)\n"
+                    )
+                )
             return HttpResponse(
                 200,
                 json.dumps(
@@ -249,11 +290,7 @@ def test_runtime_preserves_list_formatting_drift_through_critic() -> None:
                                     "status": "ALTERNATIVE_STATUS_FINAL",
                                     "message": {
                                         "role": "assistant",
-                                        "text": (
-                                            "* Parent translated\n"
-                                            "* [[YDBDOC_PROTECTED_0001]] — translated item "
-                                            "(i.e., only an administrator)\n"
-                                        ),
+                                        "text": text,
                                     },
                                 }
                             ],
@@ -286,13 +323,14 @@ def test_runtime_preserves_list_formatting_drift_through_critic() -> None:
     )
 
     assert exit_code == 0
-    assert services.raw_calls == 1
+    assert services.raw_calls == 2
     assert services.files["ydb/docs/en/core/page.md"] == (
         b"* Parent translated\n"
         b"* `enable_strict_user_management` "
-        b"\xe2\x80\x94 translated item (i.e., only an administrator)\n"
+        b"\xe2\x80\x94 corrected item (i.e., only an administrator)\n"
     )
-    assert services.events.count(("MODEL", ("verdict", "findings"))) == 1
+    assert services.events.count(("MODEL", ("verdict", "findings"))) == 2
+    assert services.events.count(("REPAIR", "markdown")) == 1
 
 
 class ContentFilterServices(RuntimeServices):

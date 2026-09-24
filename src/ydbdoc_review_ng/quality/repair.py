@@ -280,16 +280,40 @@ def _repair_requests(
         raise QualityInputError from None
     source_document = prepare_document(source, source_plan, max_characters=2**63 - 1)
     target_document = prepare_document(target, target_plan, max_characters=2**63 - 1)
-    source_descriptors = tuple(
-        (item.token, item.source_bytes, item.kind) for item in source_document.placeholders
-    )
-    target_descriptors = tuple(
-        (item.token, item.source_bytes, item.kind) for item in target_document.placeholders
-    )
-    if source_descriptors != target_descriptors or len(source_plan.blocks) != len(target_plan.blocks):
+    if len(source_plan.blocks) != len(target_plan.blocks):
+        raise QualityInputError
+    unused_source = list(source_document.placeholders)
+    target_replacements: dict[str, str] = {}
+    for target_placeholder in target_document.placeholders:
+        source_match = next(
+            (
+                item
+                for item in unused_source
+                if item.kind is target_placeholder.kind
+                and item.source_bytes == target_placeholder.source_bytes
+            ),
+            None,
+        )
+        if source_match is None:
+            target_replacements[target_placeholder.token] = target_placeholder.source_bytes.decode(
+                "utf-8"
+            )
+        else:
+            target_replacements[target_placeholder.token] = source_match.token
+            unused_source.remove(source_match)
+    if unused_source:
         raise QualityInputError
     source_blocks = _document_block_texts(source, source_plan, source_document.placeholders)
-    target_blocks = _document_block_texts(target, target_plan, target_document.placeholders)
+
+    def align_target_tokens(block: str) -> str:
+        for token, replacement in target_replacements.items():
+            block = block.replace(token, replacement)
+        return block
+
+    target_blocks = tuple(
+        align_target_tokens(block)
+        for block in _document_block_texts(target, target_plan, target_document.placeholders)
+    )
 
     def unit(start: int, end: int) -> tuple[DocumentChunk, ModelRequest]:
         source_text = "".join(source_blocks[start:end])
