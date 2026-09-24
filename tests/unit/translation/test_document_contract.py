@@ -222,6 +222,52 @@ def test_missing_blank_line_at_chunk_boundary_is_cosmetic() -> None:
     assert len(build_markdown_plan(SNAPSHOT, PATH, candidate).blocks) != len(plan.blocks)
 
 
+def test_missing_blank_line_with_placeholder_is_cosmetic() -> None:
+    source = b"First paragraph.\n\nSecond [guide](guide.md).\n"
+    plan, request = prepared(source)
+    response = request.chunks[0].text.replace("\n\n", "\n", 1)
+
+    candidate = restore_document(source, plan, request, (response,))
+
+    assert candidate == b"First paragraph.\nSecond [guide](guide.md).\n"
+
+
+def test_whole_document_response_rejects_invented_link() -> None:
+    source = b"Plain source.\n"
+    plan, request = prepared(source)
+
+    with pytest.raises(DocumentTranslationError, match="structure_mismatch"):
+        restore_document(source, plan, request, ("Translated [evil](evil.md).\n",))
+
+
+def test_whole_document_response_rejects_link_move_between_preserved_blocks() -> None:
+    source = b"[Guide](guide.md) first.\n\nSecond paragraph.\n"
+    plan, request = prepared(source)
+    open_token, close_token = (item.token for item in request.placeholders)
+    response = (
+        "First paragraph.\n\n"
+        f"Second {open_token}Guide{close_token}.\n"
+    )
+
+    with pytest.raises(DocumentTranslationError, match="placeholder_mismatch"):
+        restore_document(source, plan, request, (response,))
+
+
+@pytest.mark.parametrize(
+    "response",
+    (
+        "---\ndescription: Translated title\n---\n",
+        "Translated title\n",
+    ),
+)
+def test_whole_document_response_preserves_frontmatter_keys(response: str) -> None:
+    source = b"---\ntitle: Source title\n---\n"
+    plan, request = prepared(source)
+
+    with pytest.raises(DocumentTranslationError, match="structure_mismatch"):
+        restore_document(source, plan, request, (response,))
+
+
 def test_translated_abbreviation_is_not_treated_as_mutated_source_path() -> None:
     source = (
         "  * `enable_strict_user_management` — включает строгие правила "

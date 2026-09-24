@@ -1005,6 +1005,45 @@ def test_repair_prompt_contains_complete_source_target_and_findings() -> None:
     assert "<current-target>" in repair_prompt
 
 
+def test_cosmetic_block_merge_still_gets_one_critic_repair() -> None:
+    source = b"First source paragraph.\n\nSecond source paragraph.\n"
+    plan = build_markdown_plan(SNAPSHOT, SOURCE_PATH, source)
+    request = build_translation_request(source, plan)
+    target = b"First translated paragraph.\nSecond translated paragraph.\n"
+    repaired = b"First corrected paragraph.\n\nSecond corrected paragraph.\n"
+    executor = FakeExecutor(
+        critic_json(
+            "RED",
+            [
+                finding(
+                    repairable=True,
+                    snippet="First translated",
+                    line=1,
+                    field_ids=[request.fields[0].field_id],
+                )
+            ],
+        ),
+        raw_document(repaired),
+        critic_json("GREEN", []),
+    )
+
+    result = review_translation(
+        executor,
+        model="model",
+        source=source,
+        source_plan=plan,
+        translation_request=request,
+        target=target,
+        target_path=PATH,
+        source_locale=Locale.EN,
+        target_locale=Locale.RU,
+    )
+
+    assert result.repair_applied
+    assert result.final_candidate == repaired
+    assert [call.role.value for call in executor.calls] == ["critic", "repair", "final_critic"]
+
+
 def test_t017_n04_repair_preserves_logical_escaped_title_in_untouched_field() -> None:
     source = b'---\ntitle: "An \\"escaped\\" title"\ndescription: "Old description"\n---\n'
     plan = build_markdown_plan(SNAPSHOT, SOURCE_PATH, source)

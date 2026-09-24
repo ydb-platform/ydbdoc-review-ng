@@ -176,6 +176,19 @@ def _validate_frontmatter_yaml(data: bytes, plan: SourcePlan) -> None:
             raise TypeError("invalid frontmatter")
 
 
+def _frontmatter_keys(data: bytes, plan: SourcePlan) -> tuple[tuple[object, ...], ...]:
+    result: list[tuple[object, ...]] = []
+    for block in plan.blocks:
+        if block.kind is not BlockKind.T008_FRONT_MATTER:
+            continue
+        lines = data[block.span.start : block.span.end].splitlines(keepends=True)
+        loaded = yaml.safe_load(b"".join(lines[1:-1]).decode("utf-8"))
+        if not isinstance(loaded, Mapping):
+            raise TypeError("invalid frontmatter")
+        result.append(tuple(loaded.keys()))
+    return tuple(result)
+
+
 def _is_frontmatter_field(plan: SourcePlan, field: Field) -> bool:
     return any(
         block.kind is BlockKind.T008_FRONT_MATTER
@@ -255,6 +268,10 @@ def verify_protected_fragments(
     validate_source_plan(target, target_plan)
     _validate_frontmatter_yaml(source, source_plan)
     _validate_frontmatter_yaml(target, target_plan)
+    if not exact_non_field_slices and _frontmatter_keys(
+        source, source_plan
+    ) != _frontmatter_keys(target, target_plan):
+        raise ProtectedMismatch(1)
     source_fields = fields_of(source_plan)
     target_fields = fields_of(target_plan)
     if exact_non_field_slices and len(source_fields) != len(target_fields):
@@ -294,10 +311,20 @@ def verify_protected_fragments(
     target_movable = tuple(item for _, movable, _ in target_signatures for item in movable)
     source_groups = tuple(item for _, _, groups in source_signatures for item in groups)
     target_groups = tuple(item for _, _, groups in target_signatures for item in groups)
+    allowed_target_only = {
+        ProtectedKind.PATH.value,
+        ProtectedKind.IDENTIFIER.value,
+        ProtectedKind.ESCAPE.value,
+        ProtectedKind.LINE_BREAK.value,
+        ProtectedKind.CONTINUATION_PREFIX.value,
+    }
+    source_strict = tuple(item for item in source_ordered if item[0] not in allowed_target_only)
+    target_strict = tuple(item for item in target_ordered if item[0] not in allowed_target_only)
     if (
         not _is_subsequence(source_ordered, target_ordered)
-        or Counter(source_movable) - Counter(target_movable)
-        or not _is_subsequence(source_groups, target_groups)
+        or Counter(source_strict) != Counter(target_strict)
+        or Counter(source_movable) != Counter(target_movable)
+        or Counter(source_groups) != Counter(target_groups)
     ):
         raise ProtectedMismatch(1)
 

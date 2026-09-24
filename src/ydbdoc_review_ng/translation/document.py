@@ -502,9 +502,9 @@ def validate_chunk_response(
         target_plan_value = build_markdown_plan(chunk_snapshot, chunk_path, candidate_chunk)
     except (UnicodeError, TypeError, ValueError, yaml.YAMLError):
         raise DocumentTranslationError("document_response:structure_mismatch") from None
-    if _placeholder_owners(source_spans, source_plan_value) != _placeholder_owners(
-        candidate_spans, target_plan_value
-    ):
+    if len(source_plan_value.blocks) == len(target_plan_value.blocks) and _placeholder_owners(
+        source_spans, source_plan_value
+    ) != _placeholder_owners(candidate_spans, target_plan_value):
         raise DocumentTranslationError("document_response:placeholder_mismatch")
     if target_plan_value.diagnostics:
         raise DocumentTranslationError("document_response:structure_mismatch")

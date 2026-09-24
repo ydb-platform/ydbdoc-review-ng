@@ -281,8 +281,6 @@ def _repair_requests(
         raise QualityInputError from None
     source_document = prepare_document(source, source_plan, max_characters=2**63 - 1)
     target_document = prepare_document(target, target_plan, max_characters=2**63 - 1)
-    if len(source_plan.blocks) != len(target_plan.blocks):
-        raise QualityInputError
     unused_source = list(source_document.placeholders)
     target_replacements: dict[str, str] = {}
     for target_placeholder in target_document.placeholders:
@@ -322,6 +320,43 @@ def _repair_requests(
         align_target_tokens(block)
         for block in _document_block_texts(target, target_plan, target_document.placeholders)
     )
+
+    if len(source_plan.blocks) != len(target_plan.blocks):
+        source_text = "".join(source_blocks)
+        target_text = "".join(target_blocks)
+        chunk = DocumentChunk(
+            source_text,
+            0,
+            len(source_blocks),
+            tuple(item.token for item in source_document.placeholders),
+        )
+        request = ModelRequest(
+            ModelRole.REPAIR,
+            model,
+            _repair_prompt(
+                source_text=source_text,
+                target_text=target_text,
+                target_path=target_path,
+                source_locale=source_locale,
+                target_locale=target_locale,
+                findings=findings,
+                operator_context=operator_context,
+            ),
+            None,
+            8000,
+            target_path,
+        )
+        if (
+            max(len(source_text), len(target_text)) > RAW_MARKDOWN_RESPONSE_MAX_CHARACTERS
+            or len(request.prompt) > max_characters
+        ):
+            raise QualityInputError
+        return (
+            (request,),
+            DocumentTranslationRequest((chunk,), source_document.placeholders),
+            (source_text,),
+            (target_text,),
+        )
 
     def unit(start: int, end: int) -> tuple[DocumentChunk, ModelRequest]:
         source_text = "".join(source_blocks[start:end])
@@ -412,9 +447,12 @@ def review_translation(
 ) -> QualityReviewResult:
     """Review the actual candidate and apply no more than one source-only repair."""
     if accepted_map is None and not full_repair:
-        target_translations = _derive_target_translations(
-            source, source_plan, translation_request, target, target_path
-        )
+        try:
+            target_translations = _derive_target_translations(
+                source, source_plan, translation_request, target, target_path
+            )
+        except QualityInputError:
+            target_translations = {}
     elif accepted_map is not None:
         if accepted_map.target_path != target_path:
             raise QualityInputError
