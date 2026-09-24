@@ -115,6 +115,40 @@ def test_identical_inline_code_tokens_cannot_exchange_source_fields() -> None:
         restore_document(source, plan, request, (exchanged,))
 
 
+def test_identical_link_opening_token_ids_cannot_exchange_pairs() -> None:
+    source = b"Read [one](one.md), then [two](two.md).\n"
+    plan, request = prepared(source)
+    assert request.chunks[0].text == (
+        "Read [[YDBDOC_PROTECTED_0001]]one[[YDBDOC_PROTECTED_0002]], then "
+        "[[YDBDOC_PROTECTED_0003]]two[[YDBDOC_PROTECTED_0004]].\n"
+    )
+    exchanged = (
+        "Read [[YDBDOC_PROTECTED_0003]]one[[YDBDOC_PROTECTED_0002]], then "
+        "[[YDBDOC_PROTECTED_0001]]two[[YDBDOC_PROTECTED_0004]].\n"
+    )
+
+    with pytest.raises(DocumentTranslationError, match="placeholder_mismatch"):
+        restore_document(source, plan, request, (exchanged,))
+
+
+def test_supported_fence_identical_inline_tokens_cannot_exchange_comment_fields() -> None:
+    source = b"```python\n# First `SAME`.\n# Second `SAME`.\n```\n"
+    plan, request = prepared(source)
+    assert request.chunks[0].text == (
+        "```python\n[[YDBDOC_PROTECTED_0001]]First [[YDBDOC_PROTECTED_0002]]."
+        "[[YDBDOC_PROTECTED_0003]]Second [[YDBDOC_PROTECTED_0004]]."
+        "[[YDBDOC_PROTECTED_0005]]```\n"
+    )
+    exchanged = request.chunks[0].text.replace(
+        "[[YDBDOC_PROTECTED_0002]]", "TEMP", 1
+    ).replace("[[YDBDOC_PROTECTED_0004]]", "[[YDBDOC_PROTECTED_0002]]", 1).replace(
+        "TEMP", "[[YDBDOC_PROTECTED_0004]]", 1
+    )
+
+    with pytest.raises(DocumentTranslationError, match="placeholder_mismatch"):
+        restore_document(source, plan, request, (exchanged,))
+
+
 def test_field_local_mobility_rejects_linked_image_endpoint_repairing() -> None:
     source = b"[![diagram](image.png)](outer.md)\n"
     plan, request = prepared(source)
@@ -127,7 +161,7 @@ def test_field_local_mobility_rejects_linked_image_endpoint_repairing() -> None:
         .replace("TEMP", tokens[3], 1)
     )
 
-    with pytest.raises(DocumentTranslationError, match="structure_mismatch"):
+    with pytest.raises(DocumentTranslationError, match="placeholder_mismatch"):
         restore_document(source, plan, request, (repaired,))
 
 
@@ -140,7 +174,7 @@ def test_field_local_mobility_rejects_opaque_block_reorder() -> None:
         text.replace(first, "TEMP", 1).replace(second, first, 1).replace("TEMP", second, 1)
     )
 
-    with pytest.raises(DocumentTranslationError, match="structure_mismatch"):
+    with pytest.raises(DocumentTranslationError, match="placeholder_mismatch"):
         restore_document(source, plan, request, (reordered,))
 
 

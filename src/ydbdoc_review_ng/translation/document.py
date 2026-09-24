@@ -19,7 +19,6 @@ from ydbdoc_review_ng.plan import (
 )
 
 _TOKEN = re.compile(r"\[\[YDBDOC_PROTECTED_[0-9]+\]\]")
-_TOKEN_BYTES = re.compile(rb"\[\[YDBDOC_PROTECTED_[0-9]+\]\]")
 _PLACEHOLDER_LIKE = re.compile(r"\[\[YDBDOC_PROTECTED_[^\]\r\n]{0,64}\]\]")
 RAW_MARKDOWN_RESPONSE_MAX_CHARACTERS = 16_000
 
@@ -36,15 +35,36 @@ def _response_tokens(value: str) -> tuple[str, ...]:
     return tokens
 
 
-def _placeholder_owners(value: bytes, plan: SourcePlan) -> dict[str, tuple[int, int | None]]:
+def _restore_placeholders(
+    value: str, by_token: dict[str, bytes], /
+) -> tuple[bytes, dict[str, tuple[int, int]]]:
+    parts: list[bytes] = []
+    spans: dict[str, tuple[int, int]] = {}
+    cursor = 0
+    restored_length = 0
+    for match in _TOKEN.finditer(value):
+        prefix = value[cursor : match.start()].encode("utf-8")
+        source_bytes = by_token[match.group()]
+        parts.extend((prefix, source_bytes))
+        restored_length += len(prefix)
+        spans[match.group()] = (restored_length, restored_length + len(source_bytes))
+        restored_length += len(source_bytes)
+        cursor = match.end()
+    parts.append(value[cursor:].encode("utf-8"))
+    return b"".join(parts), spans
+
+
+def _placeholder_owners(
+    spans: dict[str, tuple[int, int]], plan: SourcePlan, /
+) -> dict[str, tuple[int, int | None]]:
     fields = fields_of(plan)
     owners: dict[str, tuple[int, int | None]] = {}
-    for match in _TOKEN_BYTES.finditer(value):
+    for token, (start, end) in spans.items():
         block_position = next(
             (
                 position
                 for position, block in enumerate(plan.blocks)
-                if block.span.start <= match.start() and match.end() <= block.span.end
+                if block.span.start <= start and end <= block.span.end
             ),
             None,
         )
@@ -54,11 +74,11 @@ def _placeholder_owners(value: bytes, plan: SourcePlan) -> dict[str, tuple[int, 
             (
                 position
                 for position, field in enumerate(fields)
-                if field.span.start <= match.start() and match.end() <= field.span.end
+                if field.span.start <= start and end <= field.span.end
             ),
             None,
         )
-        owners[match.group().decode("ascii")] = (block_position, field_position)
+        owners[token] = (block_position, field_position)
     return owners
 
 
@@ -412,35 +432,27 @@ def validate_chunk_response(
     """Validate one provider unit before any later chunk is requested."""
     if type(response) is not str:
         raise DocumentTranslationError("document_response:unit_mismatch")
-    if Counter(_response_tokens(response)) != Counter(chunk.placeholders):
+    response_tokens = _response_tokens(response)
+    if Counter(response_tokens) != Counter(chunk.placeholders):
+        raise DocumentTranslationError("document_response:placeholder_mismatch")
+    by_placeholder = {item.token: item for item in placeholders}
+    mobile_tokens = {
+        token
+        for token, placeholder in by_placeholder.items()
+        if placeholder.kind in {ProtectedKind.INLINE_CODE, ProtectedKind.TEMPLATE}
+    }
+    if tuple(token for token in response_tokens if token not in mobile_tokens) != tuple(
+        token for token in chunk.placeholders if token not in mobile_tokens
+    ):
         raise DocumentTranslationError("document_response:placeholder_mismatch")
     from ydbdoc_review_ng.domain import GitSha, RepoPath, RepositoryId, SnapshotRef
 
     chunk_snapshot = SnapshotRef(RepositoryId("ydbdoc/local"), GitSha("0" * 40))
     chunk_path = RepoPath("document-chunk.md")
+    by_token = {token: item.source_bytes for token, item in by_placeholder.items()}
     try:
-        source_rendered = chunk.text.encode("utf-8")
-        candidate_rendered = response.encode("utf-8")
-        source_rendered_plan = build_markdown_plan(
-            chunk_snapshot, chunk_path, source_rendered
-        )
-        candidate_rendered_plan = build_markdown_plan(
-            chunk_snapshot, chunk_path, candidate_rendered
-        )
-    except (UnicodeError, TypeError, ValueError, yaml.YAMLError):
-        raise DocumentTranslationError("document_response:structure_mismatch") from None
-    if _placeholder_owners(source_rendered, source_rendered_plan) != _placeholder_owners(
-        candidate_rendered, candidate_rendered_plan
-    ):
-        raise DocumentTranslationError("document_response:placeholder_mismatch")
-    by_token = {item.token: item.source_bytes for item in placeholders}
-    try:
-        source_chunk = _TOKEN.sub(
-            lambda match: by_token[match.group()].decode("utf-8"), chunk.text
-        ).encode("utf-8")
-        candidate_chunk = _TOKEN.sub(
-            lambda match: by_token[match.group()].decode("utf-8"), response
-        ).encode("utf-8")
+        source_chunk, source_spans = _restore_placeholders(chunk.text, by_token)
+        candidate_chunk, candidate_spans = _restore_placeholders(response, by_token)
     except (KeyError, UnicodeError):
         raise DocumentTranslationError("document_response:placeholder_mismatch") from None
 
@@ -451,6 +463,10 @@ def validate_chunk_response(
         target_plan_value = build_markdown_plan(chunk_snapshot, chunk_path, candidate_chunk)
     except (UnicodeError, TypeError, ValueError, yaml.YAMLError):
         raise DocumentTranslationError("document_response:structure_mismatch") from None
+    if _placeholder_owners(source_spans, source_plan_value) != _placeholder_owners(
+        candidate_spans, target_plan_value
+    ):
+        raise DocumentTranslationError("document_response:placeholder_mismatch")
     if target_plan_value.diagnostics or tuple(
         block.kind for block in target_plan_value.blocks
     ) != tuple(block.kind for block in source_plan_value.blocks):
