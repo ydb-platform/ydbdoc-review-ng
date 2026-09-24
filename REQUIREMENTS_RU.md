@@ -179,12 +179,14 @@ fenced block защищён. Нельзя обещать полноценную 
   source prompt и человекочитаемое дополнение: какие placeholders потеряны,
   какому source-тексту они соответствуют и около какой source-строки находятся.
   Отклонённый перевод в повторный prompt не копируется. Если большой chunk после
-  correction всё ещё невалиден, он ровно один раз делится на два соседних
+  correction всё ещё невалиден, он делится на два соседних
   диапазона по ближайшей к середине безопасной границе верхнеуровневых блоков,
-  которая не начинает child внутри вложенного списка. Каждый child
-  получает обычный вызов и одну correction, повторно не делится и не получает
-  existing target как источник fallback bytes. Маленький chunk, chunk без
-  безопасной границы и любой невалидный child завершают job ошибкой. Невалидный
+  которая не начинает child внутри вложенного списка. Каждый child получает
+  обычный вызов и одну correction, не получает existing target как источник
+  fallback bytes и при повторной невалидности делится по тому же правилу.
+  Деление строго уменьшает диапазон source blocks; уже валидные соседние chunks
+  повторно не вызываются. Маленький chunk и chunk без безопасной границы
+  завершают job ошибкой. Невалидный
   model response, потерянный placeholder или candidate с build-breaking
   Markdown никогда не коммитятся в translation branch.
 - В `doc_verify` exact protected-fragment invariant сравнивает текущий target с
@@ -336,13 +338,14 @@ historical cost.
 пределах `max_attempts = 2`; обе attempts аудируются и учитываются в cost, а
 truncation и прочие non-final статусы не повторяются.
 Если большой raw-Markdown `TRANSLATE` chunk после обычного вызова и correction
-остаётся невалидным либо первичный вызов завершён content-filter, его можно ровно
-один раз разделить на два соседних диапазона по ближайшей к середине top-level
-block boundary. Каждый child получает обычный предел `max_attempts = 2`, повторно
-не делится, а уже успешные chunks не вызываются снова. Маленький chunk, child,
-correction provider error, другие provider errors и chunk без такой boundary
-завершаются ошибкой без публикации невалидных bytes. Для `REPAIR` сохраняется
-отдельный bounded split только при content-filter.
+остаётся невалидным либо вызов завершён content-filter, он делится на два
+соседних диапазона по ближайшей к середине top-level block boundary. Каждый
+child получает обычный предел `max_attempts = 2` и при той же проблеме делится
+повторно, пока существует безопасная граница и диапазон source blocks строго
+уменьшается. Уже успешные chunks не вызываются снова. Маленький chunk, другие
+provider errors и chunk без такой boundary завершаются ошибкой без публикации
+невалидных bytes. Для `REPAIR` сохраняется отдельный bounded split только при
+content-filter.
 
 Для таблиц или строк с текстами настраивается TTL 14 дней средствами YDB.
 Checkpoint state содержит только frozen direction/scope digest, accepted

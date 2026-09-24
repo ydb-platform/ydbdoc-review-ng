@@ -46,9 +46,11 @@ diagnostics. Косметические и иные изменения model Mar
 исправления. Повторный prompt сохраняет тот же authoritative source и прямо
 перечисляет потерянные tokens, соответствующие source fragments и примерные
 source-строки; rejected translation в него не копируется. Большой невалидный
-chunk после correction один раз делится по безопасной границе на два child
-chunk. Невалидный child, потерянный placeholder и build-breaking Markdown
-никогда не публикуются. При `doc_verify`
+chunk после correction делится по безопасной границе на два child chunk.
+Невалидный child делится тем же способом, пока диапазон source blocks строго
+уменьшается и остаётся безопасная граница; успешные соседние chunks повторно не
+переводятся. Потерянный placeholder и build-breaking Markdown никогда не
+публикуются. При `doc_verify`
 те же protected fragments сверяются с текущим target: ручное изменение URL, path
 или code относительно authoritative source отвергается.
 

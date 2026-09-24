@@ -103,6 +103,35 @@ class InvalidThenFilteredThenEchoModels:
         return ModelCallResult(_source_from_prompt(request.prompt), None, ())
 
 
+class FilterTwiceThenEchoModels:
+    def __init__(self) -> None:
+        self.calls: list[ModelRequest] = []
+
+    def invoke(self, request: ModelRequest, /) -> ModelCallResult:
+        self.calls.append(request)
+        if len(self.calls) <= 2:
+            return ModelCallResult(None, AttemptError.CONTENT_FILTER, ())
+        return ModelCallResult(_source_from_prompt(request.prompt), None, ())
+
+
+class NestedInvalidThenEchoModels:
+    def __init__(self, parent_invalid: str) -> None:
+        self.parent_invalid = parent_invalid
+        self.calls: list[ModelRequest] = []
+
+    def invoke(self, request: ModelRequest, /) -> ModelCallResult:
+        self.calls.append(request)
+        call_number = len(self.calls)
+        if call_number <= 2:
+            return ModelCallResult(self.parent_invalid, None, ())
+        source = _source_from_prompt(request.prompt)
+        if call_number in {4, 5}:
+            marker_start = source.index("[[YDBDOC_PROTECTED_")
+            marker_end = source.index("]]", marker_start) + 2
+            source = source[:marker_start] + source[marker_end:]
+        return ModelCallResult(source, None, ())
+
+
 def _heading_block(number: int, length: int) -> str:
     prefix = f"## Block {number:03d} "
     return prefix + "x" * (length - len(prefix) - 1) + "\n"
@@ -544,22 +573,17 @@ def test_content_filter_children_do_not_repeat_filtered_target_reference() -> No
     assert all("<EXISTING_TARGET_EN>" not in call.prompt for call in models.calls[1:])
 
 
-def test_content_filter_in_child_is_terminal_without_recursive_split() -> None:
+def test_content_filter_in_child_recursively_splits_and_preserves_document() -> None:
     source = content_filter_witness()
     document = document_for(source)
-    models = ScriptedModels(
-        [
-            ModelCallResult(None, AttemptError.CONTENT_FILTER, ()),
-            ModelCallResult(None, AttemptError.CONTENT_FILTER, ()),
-        ]
-    )
+    models = FilterTwiceThenEchoModels()
 
-    with pytest.raises(RuntimeBoundaryError, match="translation_model_failed"):
-        content_with(models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "250000"}).translate_document(
-            document
-        )
+    _accepted, translated = content_with(
+        models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "250000"}
+    )._translate_document(document)
 
-    assert len(models.calls) == 2
+    assert translated.translated_markdown.encode() == source
+    assert len(models.calls) == 5
     assert len(_source_from_prompt(models.calls[0].prompt)) == 15_801
     assert len(_source_from_prompt(models.calls[1].prompt)) == 7_870
 
@@ -781,6 +805,29 @@ def test_exhausted_invalid_large_chunk_is_split_once_and_validated() -> None:
 
     assert len(models.calls) == 4
     assert "Important correction" in models.calls[1].prompt
+    assert accepted_document.translated_markdown.encode() == source
+
+
+def test_invalid_adaptive_child_is_split_again_until_valid() -> None:
+    source = content_filter_witness() + b"## Use `CPUTime` now.\n"
+    document = document_for(source)
+    prepared = prepare_document(
+        source,
+        document.plan,
+        max_characters=250_000,
+        source_locale="ru",
+        target_locale="en",
+    )
+    parent = prepared.chunks[0]
+    placeholder = next(item for item in prepared.placeholders if item.source_bytes == b"`CPUTime`")
+    parent_invalid = parent.text.replace(placeholder.token, "", 1)
+    models = NestedInvalidThenEchoModels(parent_invalid)
+
+    _accepted, accepted_document = content_with(
+        models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "250000"}
+    )._translate_document(document)
+
+    assert len(models.calls) == 7
     assert accepted_document.translated_markdown.encode() == source
 
 

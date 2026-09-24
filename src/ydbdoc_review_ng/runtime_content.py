@@ -965,6 +965,37 @@ class RuntimeContent:
                     return result.text, None, False
             raise AssertionError("translation semantic attempt bound exhausted")
 
+        def translate_chunk(
+            chunk: DocumentChunk,
+            chunk_index: int,
+            *,
+            use_target_reference: bool,
+        ) -> None:
+            accepted_response, failure, should_split = invoke_chunk(
+                chunk,
+                chunk_index,
+                use_target_reference=use_target_reference,
+            )
+            if accepted_response is not None:
+                effective_chunks.append(chunk)
+                responses.append(accepted_response)
+                return
+            children = (
+                split_content_filter_chunk(chunk, block_texts)
+                if should_split
+                and (
+                    failure is AttemptError.CONTENT_FILTER
+                    or len(chunk.text) >= _INVALID_RESPONSE_SPLIT_MIN_CHARACTERS
+                )
+                else None
+            )
+            if children is None:
+                if should_split and failure is None:
+                    raise InvalidTranslationResponse("translation_response_invalid")
+                raise RuntimeBoundaryError("translation_model_failed")
+            for child in children:
+                translate_chunk(child, chunk_index, use_target_reference=False)
+
         for chunk_index, chunk in enumerate(prepared.chunks, 1):
             with traced(
                 "translation",
@@ -973,38 +1004,7 @@ class RuntimeContent:
                 chunk_index=chunk_index,
                 chunks_total=len(prepared.chunks),
             ):
-                accepted_response, failure, should_split = invoke_chunk(chunk, chunk_index)
-                if accepted_response is not None:
-                    effective_chunks.append(chunk)
-                    responses.append(accepted_response)
-                    continue
-                children = (
-                    split_content_filter_chunk(chunk, block_texts)
-                    if should_split
-                    and (
-                        failure is AttemptError.CONTENT_FILTER
-                        or len(chunk.text) >= _INVALID_RESPONSE_SPLIT_MIN_CHARACTERS
-                    )
-                    else None
-                )
-                if children is None:
-                    if should_split and failure is None:
-                        raise InvalidTranslationResponse(
-                            "translation_response_invalid"
-                        )
-                    raise RuntimeBoundaryError("translation_model_failed")
-                for child in children:
-                    child_response, child_failure, child_should_split = invoke_chunk(
-                        child, chunk_index, use_target_reference=False
-                    )
-                    if child_response is None:
-                        if child_should_split and child_failure is None:
-                            raise InvalidTranslationResponse(
-                                "translation_response_invalid"
-                            )
-                        raise RuntimeBoundaryError("translation_model_failed")
-                    effective_chunks.append(child)
-                    responses.append(child_response)
+                translate_chunk(chunk, chunk_index, use_target_reference=True)
         try:
             effective_request = DocumentTranslationRequest(
                 tuple(effective_chunks), prepared.placeholders

@@ -510,7 +510,7 @@ def test_runtime_adaptive_split_audits_parent_and_children_then_publishes_once()
     ) == 1
 
 
-def test_runtime_filtered_child_is_terminal_without_publication_or_further_split() -> None:
+def test_runtime_filtered_child_splits_again_and_publishes_once() -> None:
     from ydbdoc_review_ng.cli import main
     from ydbdoc_review_ng.runtime import create_runtime
 
@@ -537,14 +537,21 @@ def test_runtime_filtered_child_is_terminal_without_publication_or_further_split
         for row in services.audit
         if "attempt_id" in row and row["role"] == "translate"
     ]
-    assert exit_code == 1
-    assert len(services.raw_request_bodies) == 4
+    assert exit_code == 0
+    assert len(services.raw_request_bodies) == 7
     assert services.raw_request_bodies[0] == services.raw_request_bodies[1]
     assert services.raw_request_bodies[2] == services.raw_request_bodies[3]
     assert services.raw_request_bodies[0] != services.raw_request_bodies[2]
-    assert [row["error"] for row in translation_attempts] == ["content_filter"] * 4
-    assert [row["cost_rub"] for row in translation_attempts] == [Decimal("0.01")] * 4
-    assert not any(method in {"POST", "PATCH"} for method, _path in services.events)
+    assert [row["error"] for row in translation_attempts] == ["content_filter"] * 4 + [
+        None,
+        None,
+        None,
+    ]
+    assert [row["cost_rub"] for row in translation_attempts] == [Decimal("0.01")] * 7
+    assert sum(
+        method in {"POST", "PATCH"} and "/git/refs" in path
+        for method, path in services.events
+    ) == 1
     assert all("continuation_id" not in row for row in services.audit)
 
 
