@@ -48,9 +48,11 @@ Transport, persistence, GitHub и прочие инфраструктурные 
 - Если изменены обе локали, один model call сравнивает пары, исключает уже
   полные пары и выбирает одно направление job. Если направление надёжно не
   определено, перевод не запускается и публикуется понятное предупреждение.
-- Используются immutable Git snapshots и правила scope, уже реализованные в
-  T003–T006: locale mapping, pair discovery, удаление, переименование,
-  dependencies, redirects и лимиты объёма.
+- Используются immutable Git snapshots и правила scope: locale mapping, pair
+  discovery, удаление, переименование, dependencies для отсутствующих target,
+  redirects и лимиты объёма. Для уже существующего target scope не расширяется
+  обходом всех исторических source-ссылок: локализованные пути могут намеренно
+  различаться, а итог проверяет полный Diplodoc build.
 - Для старого слитого PR переводится актуальная версия source на зафиксированном
   tip целевой base branch. Чтение из двигающегося HEAD вместо snapshot
   запрещено.
@@ -82,6 +84,13 @@ placeholders. Защищены и восстанавливаются тольк�
 - URL, path, anchors, identifiers, templates и inline code;
 - код вне выделенных комментариев, конфигурации, Mermaid, include;
 - остальные front matter поля и технический HTML.
+
+Исключение для уже существующего target: Markdown link/image destination
+остаётся видимым модели вместе с соответствующей ссылкой target. Модель должна
+сохранить корректный target-local path, когда структуры RU и EN различаются, и
+обновить destination, когда изменилось назначение ссылки. Синтаксис и итоговая
+достижимость проверяются parse и полным Diplodoc build до публикации. Для нового
+target destinations по-прежнему защищены и восстанавливаются из source.
 
 Markdown/YFM syntax, заголовки, списки, таблицы и переводимая проза остаются в
 контексте модели. Если парный target существует, он добавляется в prompt только
@@ -426,8 +435,10 @@ gate не выполняется. Конкурентная атомарная re
 
 ## 8. Файлы, TOC и redirects
 
-- URL, paths и fragments не локализуются отдельным алгоритмом, а сохраняются
-  как protected source fragments.
+- URL, paths и fragments нового target не локализуются отдельным алгоритмом, а
+  сохраняются как protected source fragments. При синхронизации существующего
+  target Markdown link/image destinations выбирает модель с учётом target-local
+  путей; итог обязан пройти parse и полный Diplodoc build.
 - Отдельная deterministic проверка достижимости ссылок и anchors не требуется.
 - Добавление новой source-страницы, достижимой из source TOC, добавляет только
   соответствующую запись в target TOC. Redirect не создаётся.

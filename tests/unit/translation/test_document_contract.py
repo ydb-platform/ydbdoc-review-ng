@@ -67,10 +67,25 @@ def test_existing_target_prompt_synchronizes_against_authoritative_source() -> N
     assert "authoritative ru Markdown" in prompt
     assert "Preserve correct existing target wording" in prompt
     assert "Existing target is reference context only" in prompt
-    assert "Never copy technical fragments from target" in prompt
+    assert "Preserve correct target-local Markdown link destinations" in prompt
     assert "<AUTHORITATIVE_SOURCE_RU>\n" + source in prompt
     assert "<EXISTING_TARGET_EN>\n" + existing_target in prompt
     assert "Return Markdown only" in prompt
+
+
+def test_existing_target_can_localize_markdown_link_destinations() -> None:
+    source = b"See [query hints](./dev/optimization/hints.md).\n"
+    plan = build_markdown_plan(SNAPSHOT, PATH, source)
+
+    request = prepare_document(
+        source,
+        plan,
+        max_characters=100_000,
+        localize_link_destinations=True,
+    )
+
+    assert "](./dev/optimization/hints.md)" in request.chunks[0].text
+    assert all(item.kind is not ProtectedKind.LINK_CLOSE for item in request.placeholders)
 
 
 def test_global_placeholders_restore_exact_bytes_and_reject_contract_drift() -> None:

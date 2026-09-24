@@ -854,6 +854,11 @@ class RuntimeContent:
             or self.environment.get("YDBDOC_MAX_SOURCE_CHARACTERS")
             or "200000"
         )
+        target_reference_bytes = (
+            entry.target_content
+            if entry.target_content is not None
+            else entry.rename_from_target_content
+        )
         prepared = prepare_document(
             document.source,
             document.plan,
@@ -861,13 +866,9 @@ class RuntimeContent:
             source_locale=entry.pair.source_locale.value,
             target_locale=entry.pair.target_locale.value,
             operator_context=operator_context,
+            localize_link_destinations=target_reference_bytes is not None,
         )
         block_texts = _document_block_texts(document.source, document.plan, prepared.placeholders)
-        target_reference_bytes = (
-            entry.target_content
-            if entry.target_content is not None
-            else entry.rename_from_target_content
-        )
         try:
             target_reference = (
                 None

@@ -191,7 +191,7 @@ def test_translate_document_uses_complete_markdown_and_selected_direction(
     )
     response = (
         "# Translated heading\n\nText with "
-        "[[YDBDOC_PROTECTED_0001]]guide[[YDBDOC_PROTECTED_0002]].\n\n- One\n- Two\n"
+        "[[YDBDOC_PROTECTED_0001]]guide](guide.md).\n\n- One\n- Two\n"
     )
     models = ScriptedModels([response])
 
@@ -219,6 +219,29 @@ def test_translate_without_existing_target_uses_full_translation_prompt() -> Non
 
     assert "Translate the complete Markdown below from ru to en" in models.calls[0].prompt
     assert "<EXISTING_TARGET_EN>" not in models.calls[0].prompt
+
+
+def test_existing_target_preserves_its_localized_link_destination() -> None:
+    document = document_for(
+        b"See [query hints](./dev/optimization/hints.md).\n",
+        target=b"See [query hints](./dev/query-execution-optimization/query-hints.md).\n",
+    )
+    models = ScriptedModels(
+        [
+            (
+                "See [[YDBDOC_PROTECTED_0001]]query hints]"
+                "(./dev/query-execution-optimization/query-hints.md).\n"
+            )
+        ]
+    )
+
+    _accepted, accepted_document = content_with(models)._translate_document(document)
+
+    assert "(./dev/optimization/hints.md)" in models.calls[0].prompt
+    assert "(./dev/query-execution-optimization/query-hints.md)" in models.calls[0].prompt
+    assert accepted_document.translated_markdown == (
+        "See [query hints](./dev/query-execution-optimization/query-hints.md).\n"
+    )
 
 
 def test_chunked_sync_uses_ordered_non_overlapping_target_excerpts() -> None:

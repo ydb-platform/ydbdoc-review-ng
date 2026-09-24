@@ -765,6 +765,8 @@ def _build_direction(
         entry.pair.source_path
         for entry in entries
         if entry.operation in {FileOperation.TRANSLATE, FileOperation.RENAME_TARGET_AND_TRANSLATE}
+        and entry.target_content is None
+        and entry.rename_from_target_content is None
     }
     source_bytes = {
         entry.pair.source_path: entry.source_content

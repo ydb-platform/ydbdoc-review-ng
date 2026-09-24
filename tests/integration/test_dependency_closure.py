@@ -434,6 +434,32 @@ def test_empty_existing_target_suppresses_dependency_entry() -> None:
     assert tuple(call[1] for call in scanner.calls) == (z.ru.path,)
 
 
+def test_existing_target_does_not_expand_scope_from_source_localized_links() -> None:
+    existing = _inventory("changelog.md", b"source", b"localized target")
+    source_dependency = RepoPath("ydb/docs/ru/dev/optimization/hints.md")
+    scanner = _Scanner(
+        {
+            existing.ru.path: (
+                dependencies.DependencyLink(existing.ru.path, source_dependency),
+            )
+        }
+    )
+
+    result = build_potential_scopes(
+        _Reader({source_dependency: b"source dependency"}),
+        scanner,
+        _Preflight(),
+        _snapshots(),
+        (existing,),
+        dependencies.RedirectCatalog(_snapshot(), _roots(), ()),
+    )
+
+    directional = result.scopes[0]
+    assert directional.measurement.dependency_file_count == 0
+    assert directional.dependencies == ()
+    assert scanner.calls == []
+
+
 def test_source_tombstone_wins_before_missing_source_and_does_not_scan() -> None:
     item = _inventory("z.md", None, b"old target")
     scanner = _Scanner({})

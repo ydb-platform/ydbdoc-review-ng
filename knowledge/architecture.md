@@ -6,8 +6,10 @@
   tip по уже реализованным контрактам T003–T006.
 - Candidate собирается из source plan, валидных model values и exact protected
   fragments исходника. Старый target не является материалом для склейки.
-- URL, path, anchor и код являются protected source fragments. Модель не
-  создаёт и не редактирует их.
+- URL, path, anchor и код являются protected source fragments. Для нового target
+  модель не задаёт их содержимое. При синхронизации существующего target только
+  Markdown link/image destination может сохранить target-local путь; parse и
+  полный Diplodoc build проверяют результат до публикации.
 
 ## Минимальный поток
 
@@ -48,9 +50,10 @@ semantic stop наследует первоначальный expiry. Infrastruc
   каждого commit запускает полный официальный Diplodoc build. Любой `ERR` или
   `WARN` запрещает публикацию; privileged workflow не checkout-ит и не исполняет
   содержимое source PR.
-- В `doc_verify` exact protected-fragment invariant отвергает ручное изменение
-  URL/path/code относительно authoritative source без navigation graph или link
-  resolver.
+- В `doc_verify` protected-fragment invariant отвергает ручное изменение
+  URL/path/code относительно authoritative source, кроме валидных target-local
+  Markdown link/image destinations. Navigation graph и отдельный link resolver
+  не строятся; результат проверяет полный Diplodoc build.
 - Model critic сравнивает authoritative source и final target, проверяя смысл,
   полноту, терминологию и работоспособность ссылок. Если совместный prompt велик,
   critic получает соответствующие source/target excerpt-пары, а не полный target

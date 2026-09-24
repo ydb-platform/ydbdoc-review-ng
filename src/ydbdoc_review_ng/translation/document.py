@@ -500,6 +500,68 @@ def verify_document_candidate(
         raise DocumentTranslationError("document_response:structure_mismatch")
 
 
+_LOCALIZABLE_LINK_KINDS = {ProtectedKind.LINK_CLOSE, ProtectedKind.IMAGE_CLOSE}
+
+
+def _has_localizable_link_regions(plan: SourcePlan) -> bool:
+    return any(
+        region.kind in _LOCALIZABLE_LINK_KINDS
+        for field in fields_of(plan)
+        for region in field.protected_regions
+    )
+
+
+def _normalize_localized_link_regions(
+    source: bytes,
+    source_plan: SourcePlan,
+    target: bytes,
+    target_plan: SourcePlan,
+) -> bytes:
+    def regions(content: bytes, value: SourcePlan) -> tuple[tuple[ProtectedKind, int, int, bytes], ...]:
+        return tuple(
+            sorted(
+                (
+                    (region.kind, region.span.start, region.span.end, content[region.span.start : region.span.end])
+                    for field in fields_of(value)
+                    for region in field.protected_regions
+                    if region.kind in _LOCALIZABLE_LINK_KINDS
+                ),
+                key=lambda item: item[1],
+            )
+        )
+
+    source_regions = regions(source, source_plan)
+    target_regions = regions(target, target_plan)
+    if len(source_regions) != len(target_regions) or tuple(
+        item[0] for item in source_regions
+    ) != tuple(item[0] for item in target_regions):
+        raise DocumentTranslationError("document_response:structure_mismatch")
+    normalized = bytearray(target)
+    for source_region, target_region in reversed(tuple(zip(source_regions, target_regions, strict=True))):
+        normalized[target_region[1] : target_region[2]] = source_region[3]
+    return bytes(normalized)
+
+
+def _verify_with_localized_links(
+    source: bytes,
+    source_plan: SourcePlan,
+    target: bytes,
+    target_plan: SourcePlan,
+    *,
+    localized_links: bool,
+) -> None:
+    if not localized_links:
+        verify_document_candidate(source, source_plan, target, target_plan)
+        return
+    normalized = _normalize_localized_link_regions(source, source_plan, target, target_plan)
+    normalized_plan = build_markdown_plan(
+        target_plan.source_snapshot,
+        target_plan.source_path,
+        normalized,
+    )
+    verify_document_candidate(source, source_plan, normalized, normalized_plan)
+
+
 def _render_span(
     source: bytes,
     start: int,
@@ -527,6 +589,7 @@ def prepare_document(
     source_locale: str | None = None,
     target_locale: str | None = None,
     operator_context: str | None = None,
+    localize_link_destinations: bool = False,
 ) -> DocumentTranslationRequest:
     """Expose complete Markdown, replacing only parser-owned opaque regions globally."""
     if type(source) is not bytes or type(plan) is not SourcePlan:
@@ -539,6 +602,8 @@ def prepare_document(
         raise TypeError("source and target locale must both be strings or both be omitted")
     if operator_context is not None and type(operator_context) is not str:
         raise TypeError("operator_context must be a string or None")
+    if type(localize_link_destinations) is not bool:
+        raise TypeError("localize_link_destinations must be a bool")
     validate_source_plan(source, plan)
 
     raw_regions = sorted(
@@ -546,6 +611,10 @@ def prepare_document(
             (region.span.start, region.span.end, region.kind)
             for field in fields_of(plan)
             for region in field.protected_regions
+            if not (
+                localize_link_destinations
+                and region.kind in _LOCALIZABLE_LINK_KINDS
+            )
         )
         + tuple(
             (start, end, ProtectedKind.MARKDOWN_SYNTAX)
@@ -688,7 +757,8 @@ def build_document_prompt(
             f"Synchronize the existing {target_locale} Markdown with the authoritative "
             f"{source_locale} Markdown. Preserve correct existing target wording where equivalent; "
             "add, update, or remove only to match source. Existing target is reference context "
-            "only. Never copy technical fragments from target. Do not add facts absent from source. "
+            "only. Preserve correct target-local Markdown link destinations when source and target "
+            "paths differ. Do not add facts absent from source. "
             + common
             + f"\n\n<AUTHORITATIVE_SOURCE_{source_locale.upper()}>\n"
             + chunk.text
@@ -804,8 +874,16 @@ def validate_chunk_response(
     from ydbdoc_review_ng.translation.assembly import ProtectedMismatch
 
     try:
-        verify_document_candidate(
-            source_chunk, source_plan_value, candidate_chunk, target_plan_value
+        localized_links = _has_localizable_link_regions(source_plan_value) and not any(
+            by_placeholder[token].kind in _LOCALIZABLE_LINK_KINDS
+            for token in chunk.placeholders
+        )
+        _verify_with_localized_links(
+            source_chunk,
+            source_plan_value,
+            candidate_chunk,
+            target_plan_value,
+            localized_links=localized_links,
         )
     except DocumentTranslationError:
         raise
@@ -859,7 +937,16 @@ def restore_document(
     candidate = _normalize_publishable_markdown(source, candidate)
     try:
         target_plan = build_markdown_plan(plan.source_snapshot, plan.source_path, candidate)
-        verify_document_candidate(source, plan, candidate, target_plan)
+        localized_links = _has_localizable_link_regions(plan) and not any(
+            item.kind in _LOCALIZABLE_LINK_KINDS for item in request.placeholders
+        )
+        _verify_with_localized_links(
+            source,
+            plan,
+            candidate,
+            target_plan,
+            localized_links=localized_links,
+        )
     except (UnicodeError, ValueError, TypeError):
         raise DocumentTranslationError("document_response:structure_mismatch") from None
     return candidate
