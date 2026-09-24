@@ -190,8 +190,7 @@ def test_translate_document_uses_complete_markdown_and_selected_direction(
         source_locale=source_locale,
     )
     response = (
-        "# Translated heading\n\nText with "
-        "[[YDBDOC_PROTECTED_0001]]guide](guide.md).\n\n- One\n- Two\n"
+        "# Translated heading\n\nText with [guide](guide.md).\n\n- One\n- Two\n"
     )
     models = ScriptedModels([response])
 
@@ -228,10 +227,7 @@ def test_existing_target_preserves_its_localized_link_destination() -> None:
     )
     models = ScriptedModels(
         [
-            (
-                "See [[YDBDOC_PROTECTED_0001]]query hints]"
-                "(./dev/query-execution-optimization/query-hints.md).\n"
-            )
+            "See [query hints](./dev/query-execution-optimization/query-hints.md).\n"
         ]
     )
 

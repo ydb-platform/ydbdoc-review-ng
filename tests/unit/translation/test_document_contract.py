@@ -84,8 +84,8 @@ def test_existing_target_can_localize_markdown_link_destinations() -> None:
         localize_link_destinations=True,
     )
 
-    assert "](./dev/optimization/hints.md)" in request.chunks[0].text
-    assert all(item.kind is not ProtectedKind.LINK_CLOSE for item in request.placeholders)
+    assert "[query hints](./dev/optimization/hints.md)" in request.chunks[0].text
+    assert all(item.kind not in {ProtectedKind.LINK_OPEN, ProtectedKind.LINK_CLOSE} for item in request.placeholders)
 
 
 def test_global_placeholders_restore_exact_bytes_and_reject_contract_drift() -> None:

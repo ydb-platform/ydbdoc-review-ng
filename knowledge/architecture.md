@@ -8,7 +8,7 @@
   fragments исходника. Старый target не является материалом для склейки.
 - URL, path, anchor и код являются protected source fragments. Для нового target
   модель не задаёт их содержимое. При синхронизации существующего target только
-  Markdown link/image destination может сохранить target-local путь; parse и
+  Markdown link/image-конструкция может сохранить target-local путь; parse и
   полный Diplodoc build проверяют результат до публикации.
 
 ## Минимальный поток

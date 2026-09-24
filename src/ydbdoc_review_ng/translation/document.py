@@ -500,7 +500,12 @@ def verify_document_candidate(
         raise DocumentTranslationError("document_response:structure_mismatch")
 
 
-_LOCALIZABLE_LINK_KINDS = {ProtectedKind.LINK_CLOSE, ProtectedKind.IMAGE_CLOSE}
+_LOCALIZABLE_LINK_KINDS = {
+    ProtectedKind.LINK_OPEN,
+    ProtectedKind.LINK_CLOSE,
+    ProtectedKind.IMAGE_OPEN,
+    ProtectedKind.IMAGE_CLOSE,
+}
 
 
 def _has_localizable_link_regions(plan: SourcePlan) -> bool:
