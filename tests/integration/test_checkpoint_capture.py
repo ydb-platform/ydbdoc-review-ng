@@ -336,6 +336,27 @@ def test_green_does_not_open_checkpoint():
     assert services.rows == {}
 
 
+def test_provider_non_final_translation_is_rejected_before_publication():
+    class NonFinalServices(CaptureServices):
+        def model(self, request):
+            response = super().model(request)
+            payload = json.loads(response.body)
+            payload["result"]["alternatives"][0]["status"] = (
+                "ALTERNATIVE_STATUS_TRUNCATED_FINAL"
+            )
+            return HttpResponse(200, json.dumps(payload).encode(), Decimal("0.01"))
+
+    services = NonFinalServices(names=("a",))
+
+    with pytest.raises(WorkflowError):
+        services.translate()
+
+    attempts = [row for row in services.audit if "attempt_id" in row]
+    assert services.roles == ["translate"]
+    assert len(attempts) == 1 and attempts[0]["error"] == "non_final"
+    assert services.commits == 0 and services.blobs == {} and services.tree == []
+
+
 def test_red_pure_rename_replays_whole_counterpart_as_a_complete_document():
     services = CaptureServices(names=("a",), stop="rename_red")
     services.changes = [

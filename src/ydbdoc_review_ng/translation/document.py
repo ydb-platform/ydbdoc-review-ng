@@ -17,6 +17,7 @@ from ydbdoc_review_ng.plan import (
 
 _TOKEN = re.compile(r"\[\[YDBDOC_PROTECTED_[0-9]+\]\]")
 _PLACEHOLDER_LIKE = re.compile(r"\[\[YDBDOC_PROTECTED_[^\]\r\n]{0,64}\]\]")
+RAW_MARKDOWN_RESPONSE_MAX_CHARACTERS = 16_000
 
 
 class DocumentTranslationError(ValueError):
@@ -216,6 +217,8 @@ def prepare_document(
     def fits(text: str, block_start: int, block_end: int) -> bool:
         if source_locale is None or target_locale is None:
             return len(text) <= max_characters
+        if len(text) > RAW_MARKDOWN_RESPONSE_MAX_CHARACTERS:
+            return False
         chunk = DocumentChunk(text, block_start, block_end, tuple(_TOKEN.findall(text)))
         prompts = [
             build_document_prompt(chunk, source_locale, target_locale),

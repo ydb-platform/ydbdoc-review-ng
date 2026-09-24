@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from itertools import pairwise
 from typing import cast
 
 import pytest
@@ -44,6 +45,15 @@ class ScriptedModels:
         if type(response) is ModelCallResult:
             return response
         return ModelCallResult(cast(str, response), None, ())
+
+
+class EchoChunkModels:
+    def __init__(self) -> None:
+        self.calls: list[ModelRequest] = []
+
+    def invoke(self, request: ModelRequest, /) -> ModelCallResult:
+        self.calls.append(request)
+        return ModelCallResult(request.prompt.split("\n\n", 1)[1], None, ())
 
 
 def document_for(source: bytes, *, source_locale: Locale = Locale.RU) -> Document:
@@ -106,6 +116,36 @@ def test_translate_document_uses_complete_markdown_and_selected_direction(
     )
 
 
+@pytest.mark.parametrize("source_locale", [Locale.RU, Locale.EN])
+def test_large_document_uses_minimum_response_safe_raw_chunks(
+    source_locale: Locale,
+) -> None:
+    source = "\n\n".join(
+        f"Paragraph {number:03d} " + "x" * 775 for number in range(140)
+    ).encode() + b"\n"
+    assert 110_000 < len(source.decode()) < 112_000
+    document = document_for(source, source_locale=source_locale)
+    models = EchoChunkModels()
+
+    accepted = content_with(
+        models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "250000"}
+    ).translate_document(document)
+
+    raw_chunks = tuple(call.prompt.split("\n\n", 1)[1] for call in models.calls)
+    assert len(raw_chunks) > 1
+    assert all(len(chunk) <= 16_000 for chunk in raw_chunks)
+    assert all(
+        len(left + right) > 16_000
+        for left, right in pairwise(raw_chunks)
+    )
+    assert all(call.max_tokens == 8_000 and call.schema is None for call in models.calls)
+    assert "".join(raw_chunks).encode() == source
+    assert (
+        assemble_candidate(document.source, document.plan, document.request, accepted.as_dict())
+        == source
+    )
+
+
 def test_complete_markdown_response_gets_exactly_one_technical_correction() -> None:
     document = document_for(b"# See [guide](guide.md).\n")
     prepared = prepare_document(document.source, document.plan, max_characters=100_000)
@@ -142,6 +182,18 @@ def test_prompt_limit_failure_happens_before_model_call() -> None:
     with pytest.raises(DocumentTranslationError, match="top_level_block_exceeds_limit"):
         content_with(
             models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "520"}
+        ).translate_document(document)
+
+    assert models.calls == []
+
+
+def test_response_cap_rejects_one_oversized_top_level_block_before_model_call() -> None:
+    document = document_for(("One indivisible paragraph " + "x" * 16_001 + "\n").encode())
+    models = ScriptedModels([])
+
+    with pytest.raises(DocumentTranslationError, match="top_level_block_exceeds_limit"):
+        content_with(
+            models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "250000"}
         ).translate_document(document)
 
     assert models.calls == []

@@ -33,7 +33,10 @@ from ydbdoc_review_ng.translation import (
     verify_protected_fragments,
 )
 from ydbdoc_review_ng.translation.contract import field_request_text
-from ydbdoc_review_ng.translation.document import _document_block_texts
+from ydbdoc_review_ng.translation.document import (
+    RAW_MARKDOWN_RESPONSE_MAX_CHARACTERS,
+    _document_block_texts,
+)
 
 
 class ModelExecutor(Protocol):
@@ -318,7 +321,14 @@ def _repair_requests(
         accepted: tuple[DocumentChunk, ModelRequest] | None = None
         while end <= len(source_blocks):
             candidate = unit(start, end)
-            if len(candidate[1].prompt) > max_characters:
+            if (
+                max(
+                    len("".join(source_blocks[start:end])),
+                    len("".join(target_blocks[start:end])),
+                )
+                > RAW_MARKDOWN_RESPONSE_MAX_CHARACTERS
+                or len(candidate[1].prompt) > max_characters
+            ):
                 break
             accepted = candidate
             end += 1
