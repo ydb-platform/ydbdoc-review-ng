@@ -8,7 +8,7 @@ from decimal import Decimal
 
 def raw_translation_source(prompt):
     source = prompt.split("\n\n", 1)[1]
-    for marker in ("\n\nOperator context:\n", "\n\nValidator error: "):
+    for marker in ("\n\nOperator context:\n", "\n\nImportant correction:\n"):
         source = source.split(marker, 1)[0]
     return source
 
@@ -31,9 +31,7 @@ def rewrite_markdown(source, word="Translated", *, preserve_suffix=False):
 
 
 def translated_markdown(prompt, word="Translated", *, preserve_suffix=False):
-    return rewrite_markdown(
-        raw_translation_source(prompt), word, preserve_suffix=preserve_suffix
-    )
+    return rewrite_markdown(raw_translation_source(prompt), word, preserve_suffix=preserve_suffix)
 
 
 class RuntimeServices:
@@ -179,9 +177,7 @@ class RuntimeServices:
             prompt = body["messages"][-1]["text"]
             if prompt.startswith("Repair"):
                 self.events.append(("REPAIR", "markdown"))
-                text = rewrite_markdown(
-                    raw_repair_context(prompt, "current-target"), "Corrected"
-                )
+                text = rewrite_markdown(raw_repair_context(prompt, "current-target"), "Corrected")
             else:
                 self.events.append(("MODEL", ("raw_markdown",)))
                 text = translated_markdown(prompt)

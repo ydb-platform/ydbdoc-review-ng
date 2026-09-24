@@ -176,9 +176,7 @@ class CaptureServices(RuntimeServices):
         if schema_wrapper is None:
             if prompt.startswith("Repair"):
                 role = "repair"
-                text = rewrite_markdown(
-                    raw_repair_context(prompt, "current-target"), "Corrected"
-                )
+                text = rewrite_markdown(raw_repair_context(prompt, "current-target"), "Corrected")
             else:
                 role = "translate"
                 self.translations += 1
@@ -301,6 +299,35 @@ def test_two_invalid_current_field_responses_preserve_first_map_and_pending_orde
     assert services.commits == 0 and services.audit[-1]["status"] == "failed"
 
 
+def test_twice_lost_known_placeholder_publishes_red_with_manual_action() -> None:
+    services = CaptureServices(names=("a",))
+    source_path = "ydb/docs/ru/core/a.md"
+    target_path = "ydb/docs/en/core/a.md"
+    for files in [services.files, *services.snapshots.values()]:
+        files[source_path] = b"# Source `CPUTime`\n"
+        files[target_path] = b"# Old\n"
+
+    result = services.translate()
+
+    assert result.verdict is Verdict.RED
+    assert services.roles == ["translate", "translate"]
+    assert services.critics == 0
+    assert services.commits == 1
+    assert services.files[target_path] == b"# Translated\n"
+    comment = services.comments[-1]["body"]
+    assert "RED\n" in comment
+    assert "[[YDBDOC_PROTECTED_" in comment
+    assert "`CPUTime`" in comment
+    assert target_path in comment
+    assert "source line 1" in comment
+    assert "# Translated" in comment
+    assert "line 1" in comment
+    assert "rerun doc_verify" in comment
+    checkpoint = services.checkpoint()
+    assert checkpoint.state.stage is ContinuationStage.REVIEW
+    assert checkpoint.state.review_paths == (RepoPath(target_path),)
+
+
 @pytest.mark.parametrize("mode", ["translate", "verify"])
 def test_review_red_saves_final_repair_map_exact_published_candidate_and_unresolved_paths(mode):
     services = CaptureServices(stop="review")
@@ -341,9 +368,7 @@ def test_provider_non_final_translation_is_rejected_before_publication():
         def model(self, request):
             response = super().model(request)
             payload = json.loads(response.body)
-            payload["result"]["alternatives"][0]["status"] = (
-                "ALTERNATIVE_STATUS_TRUNCATED_FINAL"
-            )
+            payload["result"]["alternatives"][0]["status"] = "ALTERNATIVE_STATUS_TRUNCATED_FINAL"
             return HttpResponse(200, json.dumps(payload).encode(), Decimal("0.01"))
 
     services = NonFinalServices(names=("a",))

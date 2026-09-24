@@ -7,6 +7,7 @@ from ydbdoc_review_ng.parser.markdown import build_markdown_plan
 from ydbdoc_review_ng.plan import ProtectedKind
 from ydbdoc_review_ng.translation.document import (
     DocumentTranslationError,
+    build_document_correction_note,
     build_document_prompt,
     prepare_document,
     restore_document,
@@ -66,15 +67,9 @@ def test_global_placeholders_restore_exact_bytes_and_reject_contract_drift() -> 
     "invalid",
     [
         "See  and [[YDBDOC_PROTECTED_0002]].\n",
-        (
-            "See [[YDBDOC_PROTECTED_0001]][[YDBDOC_PROTECTED_0001]] and "
-            "[[YDBDOC_PROTECTED_0002]].\n"
-        ),
+        ("See [[YDBDOC_PROTECTED_0001]][[YDBDOC_PROTECTED_0001]] and [[YDBDOC_PROTECTED_0002]].\n"),
         "See [[YDBDOC_PROTECTED_9999]] and [[YDBDOC_PROTECTED_0002]].\n",
-        (
-            "See [[YDBDOC_PROTECTED_X]] [[YDBDOC_PROTECTED_0001]] and "
-            "[[YDBDOC_PROTECTED_0002]].\n"
-        ),
+        ("See [[YDBDOC_PROTECTED_X]] [[YDBDOC_PROTECTED_0001]] and [[YDBDOC_PROTECTED_0002]].\n"),
     ],
     ids=["missing", "repeated", "numeric-unknown", "malformed-unknown"],
 )
@@ -104,13 +99,9 @@ def test_identical_inline_code_tokens_cannot_exchange_source_fields() -> None:
     source = b"First `SAME`.\n\nSecond `SAME`.\n"
     plan, request = prepared(source)
     assert request.chunks[0].text == (
-        "First [[YDBDOC_PROTECTED_0001]].\n\n"
-        "Second [[YDBDOC_PROTECTED_0002]].\n"
+        "First [[YDBDOC_PROTECTED_0001]].\n\nSecond [[YDBDOC_PROTECTED_0002]].\n"
     )
-    exchanged = (
-        "First [[YDBDOC_PROTECTED_0002]].\n\n"
-        "Second [[YDBDOC_PROTECTED_0001]].\n"
-    )
+    exchanged = "First [[YDBDOC_PROTECTED_0002]].\n\nSecond [[YDBDOC_PROTECTED_0001]].\n"
 
     with pytest.raises(DocumentTranslationError, match="placeholder_mismatch"):
         restore_document(source, plan, request, (exchanged,))
@@ -140,10 +131,11 @@ def test_supported_fence_identical_inline_tokens_cannot_exchange_comment_fields(
         "[[YDBDOC_PROTECTED_0003]]Second [[YDBDOC_PROTECTED_0004]]."
         "[[YDBDOC_PROTECTED_0005]]```\n"
     )
-    exchanged = request.chunks[0].text.replace(
-        "[[YDBDOC_PROTECTED_0002]]", "TEMP", 1
-    ).replace("[[YDBDOC_PROTECTED_0004]]", "[[YDBDOC_PROTECTED_0002]]", 1).replace(
-        "TEMP", "[[YDBDOC_PROTECTED_0004]]", 1
+    exchanged = (
+        request.chunks[0]
+        .text.replace("[[YDBDOC_PROTECTED_0002]]", "TEMP", 1)
+        .replace("[[YDBDOC_PROTECTED_0004]]", "[[YDBDOC_PROTECTED_0002]]", 1)
+        .replace("TEMP", "[[YDBDOC_PROTECTED_0004]]", 1)
     )
 
     with pytest.raises(DocumentTranslationError, match="placeholder_mismatch"):
@@ -171,9 +163,7 @@ def test_field_local_mobility_rejects_opaque_block_reorder() -> None:
     plan, request = prepared(source)
     text = request.chunks[0].text
     first, second = (item.token for item in request.placeholders)
-    reordered = (
-        text.replace(first, "TEMP", 1).replace(second, first, 1).replace("TEMP", second, 1)
-    )
+    reordered = text.replace(first, "TEMP", 1).replace(second, first, 1).replace("TEMP", second, 1)
 
     with pytest.raises(DocumentTranslationError, match="placeholder_mismatch"):
         restore_document(source, plan, request, (reordered,))
@@ -245,10 +235,7 @@ def test_whole_document_response_rejects_link_move_between_preserved_blocks() ->
     source = b"[Guide](guide.md) first.\n\nSecond paragraph.\n"
     plan, request = prepared(source)
     open_token, close_token = (item.token for item in request.placeholders)
-    response = (
-        "First paragraph.\n\n"
-        f"Second {open_token}Guide{close_token}.\n"
-    )
+    response = f"First paragraph.\n\nSecond {open_token}Guide{close_token}.\n"
 
     with pytest.raises(DocumentTranslationError, match="placeholder_mismatch"):
         restore_document(source, plan, request, (response,))
@@ -258,11 +245,7 @@ def test_block_merge_does_not_hide_link_move_between_other_blocks() -> None:
     source = b"[Guide](guide.md) first.\n\nSecond paragraph.\n\nThird paragraph.\n"
     plan, request = prepared(source)
     open_token, close_token = (item.token for item in request.placeholders)
-    response = (
-        "First paragraph.\n\n"
-        f"Second {open_token}Guide{close_token}.\n"
-        "Third paragraph.\n"
-    )
+    response = f"First paragraph.\n\nSecond {open_token}Guide{close_token}.\nThird paragraph.\n"
 
     with pytest.raises(DocumentTranslationError, match="placeholder_mismatch"):
         restore_document(source, plan, request, (response,))
@@ -272,10 +255,7 @@ def test_unrelated_block_merge_keeps_inline_code_mobility_in_one_field() -> None
     source = b"Views `a` and `b`.\n\nSecond paragraph.\n\nThird paragraph.\n"
     plan, request = prepared(source)
     first, second = (item.token for item in request.placeholders)
-    response = (
-        f"Views {second} and {first}.\n\n"
-        "Second paragraph.\nThird paragraph.\n"
-    )
+    response = f"Views {second} and {first}.\n\nSecond paragraph.\nThird paragraph.\n"
 
     candidate = restore_document(source, plan, request, (response,))
 
@@ -286,10 +266,7 @@ def test_block_merge_does_not_hide_inline_code_move_between_fields() -> None:
     source = b"First `a`.\n\nSecond `b`.\n\nThird paragraph.\n"
     plan, request = prepared(source)
     first, second = (item.token for item in request.placeholders)
-    response = (
-        f"First {second}.\n\n"
-        f"Second {first}.\nThird paragraph.\n"
-    )
+    response = f"First {second}.\n\nSecond {first}.\nThird paragraph.\n"
 
     with pytest.raises(DocumentTranslationError, match="placeholder_mismatch"):
         restore_document(source, plan, request, (response,))
@@ -304,9 +281,7 @@ def test_block_merge_does_not_hide_inline_code_swap_between_fields_in_yfm_block(
     )
     plan, request = prepared(source)
     first, second = (
-        item.token
-        for item in request.placeholders
-        if item.kind is ProtectedKind.INLINE_CODE
+        item.token for item in request.placeholders if item.kind is ProtectedKind.INLINE_CODE
     )
     response = request.chunks[0].text
     response = response.replace(first, "TEMP", 1).replace(second, first, 1)
@@ -353,9 +328,7 @@ def test_translated_abbreviation_is_not_treated_as_mutated_source_path() -> None
     ).encode()
     plan, request = prepared(source)
     token = request.placeholders[0].token
-    response = (
-        f"* {token} — enables strict rules (i.e., only an administrator);\n"
-    )
+    response = f"* {token} — enables strict rules (i.e., only an administrator);\n"
 
     candidate = restore_document(source, plan, request, (response,))
 
@@ -375,16 +348,19 @@ def test_block_kind_change_is_left_for_critic_review() -> None:
 
 
 def test_configured_limit_applies_to_each_complete_prompt_with_minimum_chunks() -> None:
-    source = b"\n\n".join(
-        (
-            b"Paragraph one has thirty seven letters.",
-            b"Paragraph two has thirty seven letters.",
-            b"Paragraph three has thirty five chars.",
-            b"Paragraph four has thirty six letters.",
-            b"Paragraph five has thirty six letters.",
-            b"Paragraph six has thirty seven letters.",
+    source = (
+        b"\n\n".join(
+            (
+                b"Paragraph one has thirty seven letters.",
+                b"Paragraph two has thirty seven letters.",
+                b"Paragraph three has thirty five chars.",
+                b"Paragraph four has thirty six letters.",
+                b"Paragraph five has thirty six letters.",
+                b"Paragraph six has thirty seven letters.",
+            )
         )
-    ) + b"\n"
+        + b"\n"
+    )
     plan = build_markdown_plan(SNAPSHOT, PATH, source)
     operator_context = "Reviewer context"
 
@@ -398,16 +374,18 @@ def test_configured_limit_applies_to_each_complete_prompt_with_minimum_chunks() 
     )
     prompts = tuple(
         (
-            build_document_prompt(chunk, "ru", "en")
-            + "\n\nOperator context:\n"
-            + operator_context,
+            build_document_prompt(chunk, "ru", "en") + "\n\nOperator context:\n" + operator_context,
             build_document_prompt(
                 chunk,
                 "ru",
                 "en",
                 correction=True,
-                rejected_translation=chunk.text,
-                validator_error="document_response:placeholder_mismatch",
+                correction_note=build_document_correction_note(
+                    source,
+                    chunk,
+                    request.placeholders,
+                    chunk.placeholders,
+                ),
             )
             + "\n\nOperator context:\n"
             + operator_context,
@@ -472,10 +450,7 @@ def test_complete_candidate_reparse_preserves_structural_block_kinds() -> None:
             b"Translatable comment",
         ),
         (
-            (
-                b'{% note info "Visible title" %}\n```text\nOPAQUE_NESTED_TEXT\n```\n'
-                b"{% endnote %}\n"
-            ),
+            (b'{% note info "Visible title" %}\n```text\nOPAQUE_NESTED_TEXT\n```\n{% endnote %}\n'),
             b"OPAQUE_NESTED_TEXT",
             b"Visible title",
         ),
@@ -497,6 +472,7 @@ def test_source_owned_opaque_bytes_never_reach_model_and_restore_exactly(
 
     assert opaque not in model_text
     assert visible in model_text
-    assert restore_document(
-        source, plan, request, tuple(chunk.text for chunk in request.chunks)
-    ) == source
+    assert (
+        restore_document(source, plan, request, tuple(chunk.text for chunk in request.chunks))
+        == source
+    )

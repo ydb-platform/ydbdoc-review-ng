@@ -53,6 +53,7 @@ from ydbdoc_review_ng.plan import ProtectedKind, SourcePlan, fields_of
 from ydbdoc_review_ng.publication import FileChange, GitPublicationAdapter, PublicationPlan
 from ydbdoc_review_ng.quality import (
     CriticResult,
+    Finding,
     QualityInputError,
     QualityReviewResult,
     Verdict,
@@ -81,8 +82,10 @@ from ydbdoc_review_ng.translation import (
     TranslationField,
     TranslationRequest,
     assemble_candidate,
+    build_document_correction_note,
     build_document_prompt,
     build_translation_request,
+    document_placeholder_context,
     parse_translation_response,
     prepare_document,
     restore_document,
@@ -91,10 +94,7 @@ from ydbdoc_review_ng.translation import (
     validate_translation_values,
     verify_document_candidate,
 )
-from ydbdoc_review_ng.translation.document import (
-    RAW_MARKDOWN_RESPONSE_MAX_CHARACTERS,
-    _document_block_texts,
-)
+from ydbdoc_review_ng.translation.document import _document_block_texts
 
 if TYPE_CHECKING:
     from ydbdoc_review_ng.persistence import ContinuationCheckpoint
@@ -159,6 +159,27 @@ class _TranslationSegment:
     suffix: str
 
 
+def _placeholder_differences(
+    required_placeholders: tuple[str, ...], rejected_value: str, /
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    returned = tuple(_DIAGNOSTIC_PLACEHOLDER.findall(rejected_value))
+    returned_counts = Counter(returned)
+    missing = []
+    for token in required_placeholders:
+        if returned_counts[token]:
+            returned_counts[token] -= 1
+        else:
+            missing.append(token)
+    required_counts = Counter(required_placeholders)
+    unexpected = []
+    for token in returned:
+        if required_counts[token]:
+            required_counts[token] -= 1
+        else:
+            unexpected.append(token)
+    return tuple(missing), tuple(unexpected)
+
+
 def _corrective_translation_request(
     request: ModelRequest,
     required_placeholders: tuple[str, ...],
@@ -175,22 +196,8 @@ def _corrective_translation_request(
         "order. "
     )
     if rejected_value is not None:
-        returned = tuple(_DIAGNOSTIC_PLACEHOLDER.findall(rejected_value))
-        if returned != required_placeholders:
-            returned_counts = Counter(returned)
-            missing = []
-            for token in required_placeholders:
-                if returned_counts[token]:
-                    returned_counts[token] -= 1
-                else:
-                    missing.append(token)
-            required_counts = Counter(required_placeholders)
-            unexpected = []
-            for token in returned:
-                if required_counts[token]:
-                    required_counts[token] -= 1
-                else:
-                    unexpected.append(token)
+        missing, unexpected = _placeholder_differences(required_placeholders, rejected_value)
+        if missing or unexpected:
             correction += (
                 f"Missing placeholders: {json.dumps(missing)}. "
                 f"Unexpected placeholders: {json.dumps(unexpected)}. "
@@ -441,6 +448,7 @@ class RuntimeContent:
         self.entries: tuple[ScopeEntry, ...] = ()
         self.accepted_documents: tuple[AcceptedDocument, ...] = ()
         self.accepted_maps: tuple[AcceptedMap, ...] = ()
+        self.translation_findings: dict[RepoPath, tuple[Finding, ...]] = {}
         self.plans: FrozenSourcePlans | None = None
         self.review_paths: tuple[RepoPath, ...] | None = None
         self.review_operator_context: str | None = None
@@ -810,9 +818,7 @@ class RuntimeContent:
             self.accepted_documents = tuple(
                 sorted(accepted_full, key=lambda item: item.target_path.value)
             )
-        return self.assemble_documents(
-            plans, self.accepted_documents, self.accepted_maps
-        )
+        return self.assemble_documents(plans, self.accepted_documents, self.accepted_maps)
 
     def load_verification_candidate(self, snapshot: ImmutableRunSnapshot, /) -> WorkflowCandidate:
         self.accepted_documents = ()
@@ -823,9 +829,7 @@ class RuntimeContent:
     def translate_document(
         self, document: Document, /, *, operator_context: str | None = None
     ) -> AcceptedMap:
-        accepted, _document = self._translate_document(
-            document, operator_context=operator_context
-        )
+        accepted, _document = self._translate_document(document, operator_context=operator_context)
         return accepted
 
     def _translate_document(
@@ -845,32 +849,63 @@ class RuntimeContent:
             target_locale=entry.pair.target_locale.value,
             operator_context=operator_context,
         )
-        block_texts = _document_block_texts(
-            document.source, document.plan, prepared.placeholders
-        )
+        block_texts = _document_block_texts(document.source, document.plan, prepared.placeholders)
         effective_chunks: list[DocumentChunk] = []
         responses: list[str] = []
+        degraded_findings: list[Finding] = []
+        by_placeholder = {item.token: item for item in prepared.placeholders}
+
+        def candidate_location(
+            chunk: DocumentChunk, rejected: str, missing_token: str
+        ) -> tuple[str, int]:
+            missing_index = chunk.placeholders.index(missing_token)
+            neighbors = sorted(
+                (
+                    (abs(index - missing_index), index > missing_index, token)
+                    for index, token in enumerate(chunk.placeholders)
+                    if token != missing_token and token in rejected
+                )
+            )
+            position = rejected.find(neighbors[0][2]) if neighbors else -1
+            local_line = rejected[: max(position, 0)].count("\n") + 1
+            candidate_lines = rejected.splitlines()
+            if not candidate_lines:
+                return "translated document is empty", 1 + sum(
+                    response.count("\n") for response in responses
+                )
+            if position < 0:
+                local_line = next(
+                    (index for index, line in enumerate(candidate_lines, 1) if line.strip()),
+                    1,
+                )
+            line = candidate_lines[min(local_line, len(candidate_lines)) - 1]
+            snippet = _DIAGNOSTIC_PLACEHOLDER.sub(
+                lambda match: by_placeholder[match.group()].source_bytes.decode(
+                    "utf-8", errors="replace"
+                ),
+                line,
+            ).strip()
+            if not snippet:
+                snippet = "translated line is empty"
+            target_line = local_line + sum(response.count("\n") for response in responses)
+            return snippet[:160], target_line
 
         def invoke_chunk(
             chunk: DocumentChunk, chunk_index: int
         ) -> tuple[str | None, AttemptError | None, bool]:
-            rejected_translation: str | None = None
-            validator_error: str | None = None
+            note: str | None = None
             for attempt in (1, 2):
                 prompt = build_document_prompt(
                     chunk,
                     entry.pair.source_locale.value,
                     entry.pair.target_locale.value,
                     correction=attempt == 2,
-                    rejected_translation=rejected_translation,
-                    validator_error=validator_error,
+                    correction_note=note,
                 )
                 if operator_context is not None:
                     prompt += "\n\nOperator context:\n" + operator_context
                 if len(prompt) > limit:
-                    raise DocumentTranslationError(
-                        "document_chunk:correction_prompt_exceeds_limit"
-                    )
+                    raise DocumentTranslationError("document_chunk:correction_prompt_exceeds_limit")
                 result = self.models.invoke(
                     ModelRequest(
                         ModelRole.TRANSLATE,
@@ -887,9 +922,59 @@ class RuntimeContent:
                     validate_chunk_response(chunk, prepared.placeholders, result.text)
                 except DocumentTranslationError as error:
                     if attempt == 2:
-                        raise InvalidTranslationResponse(
-                            "translation_response_invalid"
-                        ) from None
+                        missing, unexpected = _placeholder_differences(
+                            chunk.placeholders, result.text
+                        )
+                        if (
+                            str(error) == "document_response:placeholder_mismatch"
+                            and missing
+                            and not unexpected
+                        ):
+                            reduced = chunk.text
+                            for token in missing:
+                                reduced = reduced.replace(token, "", 1)
+                            reduced_chunk = DocumentChunk(
+                                reduced,
+                                chunk.block_start,
+                                chunk.block_end,
+                                tuple(
+                                    token
+                                    for token in chunk.placeholders
+                                    if token not in set(missing)
+                                ),
+                            )
+                            try:
+                                validate_chunk_response(
+                                    reduced_chunk, prepared.placeholders, result.text
+                                )
+                            except DocumentTranslationError:
+                                raise InvalidTranslationResponse(
+                                    "translation_response_invalid"
+                                ) from None
+                            for token in missing:
+                                placeholder = by_placeholder[token]
+                                source_text, source_line = document_placeholder_context(
+                                    document.source, placeholder
+                                )
+                                searchable_snippet, target_line = candidate_location(
+                                    chunk, result.text, token
+                                )
+                                degraded_findings.append(
+                                    Finding(
+                                        False,
+                                        f"The translation model lost protected placeholder "
+                                        f"{token}, which represents source text "
+                                        f"{json.dumps(source_text, ensure_ascii=False)}, near "
+                                        f"source line {source_line}.",
+                                        "Restore this exact source fragment in the corresponding "
+                                        "translated sentence, then rerun doc_verify.",
+                                        searchable_snippet,
+                                        entry.pair.target_path.value,
+                                        target_line,
+                                    )
+                                )
+                            return result.text, None, False
+                        raise InvalidTranslationResponse("translation_response_invalid") from None
                     write_trace(
                         "translation",
                         "chunk_validation",
@@ -900,8 +985,14 @@ class RuntimeContent:
                         attempt=attempt,
                         code="translation_response_invalid",
                     )
-                    rejected_translation = result.text
-                    validator_error = str(error)
+                    missing, _unexpected = _placeholder_differences(chunk.placeholders, result.text)
+                    note = build_document_correction_note(
+                        document.source,
+                        chunk,
+                        prepared.placeholders,
+                        missing,
+                        validation_problem=str(error),
+                    )
                 else:
                     return result.text, None, False
             raise AssertionError("translation semantic attempt bound exhausted")
@@ -914,34 +1005,17 @@ class RuntimeContent:
                 chunk_index=chunk_index,
                 chunks_total=len(prepared.chunks),
             ):
-                invalid_response = False
-                try:
-                    accepted_response, failure, failed_on_primary = invoke_chunk(
-                        chunk, chunk_index
-                    )
-                except InvalidTranslationResponse:
-                    accepted_response = None
-                    failure = None
-                    failed_on_primary = False
-                    invalid_response = True
+                accepted_response, failure, failed_on_primary = invoke_chunk(chunk, chunk_index)
                 if accepted_response is not None:
                     effective_chunks.append(chunk)
                     responses.append(accepted_response)
                     continue
                 children = (
                     split_content_filter_chunk(chunk, block_texts)
-                    if (
-                        invalid_response
-                        and len(chunk.text) > RAW_MARKDOWN_RESPONSE_MAX_CHARACTERS // 2
-                    )
-                    or (failure is AttemptError.CONTENT_FILTER and failed_on_primary)
+                    if failure is AttemptError.CONTENT_FILTER and failed_on_primary
                     else None
                 )
                 if children is None:
-                    if invalid_response:
-                        raise InvalidTranslationResponse(
-                            "translation_response_invalid"
-                        ) from None
                     raise RuntimeBoundaryError("translation_model_failed")
                 for child in children:
                     child_response, _child_failure, _child_primary = invoke_chunk(
@@ -955,9 +1029,29 @@ class RuntimeContent:
             effective_request = DocumentTranslationRequest(
                 tuple(effective_chunks), prepared.placeholders
             )
-            candidate = restore_document(
-                document.source, document.plan, effective_request, tuple(responses)
-            )
+            if degraded_findings:
+                normalized = tuple(
+                    response + "\n"
+                    if chunk.text.endswith("\n") and not response.endswith("\n")
+                    else response
+                    for chunk, response in zip(effective_request.chunks, responses, strict=True)
+                )
+                rendered = "".join(normalized)
+                candidate = _DIAGNOSTIC_PLACEHOLDER.sub(
+                    lambda match: by_placeholder[match.group()].source_bytes.decode("utf-8"),
+                    rendered,
+                ).encode("utf-8")
+                target_plan = build_markdown_plan(
+                    document.plan.source_snapshot,
+                    entry.pair.target_path,
+                    candidate,
+                )
+                if target_plan.diagnostics:
+                    raise DocumentTranslationError("document_response:structure_mismatch")
+            else:
+                candidate = restore_document(
+                    document.source, document.plan, effective_request, tuple(responses)
+                )
             try:
                 values = _derive_target_translations(
                     document.source,
@@ -971,6 +1065,8 @@ class RuntimeContent:
         except (DocumentTranslationError, ValueError, TypeError, UnicodeError):
             raise InvalidTranslationResponse("translation_response_invalid") from None
         accepted = AcceptedMap(entry.pair.target_path, tuple(sorted(values.items())))
+        if degraded_findings:
+            self.translation_findings[entry.pair.target_path] = tuple(degraded_findings)
         return accepted, AcceptedDocument(entry.pair.target_path, candidate.decode("utf-8"))
 
     @staticmethod
@@ -1001,9 +1097,7 @@ class RuntimeContent:
                 target_plan = build_markdown_plan(
                     document.plan.source_snapshot, accepted.target_path, target
                 )
-                verify_document_candidate(
-                    document.source, document.plan, target, target_plan
-                )
+                verify_document_candidate(document.source, document.plan, target, target_plan)
                 try:
                     values = _derive_target_translations(
                         document.source,
@@ -1014,9 +1108,7 @@ class RuntimeContent:
                     )
                 except QualityInputError:
                     values = {}
-                restored.append(
-                    AcceptedMap(accepted.target_path, tuple(sorted(values.items())))
-                )
+                restored.append(AcceptedMap(accepted.target_path, tuple(sorted(values.items()))))
         except (KeyError, TypeError, ValueError, UnicodeError):
             raise ContinuationStateError() from None
         return tuple(sorted(restored, key=lambda item: item.target_path.value))
@@ -1045,10 +1137,7 @@ class RuntimeContent:
             or not required_maps <= maps <= allowed
             or len(documents) != len(accepted_documents)
             or not required_maps <= document_paths
-            or any(
-                path not in allowed and path.value not in fixed_paths
-                for path in document_paths
-            )
+            or any(path not in allowed and path.value not in fixed_paths for path in document_paths)
         ):
             raise ContinuationStateError()
         files = dict(plans.fixed_files)
@@ -1150,6 +1239,10 @@ class RuntimeContent:
             target_plan = build_markdown_plan(
                 document.plan.source_snapshot, document.entry.pair.target_path, target
             )
+            if document.entry.pair.target_path in self.translation_findings:
+                if target_plan.diagnostics:
+                    raise RuntimeBoundaryError("candidate_markdown_invalid")
+                continue
             verify_document_candidate(document.source, document.plan, target, target_plan)
 
     def validate_candidate(
@@ -1196,6 +1289,26 @@ class RuntimeContent:
             restored_map = previous.get(path)
             target = files[path.value]
             assert target is not None
+
+            deterministic_findings = self.translation_findings.get(path)
+            if deterministic_findings:
+                deterministic = CriticResult(Verdict.RED, deterministic_findings)
+                reviews.append(
+                    QualityReviewResult(
+                        target,
+                        None,
+                        target,
+                        deterministic,
+                        deterministic,
+                        False,
+                        False,
+                        None,
+                        () if restored_map is None else (restored_map,),
+                    )
+                )
+                if restored_map is not None:
+                    accepted[path] = restored_map
+                continue
 
             def publish(value: bytes, path: RepoPath = path) -> None:
                 files[path.value] = value

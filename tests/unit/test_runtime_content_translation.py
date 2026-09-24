@@ -7,6 +7,7 @@ from typing import cast
 
 import pytest
 
+from ydbdoc_review_ng.application import ImmutableRunSnapshot
 from ydbdoc_review_ng.continuation import AcceptedDocument
 from ydbdoc_review_ng.domain import (
     FilePair,
@@ -19,6 +20,7 @@ from ydbdoc_review_ng.domain import (
 from ydbdoc_review_ng.locales import PairKey
 from ydbdoc_review_ng.models import AttemptError, ModelCallResult, ModelRequest
 from ydbdoc_review_ng.parser.markdown import build_markdown_plan
+from ydbdoc_review_ng.quality import Verdict
 from ydbdoc_review_ng.runtime import RecordedModels, RuntimeSource
 from ydbdoc_review_ng.runtime_content import (
     Document,
@@ -36,9 +38,7 @@ from ydbdoc_review_ng.translation import (
     build_document_prompt,
     build_translation_request,
     prepare_document,
-    split_content_filter_chunk,
 )
-from ydbdoc_review_ng.translation.document import _document_block_texts
 
 SOURCE_PATH = RepoPath("ydb/docs/ru/core/page.md")
 TARGET_PATH = RepoPath("ydb/docs/en/core/page.md")
@@ -74,9 +74,7 @@ def _heading_block(number: int, length: int) -> str:
 
 def content_filter_witness(*, with_leading_chunk: bool = False) -> bytes:
     lengths = [157] * 49 + [177] + [130] * 60 + [131]
-    witness = "".join(
-        _heading_block(number, length) for number, length in enumerate(lengths)
-    )
+    witness = "".join(_heading_block(number, length) for number, length in enumerate(lengths))
     if not with_leading_chunk:
         return witness.encode()
     return (_heading_block(999, 15_900) + witness).encode()
@@ -232,8 +230,7 @@ def test_continuation_revalidates_field_local_inline_code_grammar_order() -> Non
         "добавлена колонка `TraceId`.\n"
     ).encode()
     translated = (
-        b"* The `TraceId` column was added to `.sys/top_queries_*` and "
-        b"`.sys/query_sessions`.\n"
+        b"* The `TraceId` column was added to `.sys/top_queries_*` and `.sys/query_sessions`.\n"
     )
     document = document_for(source)
     plans = FrozenSourcePlans(cast(FrozenPreparation, object()), None, (document,), ())
@@ -245,9 +242,7 @@ def test_continuation_revalidates_field_local_inline_code_grammar_order() -> Non
 
     assert len(restored) == 1
     assert (
-        assemble_candidate(
-            document.source, document.plan, document.request, restored[0].as_dict()
-        )
+        assemble_candidate(document.source, document.plan, document.request, restored[0].as_dict())
         == translated
     )
 
@@ -291,9 +286,7 @@ def test_malformed_frontmatter_response_uses_one_technical_correction(
 ) -> None:
     source = b"---\ntitle: Source title\ndescription: Source value\n---\nSource body.\n"
     document = document_for(source)
-    malformed = (
-        '---\ntitle: "Broken title\ndescription: Invalid value\n---\nTranslated body.\n'
-    )
+    malformed = '---\ntitle: "Broken title\ndescription: Invalid value\n---\nTranslated body.\n'
     models = ScriptedModels([malformed, second_response])
 
     if succeeds:
@@ -319,9 +312,10 @@ def test_malformed_frontmatter_response_uses_one_technical_correction(
 def test_large_document_uses_minimum_response_safe_raw_chunks(
     source_locale: Locale,
 ) -> None:
-    source = "\n\n".join(
-        f"Paragraph {number:03d} " + "x" * 775 for number in range(140)
-    ).encode() + b"\n"
+    source = (
+        "\n\n".join(f"Paragraph {number:03d} " + "x" * 775 for number in range(140)).encode()
+        + b"\n"
+    )
     assert 110_000 < len(source.decode()) < 112_000
     document = document_for(source, source_locale=source_locale)
     models = EchoChunkModels()
@@ -333,10 +327,7 @@ def test_large_document_uses_minimum_response_safe_raw_chunks(
     raw_chunks = tuple(call.prompt.split("\n\n", 1)[1] for call in models.calls)
     assert len(raw_chunks) > 1
     assert all(len(chunk) <= 16_000 for chunk in raw_chunks)
-    assert all(
-        len(left + right) > 16_000
-        for left, right in pairwise(raw_chunks)
-    )
+    assert all(len(left + right) > 16_000 for left, right in pairwise(raw_chunks))
     assert all(call.max_tokens == 8_000 and call.schema is None for call in models.calls)
     assert "".join(raw_chunks).encode() == source
     assert (
@@ -358,7 +349,9 @@ def test_exhausted_content_filter_splits_only_original_chunk_nearest_midpoint(
         source_locale=source_locale.value,
         target_locale=(Locale.EN if source_locale is Locale.RU else Locale.RU).value,
     )
-    assert [(len(chunk.text), chunk.block_end - chunk.block_start) for chunk in prepared.chunks] == [
+    assert [
+        (len(chunk.text), chunk.block_end - chunk.block_start) for chunk in prepared.chunks
+    ] == [
         (15_900, 1),
         (15_801, 111),
     ]
@@ -396,9 +389,9 @@ def test_content_filter_uses_only_boundary_even_when_one_child_exceeds_half_cap(
         source_locale="ru",
         target_locale="en",
     )
-    assert [(len(chunk.text), chunk.block_end - chunk.block_start) for chunk in prepared.chunks] == [
-        (10_000, 2)
-    ]
+    assert [
+        (len(chunk.text), chunk.block_end - chunk.block_start) for chunk in prepared.chunks
+    ] == [(10_000, 2)]
     models = ScriptedModels(
         [
             ModelCallResult(None, AttemptError.CONTENT_FILTER, ()),
@@ -429,9 +422,9 @@ def test_content_filter_in_child_is_terminal_without_recursive_split() -> None:
     )
 
     with pytest.raises(RuntimeBoundaryError, match="translation_model_failed"):
-        content_with(
-            models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "250000"}
-        ).translate_document(document)
+        content_with(models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "250000"}).translate_document(
+            document
+        )
 
     assert len(models.calls) == 2
     assert len(models.calls[0].prompt.split("\n\n", 1)[1]) == 15_801
@@ -462,38 +455,73 @@ def test_content_filter_on_technical_correction_does_not_split() -> None:
     document = document_for(b"# See [guide](guide.md).\n# Next heading\n")
     prepared = prepare_document(document.source, document.plan, max_characters=100_000)
     invalid = prepared.chunks[0].text.replace(prepared.placeholders[0].token, "", 1)
-    models = ScriptedModels(
-        [invalid, ModelCallResult(None, AttemptError.CONTENT_FILTER, ())]
-    )
+    models = ScriptedModels([invalid, ModelCallResult(None, AttemptError.CONTENT_FILTER, ())])
 
     with pytest.raises(RuntimeBoundaryError, match="translation_model_failed"):
         content_with(models).translate_document(document)
 
     assert len(models.calls) == 2
-    assert "Correct the previous invalid translation" in models.calls[1].prompt
+    assert "Important correction" in models.calls[1].prompt
 
 
 def test_complete_markdown_response_gets_exactly_one_technical_correction() -> None:
-    document = document_for(b"# See [guide](guide.md).\n")
+    document = document_for(b"# Use `CPUTime` now.\n")
     prepared = prepare_document(document.source, document.plan, max_characters=100_000)
     valid = prepared.chunks[0].text
-    invalid = valid.replace(prepared.placeholders[0].token, "", 1)
+    placeholder = next(item for item in prepared.placeholders if item.source_bytes == b"`CPUTime`")
+    invalid = valid.replace(placeholder.token, "", 1)
     models = ScriptedModels([invalid, invalid])
+    content = content_with(models)
 
-    with pytest.raises(InvalidTranslationResponse, match="translation_response_invalid"):
-        content_with(models).translate_document(document)
+    accepted, accepted_document = content._translate_document(document)
 
     assert len(models.calls) == 2
-    assert "Correct the previous invalid translation" not in models.calls[0].prompt
+    assert "Important correction" not in models.calls[0].prompt
     correction = models.calls[1].prompt
-    assert "Correct the previous invalid translation" in correction
+    assert "Important correction" in correction
     assert prepared.chunks[0].text in correction
-    assert f"Rejected translation:\n{invalid}" in correction
-    assert "Validator error: document_response:placeholder_mismatch" in correction
+    assert "Rejected translation:" not in correction
+    assert placeholder.token in correction
+    assert "`CPUTime`" in correction
+    assert accepted.as_dict() == {}
+    assert accepted_document.translated_markdown == "# Use  now.\n"
+    finding = content.translation_findings[document.entry.pair.target_path][0]
+    assert placeholder.token in finding.reason
+    assert "`CPUTime`" in finding.reason
+    assert finding.searchable_snippet == "# Use  now."
+    assert finding.target_line == 1
+    assert "rerun doc_verify" in finding.expected_correction
 
 
-def test_exhausted_invalid_large_chunk_splits_once_at_safe_boundary() -> None:
-    source = content_filter_witness() + b"## See [guide](guide.md).\n"
+def test_lost_placeholder_candidate_is_reviewed_red_without_critic_call() -> None:
+    document = document_for(b"# Use `CPUTime` now.\n")
+    prepared = prepare_document(document.source, document.plan, max_characters=100_000)
+    placeholder = next(item for item in prepared.placeholders if item.source_bytes == b"`CPUTime`")
+    invalid = prepared.chunks[0].text.replace(placeholder.token, "", 1)
+    models = ScriptedModels([invalid, invalid])
+    content = content_with(models)
+    plans = cast(
+        FrozenSourcePlans,
+        SimpleNamespace(
+            preparation=SimpleNamespace(for_translation=True),
+            manifest=None,
+            documents=(document,),
+            fixed_files=(),
+        ),
+    )
+    candidate = content._translate_documents(plans, (document,), (), ())
+
+    review = content.review(cast(ImmutableRunSnapshot, object()), candidate)
+
+    assert review.final.verdict is Verdict.RED
+    assert len(review.final.findings) == 1
+    assert placeholder.token in review.final.findings[0].reason
+    assert "`CPUTime`" in review.final.findings[0].reason
+    assert len(models.calls) == 2
+
+
+def test_exhausted_invalid_large_chunk_is_not_split_or_retried_again() -> None:
+    source = content_filter_witness() + b"## Use `CPUTime` now.\n"
     document = document_for(source)
     prepared = prepare_document(
         source,
@@ -504,25 +532,16 @@ def test_exhausted_invalid_large_chunk_splits_once_at_safe_boundary() -> None:
     )
     assert len(prepared.chunks) == 1
     parent = prepared.chunks[0]
-    invalid = parent.text.replace(prepared.placeholders[0].token, "", 1)
-    block_texts = _document_block_texts(source, document.plan, prepared.placeholders)
-    children = split_content_filter_chunk(parent, block_texts)
-    assert children is not None
-    models = ScriptedModels([invalid, invalid, children[0].text, children[1].text])
+    placeholder = next(item for item in prepared.placeholders if item.source_bytes == b"`CPUTime`")
+    invalid = parent.text.replace(placeholder.token, "", 1)
+    models = ScriptedModels([invalid, invalid])
+    content = content_with(models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "250000"})
 
-    accepted = content_with(
-        models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "250000"}
-    ).translate_document(document)
+    _accepted, accepted_document = content._translate_document(document)
 
-    assert len(models.calls) == 4
-    assert "Correct the previous invalid translation" in models.calls[1].prompt
-    assert tuple(call.prompt.split("\n\n", 1)[1] for call in models.calls[2:]) == tuple(
-        child.text for child in children
-    )
-    assert (
-        assemble_candidate(document.source, document.plan, document.request, accepted.as_dict())
-        == source
-    )
+    assert len(models.calls) == 2
+    assert "Important correction" in models.calls[1].prompt
+    assert accepted_document.translated_markdown.encode() == source.replace(b"`CPUTime`", b"")
 
 
 def test_provider_failure_is_not_semantically_retried() -> None:
@@ -540,9 +559,9 @@ def test_prompt_limit_failure_happens_before_model_call() -> None:
     models = ScriptedModels([])
 
     with pytest.raises(DocumentTranslationError, match="top_level_block_exceeds_limit"):
-        content_with(
-            models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "520"}
-        ).translate_document(document)
+        content_with(models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "520"}).translate_document(
+            document
+        )
 
     assert models.calls == []
 
@@ -552,9 +571,9 @@ def test_response_cap_rejects_one_oversized_top_level_block_before_model_call() 
     models = ScriptedModels([])
 
     with pytest.raises(DocumentTranslationError, match="top_level_block_exceeds_limit"):
-        content_with(
-            models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "250000"}
-        ).translate_document(document)
+        content_with(models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "250000"}).translate_document(
+            document
+        )
 
     assert models.calls == []
 
@@ -573,29 +592,45 @@ def test_near_limit_correction_reservation_fails_before_model_call() -> None:
     assert len(initial_prompt) == 589
 
     with pytest.raises(DocumentTranslationError, match="top_level_block_exceeds_limit"):
-        content_with(
-            models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "589"}
-        ).translate_document(document, operator_context=operator_context)
+        content_with(models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "589"}).translate_document(
+            document, operator_context=operator_context
+        )
+
+    assert models.calls == []
+
+
+def test_long_protected_fragment_correction_is_reserved_before_model_call() -> None:
+    source = b"```text\n" + b"x" * 5_000 + b"\n```\n\nVisible prose.\n"
+    document = document_for(source)
+    models = ScriptedModels([])
+
+    with pytest.raises(DocumentTranslationError, match="top_level_block_exceeds_limit"):
+        content_with(models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "900"}).translate_document(
+            document
+        )
 
     assert models.calls == []
 
 
 def test_multiblock_unit_accepts_cosmetic_blank_line_change_without_retry() -> None:
-    source = b"\n\n".join(
-        (
-            b"Paragraph one has thirty seven letters.",
-            b"Paragraph two has thirty seven letters.",
-            b"Paragraph three has thirty five chars.",
+    source = (
+        b"\n\n".join(
+            (
+                b"Paragraph one has thirty seven letters.",
+                b"Paragraph two has thirty seven letters.",
+                b"Paragraph three has thirty five chars.",
+            )
         )
-    ) + b"\n"
+        + b"\n"
+    )
     document = document_for(source)
     invalid = source.decode().replace("\n\n", "\n", 1)
     models = ScriptedModels([invalid])
     operator_context = "Reviewer context"
 
-    content_with(
-        models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "900"}
-    ).translate_document(document, operator_context=operator_context)
+    content_with(models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "900"}).translate_document(
+        document, operator_context=operator_context
+    )
 
     assert len(models.calls) == 1
     assert all(len(call.prompt) <= 900 for call in models.calls)
@@ -618,7 +653,9 @@ def test_nested_yfm_fence_code_mutation_gets_one_technical_correction() -> None:
 
     assert len(models.calls) == 2
     assert "OPAQUE_CODE" not in models.calls[0].prompt
-    assert "Validator error: document_response:placeholder_mismatch" in models.calls[1].prompt
+    assert "Important correction" in models.calls[1].prompt
+    assert "[[YDBDOC_PROTECTED_0001]]" in models.calls[1].prompt
+    assert "OPAQUE_CODE" in models.calls[1].prompt
 
 
 def test_translation_trace_is_payload_free(capsys: pytest.CaptureFixture[str]) -> None:
