@@ -214,6 +214,69 @@ def test_continuation_revalidates_field_local_inline_code_grammar_order() -> Non
 
 
 @pytest.mark.parametrize("source_locale", [Locale.RU, Locale.EN])
+def test_translate_rejects_link_groups_that_exchange_source_endpoints(
+    source_locale: Locale,
+) -> None:
+    document = document_for(
+        b"Read [one](one.md), then [two](two.md).\n",
+        source_locale=source_locale,
+    )
+    swapped = (
+        "Read [[YDBDOC_PROTECTED_0001]]one[[YDBDOC_PROTECTED_0004]], then "
+        "[[YDBDOC_PROTECTED_0003]]two[[YDBDOC_PROTECTED_0002]].\n"
+    )
+    models = ScriptedModels([swapped, swapped])
+
+    with pytest.raises(InvalidTranslationResponse, match="translation_response_invalid"):
+        content_with(models).translate_document(document)
+
+    assert len(models.calls) == 2
+
+
+@pytest.mark.parametrize(
+    ("second_response", "succeeds"),
+    [
+        (
+            "---\ntitle: Fixed title\ndescription: Valid value\n---\nTranslated body.\n",
+            True,
+        ),
+        (
+            '---\ntitle: "Still broken\ndescription: Invalid again\n---\nTranslated body.\n',
+            False,
+        ),
+    ],
+    ids=["valid-correction", "invalid-correction"],
+)
+def test_malformed_frontmatter_response_uses_one_technical_correction(
+    second_response: str, succeeds: bool
+) -> None:
+    source = b"---\ntitle: Source title\ndescription: Source value\n---\nSource body.\n"
+    document = document_for(source)
+    malformed = (
+        '---\ntitle: "Broken title\ndescription: Invalid value\n---\nTranslated body.\n'
+    )
+    models = ScriptedModels([malformed, second_response])
+
+    if succeeds:
+        accepted = content_with(models).translate_document(document)
+        assert (
+            assemble_candidate(
+                document.source,
+                document.plan,
+                document.request,
+                accepted.as_dict(),
+            )
+            == second_response.encode()
+        )
+    else:
+        with pytest.raises(InvalidTranslationResponse, match="translation_response_invalid"):
+            content_with(models).translate_document(document)
+
+    assert len(models.calls) == 2
+    assert "document_response:structure_mismatch" in models.calls[1].prompt
+
+
+@pytest.mark.parametrize("source_locale", [Locale.RU, Locale.EN])
 def test_large_document_uses_minimum_response_safe_raw_chunks(
     source_locale: Locale,
 ) -> None:

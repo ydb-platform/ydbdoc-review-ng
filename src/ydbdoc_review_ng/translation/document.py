@@ -6,6 +6,8 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 
+import yaml  # type: ignore[import-untyped]
+
 from ydbdoc_review_ng.parser.markdown import build_markdown_plan
 from ydbdoc_review_ng.plan import (
     Block,
@@ -17,6 +19,7 @@ from ydbdoc_review_ng.plan import (
 )
 
 _TOKEN = re.compile(r"\[\[YDBDOC_PROTECTED_[0-9]+\]\]")
+_TOKEN_BYTES = re.compile(rb"\[\[YDBDOC_PROTECTED_[0-9]+\]\]")
 _PLACEHOLDER_LIKE = re.compile(r"\[\[YDBDOC_PROTECTED_[^\]\r\n]{0,64}\]\]")
 RAW_MARKDOWN_RESPONSE_MAX_CHARACTERS = 16_000
 
@@ -31,6 +34,32 @@ def _response_tokens(value: str) -> tuple[str, ...]:
     if placeholder_like != tokens or value.count("[[YDBDOC_PROTECTED_") != len(tokens):
         raise DocumentTranslationError("document_response:placeholder_mismatch")
     return tokens
+
+
+def _placeholder_owners(value: bytes, plan: SourcePlan) -> dict[str, tuple[int, int | None]]:
+    fields = fields_of(plan)
+    owners: dict[str, tuple[int, int | None]] = {}
+    for match in _TOKEN_BYTES.finditer(value):
+        block_position = next(
+            (
+                position
+                for position, block in enumerate(plan.blocks)
+                if block.span.start <= match.start() and match.end() <= block.span.end
+            ),
+            None,
+        )
+        if block_position is None:
+            raise DocumentTranslationError("document_response:placeholder_mismatch")
+        field_position = next(
+            (
+                position
+                for position, field in enumerate(fields)
+                if field.span.start <= match.start() and match.end() <= field.span.end
+            ),
+            None,
+        )
+        owners[match.group().decode("ascii")] = (block_position, field_position)
+    return owners
 
 
 @dataclass(frozen=True, slots=True)
@@ -385,6 +414,25 @@ def validate_chunk_response(
         raise DocumentTranslationError("document_response:unit_mismatch")
     if Counter(_response_tokens(response)) != Counter(chunk.placeholders):
         raise DocumentTranslationError("document_response:placeholder_mismatch")
+    from ydbdoc_review_ng.domain import GitSha, RepoPath, RepositoryId, SnapshotRef
+
+    chunk_snapshot = SnapshotRef(RepositoryId("ydbdoc/local"), GitSha("0" * 40))
+    chunk_path = RepoPath("document-chunk.md")
+    try:
+        source_rendered = chunk.text.encode("utf-8")
+        candidate_rendered = response.encode("utf-8")
+        source_rendered_plan = build_markdown_plan(
+            chunk_snapshot, chunk_path, source_rendered
+        )
+        candidate_rendered_plan = build_markdown_plan(
+            chunk_snapshot, chunk_path, candidate_rendered
+        )
+    except (UnicodeError, TypeError, ValueError, yaml.YAMLError):
+        raise DocumentTranslationError("document_response:structure_mismatch") from None
+    if _placeholder_owners(source_rendered, source_rendered_plan) != _placeholder_owners(
+        candidate_rendered, candidate_rendered_plan
+    ):
+        raise DocumentTranslationError("document_response:placeholder_mismatch")
     by_token = {item.token: item.source_bytes for item in placeholders}
     try:
         source_chunk = _TOKEN.sub(
@@ -398,12 +446,11 @@ def validate_chunk_response(
 
     # Each chunk starts and ends on top-level block boundaries, so it is independently
     # parseable for the structural kinds that are part of the translation contract.
-    from ydbdoc_review_ng.domain import GitSha, RepoPath, RepositoryId, SnapshotRef
-
-    chunk_snapshot = SnapshotRef(RepositoryId("ydbdoc/local"), GitSha("0" * 40))
-    chunk_path = RepoPath("document-chunk.md")
-    source_plan_value = build_markdown_plan(chunk_snapshot, chunk_path, source_chunk)
-    target_plan_value = build_markdown_plan(chunk_snapshot, chunk_path, candidate_chunk)
+    try:
+        source_plan_value = build_markdown_plan(chunk_snapshot, chunk_path, source_chunk)
+        target_plan_value = build_markdown_plan(chunk_snapshot, chunk_path, candidate_chunk)
+    except (UnicodeError, TypeError, ValueError, yaml.YAMLError):
+        raise DocumentTranslationError("document_response:structure_mismatch") from None
     if target_plan_value.diagnostics or tuple(
         block.kind for block in target_plan_value.blocks
     ) != tuple(block.kind for block in source_plan_value.blocks):
@@ -420,7 +467,7 @@ def validate_chunk_response(
             candidate_chunk,
             target_plan_value,
         )
-    except (ProtectedMismatch, TypeError, ValueError):
+    except (ProtectedMismatch, TypeError, ValueError, yaml.YAMLError):
         raise DocumentTranslationError("document_response:structure_mismatch") from None
 
 

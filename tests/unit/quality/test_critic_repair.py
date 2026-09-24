@@ -254,6 +254,52 @@ def test_raw_repair_accepts_field_local_inline_code_grammar_order() -> None:
     assert "source top-level block" in executor.calls[1].prompt
 
 
+def test_raw_repair_rejects_link_groups_that_exchange_source_endpoints() -> None:
+    source = b"Read [one](one.md), then [two](two.md).\n"
+    target = "Читайте [один](one.md), затем [два](two.md).\n".encode()
+    plan = build_markdown_plan(SNAPSHOT, SOURCE_PATH, source)
+    request = build_translation_request(source, plan)
+    swapped = (
+        "Читайте [[YDBDOC_PROTECTED_0001]]один[[YDBDOC_PROTECTED_0004]], затем "
+        "[[YDBDOC_PROTECTED_0003]]два[[YDBDOC_PROTECTED_0002]].\n"
+    )
+    executor = FakeExecutor(
+        critic_json(
+            "RED",
+            [
+                finding(
+                    repairable=True,
+                    snippet="Читайте",
+                    line=1,
+                    field_ids=[request.requested_ids[0]],
+                )
+            ],
+        ),
+        swapped,
+        critic_json("GREEN", []),
+    )
+    published_maps: list[AcceptedMap] = []
+
+    result = review_translation(
+        executor,
+        model="yandexgpt-5.1/latest",
+        source=source,
+        source_plan=plan,
+        translation_request=request,
+        target=target,
+        target_path=PATH,
+        source_locale=Locale.EN,
+        target_locale=Locale.RU,
+        before_repaired_map=published_maps.append,
+    )
+
+    assert result.repair_attempted
+    assert not result.repair_applied
+    assert result.repair_error is RepairErrorReason.INVALID_RESPONSE
+    assert result.final_candidate == target
+    assert published_maps == []
+
+
 def test_repair_transport_failure_is_terminal_before_final_critic() -> None:
     _plan, request, _values, _target = prepared()
     executor = FakeExecutor(

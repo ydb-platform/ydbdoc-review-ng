@@ -107,7 +107,7 @@ def _protected_signature(data: bytes, plan: SourcePlan, position: int) -> tuple[
     return (
         tuple(ordered_singles),
         tuple(sorted(movable_singles)),
-        tuple(sorted(tuple(items) for items in groups.values())),
+        tuple(tuple(items) for items in groups.values()),
     )
 
 

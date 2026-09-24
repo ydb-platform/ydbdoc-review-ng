@@ -333,7 +333,7 @@ def test_assembly_rejects_bad_placeholder_sets(mutation: str) -> None:
     assert caught.value.reason is AssemblyErrorReason.PLACEHOLDER_MISMATCH
 
 
-def test_assembly_rejects_broken_container_nesting_but_allows_sibling_pair_move() -> None:
+def test_assembly_rejects_sibling_pair_move_and_broken_container_nesting() -> None:
     source = b"[one](/a) and [two](/b)\n"
     plan, request = prepared(source)
     placeholders = request.fields[0].placeholders
@@ -345,8 +345,10 @@ def test_assembly_rejects_broken_container_nesting_but_allows_sibling_pair_move(
         else:
             by_group.setdefault(item.group, []).append(item.token)
     groups = list(by_group.values())
-    valid = "Deux " + " ".join(groups[1] + singles[1:] + groups[0] + singles[:1])
-    assemble_candidate(source, plan, request, {request.requested_ids[0]: valid})
+    moved = "Deux " + " ".join(groups[1] + singles[1:] + groups[0] + singles[:1])
+    with pytest.raises(AssemblyError) as moved_error:
+        assemble_candidate(source, plan, request, {request.requested_ids[0]: moved})
+    assert moved_error.value.reason is AssemblyErrorReason.CANDIDATE_REVALIDATION_FAILED
     broken = " ".join([groups[0][0], groups[1][0], groups[0][1], groups[1][1], *singles])
     with pytest.raises(AssemblyError) as caught:
         assemble_candidate(source, plan, request, {request.requested_ids[0]: broken})
@@ -505,6 +507,19 @@ def test_verify_allows_inline_code_and_template_reorder_inside_one_field() -> No
 def test_verify_rejects_non_mobile_path_reorder_inside_one_field() -> None:
     source = b"Read first.md before second.md.\n"
     target = b"Read second.md before first.md.\n"
+
+    with pytest.raises(ProtectedMismatch):
+        verify_protected_fragments(
+            source,
+            build_markdown_plan(SNAPSHOT, PATH, source),
+            target,
+            build_markdown_plan(SNAPSHOT, PATH, target),
+        )
+
+
+def test_verify_rejects_link_groups_that_exchange_source_endpoints() -> None:
+    source = b"[one](one.md), [two](two.md)\n"
+    target = b"[one](two.md), [two](one.md)\n"
 
     with pytest.raises(ProtectedMismatch):
         verify_protected_fragments(

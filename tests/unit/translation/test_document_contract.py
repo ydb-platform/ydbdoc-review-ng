@@ -95,8 +95,24 @@ def test_field_local_mobility_rejects_cross_block_inline_code_move() -> None:
     first, second = (item.token for item in request.placeholders)
     moved = text.replace(first, "TEMP", 1).replace(second, first, 1).replace("TEMP", second, 1)
 
-    with pytest.raises(DocumentTranslationError, match="structure_mismatch"):
+    with pytest.raises(DocumentTranslationError, match="placeholder_mismatch"):
         restore_document(source, plan, request, (moved,))
+
+
+def test_identical_inline_code_tokens_cannot_exchange_source_fields() -> None:
+    source = b"First `SAME`.\n\nSecond `SAME`.\n"
+    plan, request = prepared(source)
+    assert request.chunks[0].text == (
+        "First [[YDBDOC_PROTECTED_0001]].\n\n"
+        "Second [[YDBDOC_PROTECTED_0002]].\n"
+    )
+    exchanged = (
+        "First [[YDBDOC_PROTECTED_0002]].\n\n"
+        "Second [[YDBDOC_PROTECTED_0001]].\n"
+    )
+
+    with pytest.raises(DocumentTranslationError, match="placeholder_mismatch"):
+        restore_document(source, plan, request, (exchanged,))
 
 
 def test_field_local_mobility_rejects_linked_image_endpoint_repairing() -> None:
