@@ -243,7 +243,15 @@ class WorkflowPersistencePort(Protocol):
 
     def validate_checkpoint_job(self, checkpoint: ContinuationCheckpoint, /) -> None: ...
 
-    def load_checkpoint(self, pr_number: int, /, *, now: datetime) -> ContinuationCheckpoint: ...
+    def load_checkpoint(
+        self,
+        pr_number: int,
+        /,
+        *,
+        now: datetime,
+        source_sha: GitSha | None = None,
+        target_sha: GitSha | None = None,
+    ) -> ContinuationCheckpoint: ...
 
     def close_checkpoint(self, continuation_id: str, /) -> None: ...
 

@@ -197,25 +197,6 @@ def _invoke_critic(
     requests: tuple[ModelRequest, ...]
     if len(request.prompt) <= _CRITIC_REQUEST_MAX_CHARACTERS:
         requests = (request,)
-    elif (
-        len(request_for(b"", source_excerpt=True).prompt)
-        <= _CRITIC_REQUEST_MAX_CHARACTERS
-    ):
-        pending = [source.decode("utf-8")]
-        parts: list[bytes] = []
-        while pending:
-            text = pending.pop()
-            part = text.encode("utf-8")
-            if (
-                len(request_for(part, source_excerpt=True).prompt)
-                <= _CRITIC_REQUEST_MAX_CHARACTERS
-            ):
-                parts.append(part)
-                continue
-            left, right = split_text(text)
-            pending.append(right)
-            pending.append(left)
-        requests = tuple(request_for(part, source_excerpt=True) for part in parts)
     else:
         pending_pairs = [(source.decode("utf-8"), target.decode("utf-8"))]
         pairs: list[tuple[bytes, bytes]] = []

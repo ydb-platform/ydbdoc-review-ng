@@ -27,6 +27,7 @@ from ydbdoc_review_ng.direction import (
     DirectionSelectionResult,
     DirectionSelectionState,
 )
+from ydbdoc_review_ng.domain import GitSha
 from ydbdoc_review_ng.persistence import ContinuationCheckpoint
 from ydbdoc_review_ng.runtime_github import GitHubBackend, RuntimeBoundaryError
 from ydbdoc_review_ng.scope import FileOperation, ScopeOrigin
@@ -40,7 +41,15 @@ if TYPE_CHECKING:
 
 
 class CheckpointReader(Protocol):
-    def load_checkpoint(self, pr_number: int, /, *, now: datetime) -> ContinuationCheckpoint: ...
+    def load_checkpoint(
+        self,
+        pr_number: int,
+        /,
+        *,
+        now: datetime,
+        source_sha: GitSha | None = None,
+        target_sha: GitSha | None = None,
+    ) -> ContinuationCheckpoint: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -213,7 +222,12 @@ def resolve_continue_checkpoint(
         raise RuntimeBoundaryError("repository_mismatch")
     provenance = pr.provenance
     source_pr = pr_number if provenance is None else provenance.source_pr
-    checkpoint = checkpoints.load_checkpoint(source_pr, now=now)
+    checkpoint = checkpoints.load_checkpoint(
+        source_pr,
+        now=now,
+        source_sha=None if provenance is None else provenance.source_sha,
+        target_sha=None if provenance is None else pr.head_sha,
+    )
     if checkpoint.source_pr != source_pr:
         raise RuntimeBoundaryError("continue_source_identity_mismatch")
     if provenance is not None and (

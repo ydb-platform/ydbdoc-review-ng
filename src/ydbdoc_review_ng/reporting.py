@@ -7,10 +7,10 @@ from typing import Protocol
 
 from ydbdoc_review_ng.domain import GitSha, Mode
 from ydbdoc_review_ng.publication import GitPublicationAdapter, PublicationContext, PublicationError
-from ydbdoc_review_ng.quality import QualityReviewResult, Verdict
+from ydbdoc_review_ng.quality import Finding, QualityReviewResult, Verdict
 
 QA_MARKER = "<!-- ydbdoc-current-qa -->"
-_MAX_REPORTED_FINDINGS = 10
+_MAX_REPORTED_FILES = 10
 _STATUS_ICONS = {"GREEN": "🟢", "YELLOW": "🟡", "RED": "🔴"}
 
 
@@ -82,28 +82,26 @@ def _finding_lines(review: QualityReviewResult) -> list[str]:
             raise PublicationError("invalid_finding")
 
     lines = ["### Что исправить"]
-    shown = findings[:_MAX_REPORTED_FINDINGS]
-    current_path: str | None = None
-    for finding in shown:
-        path = _line(finding.target_path)[:240]
-        if path != current_path:
-            lines.append(f"**`{path}`**")
-            current_path = path
+    by_path: dict[str, list[Finding]] = {}
+    for finding in findings:
+        by_path.setdefault(_line(finding.target_path)[:240], []).append(finding)
+    shown_paths = tuple(by_path)[:_MAX_REPORTED_FILES]
+    for path in shown_paths:
+        grouped = by_path[path]
+        finding = grouped[0]
+        lines.append(f"**`{path}`**")
         lines.append(
             f"- строка {finding.target_line}, `"
-            f"{_line(finding.searchable_snippet)[:120]}`: "
-            f"{_line(finding.reason)[:240]} Исправление: "
-            f"{_line(finding.expected_correction)[:240]}"
+            f"{_line(finding.searchable_snippet)[:80]}`: "
+            f"{_line(finding.reason)[:160]} Исправление: "
+            f"{_line(finding.expected_correction)[:160]}"
         )
-    omitted = len(findings) - len(shown)
-    if omitted:
-        paths = sorted({_line(item.target_path)[:240] for item in findings})
-        omitted_paths = ", ".join(f"`{path}`" for path in paths[:10])
-        extra_paths = "" if len(paths) <= 10 else f" и ещё {len(paths) - 10} файлов"
-        lines.append(
-            f"Ещё {omitted} замечаний не показаны. "
-            f"Затронутые файлы: {omitted_paths}{extra_paths}."
-        )
+        omitted_in_file = len(grouped) - 1
+        if omitted_in_file:
+            lines.append(f"- И ещё {omitted_in_file} замечаний в этом файле.")
+    omitted_files = len(by_path) - len(shown_paths)
+    if omitted_files:
+        lines.append(f"Ещё {omitted_files} затронутых файлов не показаны.")
     if not findings:
         lines.append("- Проверка вернула RED без конкретного замечания.")
     return lines

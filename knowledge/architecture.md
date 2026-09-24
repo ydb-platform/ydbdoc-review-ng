@@ -23,6 +23,9 @@ gate у него отсутствует.
 
 `doc_continue` в `1.1.0` создаёт audit, проверяет label actor и последний допустимый
 предшествующий `/ydbdoc continue` comment, затем загружает живой checkpoint.
+Для translation PR checkpoint выбирается по точным provenance `source_sha` и
+текущему `target_sha`; старые открытые checkpoints того же source PR не мешают.
+Для source PR неоднозначность остаётся fail-closed.
 Replay читает только сохранённые source/base SHA и проверяет scope/field IDs
 и exact translation head. Три stage: direction retry, перевод pending документов
 с accepted maps и critic/одна repair только unresolved review paths. Source-only
@@ -44,10 +47,9 @@ semantic stop наследует первоначальный expiry. Infrastruc
   URL/path/code относительно authoritative source без navigation graph или link
   resolver.
 - Model critic сравнивает authoritative source и final target, проверяя смысл,
-  полноту, терминологию и работоспособность ссылок. Большой source проверяется
-  упорядоченными excerpts с полным target в каждом prompt, а при слишком большом
-  target соответствующими source/target excerpt-парами; verdict и findings
-  объединяются.
+  полноту, терминологию и работоспособность ссылок. Если совместный prompt велик,
+  critic получает соответствующие source/target excerpt-пары, а не полный target
+  рядом с каждым source excerpt; verdict и findings объединяются.
 - Add source-TOC-reachable страницы добавляет target TOC entry без redirect;
   add вне source TOC не обязан менять TOC; rename обновляет target TOC path и
   создаёт прямой redirect old→new; ordinary edit не меняет ни TOC, ни redirects.
@@ -55,8 +57,9 @@ semantic stop наследует первоначальный expiry. Infrastruc
   status/error и cost. Job всегда завершается terminal status/error, включая
   ранние failures. TTL текстов составляет 14 дней.
 - Единственный QA comment является коротким русским пользовательским резюме:
-  цветной вердикт, стоимость текущей job, до десяти конкретных исправлений и
-  краткая инструкция `doc_continue` при семантическом RED. SHA, накопительные
+  цветной вердикт, стоимость текущей job, по одному конкретному исправлению на
+  файл максимум для десяти файлов и краткая инструкция `doc_continue` при
+  семантическом RED. SHA, накопительные
   breakdown и внутренние диагностические данные остаются в YDB и публично не
   выводятся.
 - Budget gate выполняется только перед новым `doc_translate`. Его дневной `SUM`

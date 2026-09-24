@@ -476,7 +476,15 @@ class YdbPersistence:
             )
         )
 
-    def load_checkpoint(self, pr_number: int, /, *, now: datetime) -> ContinuationCheckpoint:
+    def load_checkpoint(
+        self,
+        pr_number: int,
+        /,
+        *,
+        now: datetime,
+        source_sha: GitSha | None = None,
+        target_sha: GitSha | None = None,
+    ) -> ContinuationCheckpoint:
         rows = self._execute(
             "checkpoint lookup",
             f"""SELECT * FROM `{self._table("continuations")}`
@@ -485,6 +493,17 @@ class YdbPersistence:
         )
         if now.utcoffset() is None:
             raise PersistenceError("invalid continuation lookup time")
+        if source_sha is not None:
+            if type(source_sha) is not GitSha or type(target_sha) is not GitSha:
+                raise PersistenceError("invalid continuation identity")
+            rows = [
+                row
+                for row in rows
+                if row.get("source_sha") == source_sha.value
+                and row.get("target_sha") == target_sha.value
+            ]
+        elif target_sha is not None:
+            raise PersistenceError("invalid continuation identity")
         relevant: list[int] = []
         for index, row in enumerate(rows):
             if row.get("status") != "open":

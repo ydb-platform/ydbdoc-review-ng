@@ -279,6 +279,30 @@ def test_multiple_open_checkpoints_fail_closed_through_real_store(services, monk
     assert services.effects == []
 
 
+def test_translation_pr_provenance_selects_matching_checkpoint_among_stale_roots(
+    services, monkeypatch
+):
+    stale = {
+        **services.row,
+        "continuation_id": "stale-checkpoint",
+        "job_id": "stale-job",
+        "source_sha": "d" * 40,
+        "target_sha": "e" * 40,
+    }
+
+    def execute(statement, parameters, /):
+        if "/jobs`" in statement:
+            return [services.job] if parameters["job_id"] == services.job["job_id"] else []
+        return [stale, services.row]
+
+    monkeypatch.setattr(services, "execute", execute)
+
+    result = admit(services, 52)
+
+    assert result.checkpoint.continuation_id == "checkpoint-1"
+    assert services.effects == []
+
+
 def test_actual_actors_are_authorized_even_when_actions_actor_is_different(services):
     source = RuntimeSource(
         {"YDBDOC_ALLOWED_ACTORS": "other, writer\nthird", "GITHUB_TRIGGERING_ACTOR": "outsider"},
