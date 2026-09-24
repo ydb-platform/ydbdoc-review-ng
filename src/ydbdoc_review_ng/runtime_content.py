@@ -941,6 +941,37 @@ class RuntimeContent:
             nonlocal unvalidated_missing
             note: str | None = None
             primary_missing_fallback: tuple[str, tuple[str, ...]] | None = None
+
+            def accept_primary_missing() -> str | None:
+                nonlocal unvalidated_missing
+                if primary_missing_fallback is None:
+                    return None
+                rejected, missing_tokens = primary_missing_fallback
+                unvalidated_missing = True
+                for token in missing_tokens:
+                    placeholder = by_placeholder[token]
+                    source_text, source_line = document_placeholder_context(
+                        document.source, placeholder
+                    )
+                    searchable_snippet, target_line = candidate_location(
+                        chunk, rejected, token
+                    )
+                    degraded_findings.append(
+                        Finding(
+                            False,
+                            "The translation model lost protected placeholder "
+                            f"{token}, which represents source text "
+                            f"{json.dumps(source_text, ensure_ascii=False)}, near "
+                            f"source line {source_line}.",
+                            "Restore this exact source fragment in the corresponding "
+                            "translated sentence, then rerun doc_verify.",
+                            searchable_snippet,
+                            entry.pair.target_path.value,
+                            target_line,
+                        )
+                    )
+                return rejected
+
             for attempt in (1, 2):
                 prompt = build_document_prompt(
                     chunk,
@@ -964,32 +995,9 @@ class RuntimeContent:
                     )
                 )
                 if not result.success or result.text is None:
-                    if attempt == 2 and primary_missing_fallback is not None:
-                        rejected, missing_tokens = primary_missing_fallback
-                        unvalidated_missing = True
-                        for token in missing_tokens:
-                            placeholder = by_placeholder[token]
-                            source_text, source_line = document_placeholder_context(
-                                document.source, placeholder
-                            )
-                            searchable_snippet, target_line = candidate_location(
-                                chunk, rejected, token
-                            )
-                            degraded_findings.append(
-                                Finding(
-                                    False,
-                                    "The translation model lost protected placeholder "
-                                    f"{token}, which represents source text "
-                                    f"{json.dumps(source_text, ensure_ascii=False)}, near "
-                                    f"source line {source_line}.",
-                                    "Restore this exact source fragment in the corresponding "
-                                    "translated sentence, then rerun doc_verify.",
-                                    searchable_snippet,
-                                    entry.pair.target_path.value,
-                                    target_line,
-                                )
-                            )
-                        return rejected, None, False
+                    fallback = accept_primary_missing() if attempt == 2 else None
+                    if fallback is not None:
+                        return fallback, None, False
                     return None, result.failure, attempt == 1
                 try:
                     validate_chunk_response(chunk, prepared.placeholders, result.text)
@@ -1012,6 +1020,9 @@ class RuntimeContent:
                                 finding_tokens = missing
                             else:
                                 if not container_pairs_preserved(chunk, returned):
+                                    fallback = accept_primary_missing()
+                                    if fallback is not None:
+                                        return fallback, None, False
                                     raise InvalidTranslationResponse(
                                         "translation_response_invalid"
                                     ) from None
@@ -1028,6 +1039,9 @@ class RuntimeContent:
                                         result.text,
                                     )
                                 except DocumentTranslationError:
+                                    fallback = accept_primary_missing()
+                                    if fallback is not None:
+                                        return fallback, None, False
                                     raise InvalidTranslationResponse(
                                         "translation_response_invalid"
                                     ) from None
@@ -1078,6 +1092,9 @@ class RuntimeContent:
                                     )
                                 )
                             return result.text, None, False
+                        fallback = accept_primary_missing()
+                        if fallback is not None:
+                            return fallback, None, False
                         raise InvalidTranslationResponse("translation_response_invalid") from None
                     write_trace(
                         "translation",

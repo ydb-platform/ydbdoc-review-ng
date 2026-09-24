@@ -523,6 +523,27 @@ def test_complete_markdown_response_gets_exactly_one_technical_correction() -> N
     assert "rerun doc_verify" in finding.expected_correction
 
 
+def test_invalid_correction_falls_back_to_primary_missing_only_response() -> None:
+    document = document_for(b"# Use `CPUTime` now.\n")
+    prepared = prepare_document(document.source, document.plan, max_characters=100_000)
+    placeholder = prepared.placeholders[0]
+    primary = prepared.chunks[0].text.replace(placeholder.token, "", 1)
+    duplicated_correction = prepared.chunks[0].text.replace(
+        placeholder.token, placeholder.token + placeholder.token, 1
+    )
+    models = ScriptedModels([primary, duplicated_correction])
+    content = content_with(models)
+
+    _accepted, accepted_document = content._translate_document(document)
+
+    assert len(models.calls) == 2
+    assert accepted_document.translated_markdown == "# Use  now.\n"
+    finding = content.translation_findings[document.entry.pair.target_path][0]
+    assert placeholder.token in finding.reason
+    assert "`CPUTime`" in finding.reason
+    assert document.entry.pair.target_path in content.translation_unvalidated_paths
+
+
 def test_exhausted_missing_placeholder_publishes_red_despite_malformed_markdown() -> None:
     source = (
         b"* [First](a.md) uses `CPUTime`.\n"

@@ -39,8 +39,10 @@ source-строки; rejected translation в него не копируется.
 детерминированный RED с понятной инструкцией исправить файл вручную и
 перезапустить `doc_verify`. Если
 единственная correction-попытка завершается provider error, используется
-сохранённый первичный parseable ответ с допустимой потерей placeholders и тем же
-RED. Лишние или повторные placeholders не публикуются. При `doc_verify`
+сохранённый первичный missing-only ответ и получает тот же
+RED. Correction с лишними или повторными placeholders не публикуется: вместо
+него используется сохранённый первичный missing-only ответ, а без такого ответа
+нарушение остаётся терминальным. При `doc_verify`
 те же protected fragments сверяются с текущим target: ручное изменение URL, path
 или code относительно authoritative source отвергается.
 
