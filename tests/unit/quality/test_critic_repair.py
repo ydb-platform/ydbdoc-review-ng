@@ -542,6 +542,95 @@ def test_large_repair_uses_response_safe_chunks_and_restores_exact_target() -> N
     assert result.final_candidate == target
 
 
+def test_exhausted_content_filter_splits_aligned_repair_and_runs_final_critic() -> None:
+    lengths = [157] * 49 + [177] + [130] * 60 + [131]
+    parts = []
+    for number, length in enumerate(lengths):
+        prefix = f"## Block {number:03d} "
+        parts.append(prefix + "x" * (length - len(prefix) - 1) + "\n")
+    source = "".join(parts).encode()
+    plan = build_markdown_plan(SNAPSHOT, SOURCE_PATH, source)
+    assert len(plan.blocks) == 111
+    request = build_translation_request(source, plan)
+    target = source
+    first_id = request.requested_ids[0]
+
+    class AdaptiveRepairExecutor:
+        def __init__(self) -> None:
+            self.calls: list[ModelRequest] = []
+            self.repair_calls = 0
+            self.critic_calls = 0
+
+        def invoke(self, model_request: ModelRequest, /) -> ModelCallResult:
+            self.calls.append(model_request)
+            if model_request.role.value == "repair":
+                self.repair_calls += 1
+                if self.repair_calls == 1:
+                    return ModelCallResult(None, AttemptError.CONTENT_FILTER, ())
+                current = model_request.prompt.split("<current-target>\n", 1)[1].split(
+                    "</current-target>", 1
+                )[0]
+                return ModelCallResult(current, None, ())
+            self.critic_calls += 1
+            if self.critic_calls == 1:
+                return ModelCallResult(
+                    critic_json(
+                        "RED",
+                        [
+                            finding(
+                                repairable=True,
+                                snippet="Block 000",
+                                line=1,
+                                field_ids=[first_id],
+                            )
+                        ],
+                    ),
+                    None,
+                    (),
+                )
+            return ModelCallResult(critic_json("GREEN", []), None, ())
+
+    executor = AdaptiveRepairExecutor()
+    result = review_translation(
+        executor,
+        model="model",
+        source=source,
+        source_plan=plan,
+        translation_request=request,
+        target=target,
+        target_path=PATH,
+        source_locale=Locale.EN,
+        target_locale=Locale.RU,
+        max_request_characters=250_000,
+    )
+
+    repair_calls = tuple(call for call in executor.calls if call.role.value == "repair")
+    source_chunks = tuple(
+        call.prompt.split("<authoritative-source>\n", 1)[1].split(
+            "</authoritative-source>", 1
+        )[0]
+        for call in repair_calls
+    )
+    target_chunks = tuple(
+        call.prompt.split("<current-target>\n", 1)[1].split(
+            "</current-target>", 1
+        )[0]
+        for call in repair_calls
+    )
+    assert tuple(map(len, source_chunks)) == (15_801, 7_870, 7_931)
+    assert tuple(map(len, target_chunks)) == (15_801, 7_870, 7_931)
+    assert source_chunks[1] + source_chunks[2] == source_chunks[0]
+    assert result.final_candidate == target
+    assert result.repair_applied
+    assert [call.role.value for call in executor.calls] == [
+        "critic",
+        "repair",
+        "repair",
+        "repair",
+        "final_critic",
+    ]
+
+
 def test_repair_derives_current_field_values_from_actual_target() -> None:
     plan, request, values, target = prepared()
     field_id = request.fields[1].field_id

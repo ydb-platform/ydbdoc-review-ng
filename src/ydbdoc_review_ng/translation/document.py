@@ -18,6 +18,7 @@ from ydbdoc_review_ng.plan import (
 _TOKEN = re.compile(r"\[\[YDBDOC_PROTECTED_[0-9]+\]\]")
 _PLACEHOLDER_LIKE = re.compile(r"\[\[YDBDOC_PROTECTED_[^\]\r\n]{0,64}\]\]")
 RAW_MARKDOWN_RESPONSE_MAX_CHARACTERS = 16_000
+CONTENT_FILTER_CHILD_MAX_CHARACTERS = RAW_MARKDOWN_RESPONSE_MAX_CHARACTERS // 2
 
 
 class DocumentTranslationError(ValueError):
@@ -53,6 +54,47 @@ class DocumentChunk:
 class DocumentTranslationRequest:
     chunks: tuple[DocumentChunk, ...]
     placeholders: tuple[DocumentPlaceholder, ...]
+
+
+def split_content_filter_chunk(
+    chunk: DocumentChunk,
+    block_texts: tuple[str, ...],
+    /,
+    *,
+    aligned_block_texts: tuple[str, ...] | None = None,
+) -> tuple[DocumentChunk, DocumentChunk] | None:
+    """Split one provider-filtered unit once at its nearest safe block midpoint."""
+    if type(chunk) is not DocumentChunk or type(block_texts) is not tuple:
+        raise TypeError("chunk and block texts must have exact public contract types")
+    if aligned_block_texts is not None and (
+        type(aligned_block_texts) is not tuple
+        or len(aligned_block_texts) != len(block_texts)
+    ):
+        raise TypeError("aligned block texts must match the source block texts")
+    start, end = chunk.block_start, chunk.block_end
+    if start < 0 or end > len(block_texts) or start >= end:
+        return None
+    candidates: list[tuple[int, int, str, str]] = []
+    for boundary in range(start + 1, end):
+        left = "".join(block_texts[start:boundary])
+        right = "".join(block_texts[boundary:end])
+        lengths = [len(left), len(right)]
+        if aligned_block_texts is not None:
+            lengths.extend(
+                (
+                    len("".join(aligned_block_texts[start:boundary])),
+                    len("".join(aligned_block_texts[boundary:end])),
+                )
+            )
+        if max(lengths) <= CONTENT_FILTER_CHILD_MAX_CHARACTERS:
+            candidates.append((abs(len(left) - len(right)), boundary, left, right))
+    if not candidates:
+        return None
+    _distance, boundary, left, right = min(candidates, key=lambda item: (item[0], item[1]))
+    return (
+        DocumentChunk(left, start, boundary, tuple(_TOKEN.findall(left))),
+        DocumentChunk(right, boundary, end, tuple(_TOKEN.findall(right))),
+    )
 
 
 def _lines(source: bytes, block: Block) -> tuple[tuple[int, int], ...]:

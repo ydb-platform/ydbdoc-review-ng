@@ -8,7 +8,7 @@ from typing import Protocol
 
 from ydbdoc_review_ng.continuation import AcceptedMap
 from ydbdoc_review_ng.domain import Locale, ModelRole, RepoPath
-from ydbdoc_review_ng.models import ModelCallResult, ModelRequest
+from ydbdoc_review_ng.models import AttemptError, ModelCallResult, ModelRequest
 from ydbdoc_review_ng.parser.markdown import build_markdown_plan
 from ydbdoc_review_ng.plan import ProtectedKind, SourcePlan, fields_of
 from ydbdoc_review_ng.quality.critic import build_critic_request, parse_critic_response
@@ -29,6 +29,7 @@ from ydbdoc_review_ng.translation import (
     build_translation_request,
     prepare_document,
     restore_document,
+    split_content_filter_chunk,
     validate_chunk_response,
     verify_protected_fragments,
 )
@@ -265,7 +266,12 @@ def _repair_requests(
     findings: tuple[Finding, ...],
     operator_context: str | None,
     max_characters: int,
-) -> tuple[tuple[ModelRequest, ...], DocumentTranslationRequest]:
+) -> tuple[
+    tuple[ModelRequest, ...],
+    DocumentTranslationRequest,
+    tuple[str, ...],
+    tuple[str, ...],
+]:
     target_plan = build_markdown_plan(source_plan.source_snapshot, target_path, target)
     try:
         verify_protected_fragments(source, source_plan, target, target_plan)
@@ -312,7 +318,12 @@ def _repair_requests(
         chunk, request = unit(0, 0)
         if len(request.prompt) > max_characters:
             raise QualityInputError
-        return (request,), DocumentTranslationRequest((chunk,), source_document.placeholders)
+        return (
+            (request,),
+            DocumentTranslationRequest((chunk,), source_document.placeholders),
+            source_blocks,
+            target_blocks,
+        )
     chunks: list[DocumentChunk] = []
     requests: list[ModelRequest] = []
     start = 0
@@ -338,8 +349,11 @@ def _repair_requests(
         chunks.append(chunk)
         requests.append(request)
         start = chunk.block_end
-    return tuple(requests), DocumentTranslationRequest(
-        tuple(chunks), source_document.placeholders
+    return (
+        tuple(requests),
+        DocumentTranslationRequest(tuple(chunks), source_document.placeholders),
+        source_blocks,
+        target_blocks,
     )
 
 
@@ -412,7 +426,7 @@ def review_translation(
             accepted_maps,
         )
 
-    repair_requests, document_request = _repair_requests(
+    repair_requests, document_request, source_blocks, target_blocks = _repair_requests(
         model=model,
         source=source,
         source_plan=source_plan,
@@ -426,13 +440,58 @@ def review_translation(
     )
     repair_error: RepairErrorReason | None = None
     repaired_candidate: bytes | None = None
+    effective_chunks: list[DocumentChunk] = []
     responses: list[str] = []
-    for chunk, repair_request in zip(document_request.chunks, repair_requests, strict=True):
+
+    def child_repair_request(chunk: DocumentChunk) -> ModelRequest:
+        prompt = _repair_prompt(
+            source_text=chunk.text,
+            target_text="".join(target_blocks[chunk.block_start : chunk.block_end]),
+            target_path=target_path,
+            source_locale=source_locale,
+            target_locale=target_locale,
+            findings=repair_findings,
+            operator_context=operator_context,
+        )
+        if len(prompt) > max_request_characters:
+            raise QualityInputError
+        return ModelRequest(ModelRole.REPAIR, model, prompt, None, 8000, target_path)
+
+    def invoke_repair(request: ModelRequest) -> ModelCallResult:
         if before_model_call is not None:
             before_model_call()
-        repair_response = executor.invoke(repair_request)
+        return executor.invoke(request)
+
+    for chunk, repair_request in zip(document_request.chunks, repair_requests, strict=True):
+        repair_response = invoke_repair(repair_request)
         if not repair_response.success or repair_response.text is None:
-            raise QualityExecutionError("repair")
+            children = (
+                split_content_filter_chunk(
+                    chunk,
+                    source_blocks,
+                    aligned_block_texts=target_blocks,
+                )
+                if repair_response.failure is AttemptError.CONTENT_FILTER
+                else None
+            )
+            if children is None:
+                raise QualityExecutionError("repair")
+            for child in children:
+                child_response = invoke_repair(child_repair_request(child))
+                if not child_response.success or child_response.text is None:
+                    raise QualityExecutionError("repair")
+                try:
+                    validate_chunk_response(
+                        child, document_request.placeholders, child_response.text
+                    )
+                except DocumentTranslationError:
+                    repair_error = RepairErrorReason.INVALID_RESPONSE
+                    break
+                effective_chunks.append(child)
+                responses.append(child_response.text)
+            if repair_error is not None:
+                break
+            continue
         try:
             validate_chunk_response(
                 chunk, document_request.placeholders, repair_response.text
@@ -440,11 +499,15 @@ def review_translation(
         except DocumentTranslationError:
             repair_error = RepairErrorReason.INVALID_RESPONSE
             break
+        effective_chunks.append(chunk)
         responses.append(repair_response.text)
     if repair_error is None:
         try:
+            effective_request = DocumentTranslationRequest(
+                tuple(effective_chunks), document_request.placeholders
+            )
             repaired_candidate = restore_document(
-                source, source_plan, document_request, tuple(responses)
+                source, source_plan, effective_request, tuple(responses)
             )
             target_translations = _derive_target_translations(
                 source,

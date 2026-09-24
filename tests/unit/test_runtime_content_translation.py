@@ -56,6 +56,21 @@ class EchoChunkModels:
         return ModelCallResult(request.prompt.split("\n\n", 1)[1], None, ())
 
 
+def _heading_block(number: int, length: int) -> str:
+    prefix = f"## Block {number:03d} "
+    return prefix + "x" * (length - len(prefix) - 1) + "\n"
+
+
+def content_filter_witness(*, with_leading_chunk: bool = False) -> bytes:
+    lengths = [157] * 49 + [177] + [130] * 60 + [131]
+    witness = "".join(
+        _heading_block(number, length) for number, length in enumerate(lengths)
+    )
+    if not with_leading_chunk:
+        return witness.encode()
+    return (_heading_block(999, 15_900) + witness).encode()
+
+
 def document_for(source: bytes, *, source_locale: Locale = Locale.RU) -> Document:
     target_locale = Locale.EN if source_locale is Locale.RU else Locale.RU
     source_path, target_path = (
@@ -144,6 +159,102 @@ def test_large_document_uses_minimum_response_safe_raw_chunks(
         assemble_candidate(document.source, document.plan, document.request, accepted.as_dict())
         == source
     )
+
+
+@pytest.mark.parametrize("source_locale", [Locale.RU, Locale.EN])
+def test_exhausted_content_filter_splits_only_original_chunk_nearest_midpoint(
+    source_locale: Locale,
+) -> None:
+    source = content_filter_witness(with_leading_chunk=True)
+    document = document_for(source, source_locale=source_locale)
+    prepared = prepare_document(
+        source,
+        document.plan,
+        max_characters=250_000,
+        source_locale=source_locale.value,
+        target_locale=(Locale.EN if source_locale is Locale.RU else Locale.RU).value,
+    )
+    assert [(len(chunk.text), chunk.block_end - chunk.block_start) for chunk in prepared.chunks] == [
+        (15_900, 1),
+        (15_801, 111),
+    ]
+    first, filtered = prepared.chunks
+    models = ScriptedModels(
+        [
+            first.text,
+            ModelCallResult(None, AttemptError.CONTENT_FILTER, ()),
+            filtered.text[:7_870],
+            filtered.text[7_870:],
+        ]
+    )
+
+    accepted = content_with(
+        models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "250000"}
+    ).translate_document(document)
+
+    raw_requests = tuple(call.prompt.split("\n\n", 1)[1] for call in models.calls)
+    assert tuple(map(len, raw_requests)) == (15_900, 15_801, 7_870, 7_931)
+    assert raw_requests.count(first.text) == 1
+    assert raw_requests[2] + raw_requests[3] == filtered.text
+    assert (
+        assemble_candidate(document.source, document.plan, document.request, accepted.as_dict())
+        == source
+    )
+
+
+def test_content_filter_in_child_is_terminal_without_recursive_split() -> None:
+    source = content_filter_witness()
+    document = document_for(source)
+    models = ScriptedModels(
+        [
+            ModelCallResult(None, AttemptError.CONTENT_FILTER, ()),
+            ModelCallResult(None, AttemptError.CONTENT_FILTER, ()),
+        ]
+    )
+
+    with pytest.raises(RuntimeBoundaryError, match="translation_model_failed"):
+        content_with(
+            models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "250000"}
+        ).translate_document(document)
+
+    assert len(models.calls) == 2
+    assert len(models.calls[0].prompt.split("\n\n", 1)[1]) == 15_801
+    assert len(models.calls[1].prompt.split("\n\n", 1)[1]) == 7_870
+
+
+def test_content_filter_without_top_level_boundary_is_terminal() -> None:
+    document = document_for(_heading_block(1, 10_000).encode())
+    models = ScriptedModels([ModelCallResult(None, AttemptError.CONTENT_FILTER, ())])
+
+    with pytest.raises(RuntimeBoundaryError, match="translation_model_failed"):
+        content_with(models).translate_document(document)
+
+    assert len(models.calls) == 1
+
+
+def test_non_final_parent_does_not_trigger_adaptive_split() -> None:
+    document = document_for(content_filter_witness())
+    models = ScriptedModels([ModelCallResult(None, AttemptError.NON_FINAL, ())])
+
+    with pytest.raises(RuntimeBoundaryError, match="translation_model_failed"):
+        content_with(models).translate_document(document)
+
+    assert len(models.calls) == 1
+
+
+def test_content_filter_on_technical_correction_does_not_split() -> None:
+    document = document_for(b"# See [guide](guide.md).\n# Next heading\n")
+    prepared = prepare_document(document.source, document.plan, max_characters=100_000)
+    invalid = prepared.chunks[0].text.replace(prepared.placeholders[0].token, "", 1)
+    models = ScriptedModels(
+        [invalid, ModelCallResult(None, AttemptError.CONTENT_FILTER, ())]
+    )
+
+    with pytest.raises(RuntimeBoundaryError, match="translation_model_failed"):
+        content_with(models).translate_document(document)
+
+    assert len(models.calls) == 2
+    assert "Correct the previous invalid translation" in models.calls[1].prompt
 
 
 def test_complete_markdown_response_gets_exactly_one_technical_correction() -> None:

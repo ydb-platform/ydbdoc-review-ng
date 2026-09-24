@@ -281,6 +281,12 @@ historical cost.
 Явный provider content-filter допускает ровно один повтор идентичного request в
 пределах `max_attempts = 2`; обе attempts аудируются и учитываются в cost, а
 truncation и прочие non-final статусы не повторяются.
+Если raw-Markdown `TRANSLATE` или `REPAIR` chunk после этих двух attempts всё ещё
+завершён content-filter, его можно ровно один раз разделить на два соседних
+диапазона по ближайшей к середине top-level block boundary. Каждый child получает
+обычный предел `max_attempts = 2`, повторно не делится, а уже успешные chunks не
+вызываются снова. Для correction request, других provider errors и chunk без
+такой boundary adaptive split запрещён.
 
 Для таблиц или строк с текстами настраивается TTL 14 дней средствами YDB.
 Checkpoint state содержит только frozen direction/scope digest, accepted

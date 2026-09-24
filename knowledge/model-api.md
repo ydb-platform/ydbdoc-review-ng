@@ -15,6 +15,11 @@
 - Явный content-filter допускает ровно один повтор идентичного request в пределах
   `max_attempts = 2`; обе attempts аудируются и оплачиваются, а truncation и
   прочие non-final статусы не повторяются.
+- Raw-Markdown `TRANSLATE`/`REPAIR` chunk, дважды завершённый content-filter,
+  допускает один deterministic split по ближайшей к середине top-level block
+  boundary. Два child request имеют обычный `max_attempts = 2`, больше не
+  делятся и не перезапускают успешные соседние chunks; correction и другие
+  provider errors этот split не включают.
 
 ## Проверенные модели
 

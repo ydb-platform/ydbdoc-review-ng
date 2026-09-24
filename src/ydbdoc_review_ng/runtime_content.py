@@ -46,7 +46,7 @@ from ydbdoc_review_ng.locales import (
     discover_changed_pairs,
     paired_markdown_path,
 )
-from ydbdoc_review_ng.models import ModelRequest
+from ydbdoc_review_ng.models import AttemptError, ModelRequest
 from ydbdoc_review_ng.models.types import FrozenJson, mutable_json
 from ydbdoc_review_ng.parser.markdown import build_markdown_plan
 from ydbdoc_review_ng.plan import ProtectedKind, SourcePlan, fields_of
@@ -69,7 +69,9 @@ from ydbdoc_review_ng.trace import traced, write_trace
 from ydbdoc_review_ng.translation import (
     AssemblyError,
     AssemblyErrorReason,
+    DocumentChunk,
     DocumentTranslationError,
+    DocumentTranslationRequest,
     TranslationField,
     TranslationRequest,
     assemble_candidate,
@@ -78,10 +80,12 @@ from ydbdoc_review_ng.translation import (
     parse_translation_response,
     prepare_document,
     restore_document,
+    split_content_filter_chunk,
     validate_chunk_response,
     validate_translation_values,
     verify_protected_fragments,
 )
+from ydbdoc_review_ng.translation.document import _document_block_texts
 
 if TYPE_CHECKING:
     from ydbdoc_review_ng.persistence import ContinuationCheckpoint
@@ -824,7 +828,67 @@ class RuntimeContent:
             target_locale=entry.pair.target_locale.value,
             operator_context=operator_context,
         )
+        block_texts = _document_block_texts(
+            document.source, document.plan, prepared.placeholders
+        )
+        effective_chunks: list[DocumentChunk] = []
         responses: list[str] = []
+
+        def invoke_chunk(
+            chunk: DocumentChunk, chunk_index: int
+        ) -> tuple[str | None, AttemptError | None, bool]:
+            rejected_translation: str | None = None
+            validator_error: str | None = None
+            for attempt in (1, 2):
+                prompt = build_document_prompt(
+                    chunk,
+                    entry.pair.source_locale.value,
+                    entry.pair.target_locale.value,
+                    correction=attempt == 2,
+                    rejected_translation=rejected_translation,
+                    validator_error=validator_error,
+                )
+                if operator_context is not None:
+                    prompt += "\n\nOperator context:\n" + operator_context
+                if len(prompt) > limit:
+                    raise DocumentTranslationError(
+                        "document_chunk:correction_prompt_exceeds_limit"
+                    )
+                result = self.models.invoke(
+                    ModelRequest(
+                        ModelRole.TRANSLATE,
+                        self.model,
+                        prompt,
+                        None,
+                        8000,
+                        entry.pair.target_path,
+                    )
+                )
+                if not result.success or result.text is None:
+                    return None, result.failure, attempt == 1
+                try:
+                    validate_chunk_response(chunk, prepared.placeholders, result.text)
+                except DocumentTranslationError as error:
+                    if attempt == 2:
+                        raise InvalidTranslationResponse(
+                            "translation_response_invalid"
+                        ) from None
+                    write_trace(
+                        "translation",
+                        "chunk_validation",
+                        "retry",
+                        article=entry.pair.target_path.value,
+                        chunk_index=chunk_index,
+                        chunks_total=len(prepared.chunks),
+                        attempt=attempt,
+                        code="translation_response_invalid",
+                    )
+                    rejected_translation = result.text
+                    validator_error = str(error)
+                else:
+                    return result.text, None, False
+            raise AssertionError("translation semantic attempt bound exhausted")
+
         for chunk_index, chunk in enumerate(prepared.chunks, 1):
             with traced(
                 "translation",
@@ -833,61 +897,35 @@ class RuntimeContent:
                 chunk_index=chunk_index,
                 chunks_total=len(prepared.chunks),
             ):
-                accepted_response: str | None = None
-                rejected_translation: str | None = None
-                validator_error: str | None = None
-                for attempt in (1, 2):
-                    prompt = build_document_prompt(
-                        chunk,
-                        entry.pair.source_locale.value,
-                        entry.pair.target_locale.value,
-                        correction=attempt == 2,
-                        rejected_translation=rejected_translation,
-                        validator_error=validator_error,
+                accepted_response, failure, failed_on_primary = invoke_chunk(
+                    chunk, chunk_index
+                )
+                if accepted_response is not None:
+                    effective_chunks.append(chunk)
+                    responses.append(accepted_response)
+                    continue
+                children = (
+                    split_content_filter_chunk(chunk, block_texts)
+                    if failure is AttemptError.CONTENT_FILTER and failed_on_primary
+                    else None
+                )
+                if children is None:
+                    raise RuntimeBoundaryError("translation_model_failed")
+                for child in children:
+                    child_response, _child_failure, _child_primary = invoke_chunk(
+                        child, chunk_index
                     )
-                    if operator_context is not None:
-                        prompt += "\n\nOperator context:\n" + operator_context
-                    if len(prompt) > limit:
-                        raise DocumentTranslationError(
-                            "document_chunk:correction_prompt_exceeds_limit"
-                        )
-                    model_request = ModelRequest(
-                        ModelRole.TRANSLATE,
-                        self.model,
-                        prompt,
-                        None,
-                        8000,
-                        entry.pair.target_path,
-                    )
-                    result = self.models.invoke(model_request)
-                    if not result.success or result.text is None:
+                    if child_response is None:
                         raise RuntimeBoundaryError("translation_model_failed")
-                    try:
-                        validate_chunk_response(chunk, prepared.placeholders, result.text)
-                    except DocumentTranslationError as error:
-                        if attempt == 2:
-                            raise InvalidTranslationResponse(
-                                "translation_response_invalid"
-                            ) from None
-                        write_trace(
-                            "translation",
-                            "chunk_validation",
-                            "retry",
-                            article=entry.pair.target_path.value,
-                            chunk_index=chunk_index,
-                            chunks_total=len(prepared.chunks),
-                            attempt=attempt,
-                            code="translation_response_invalid",
-                        )
-                        rejected_translation = result.text
-                        validator_error = str(error)
-                    else:
-                        accepted_response = result.text
-                        break
-                assert accepted_response is not None
-                responses.append(accepted_response)
+                    effective_chunks.append(child)
+                    responses.append(child_response)
         try:
-            candidate = restore_document(document.source, document.plan, prepared, tuple(responses))
+            effective_request = DocumentTranslationRequest(
+                tuple(effective_chunks), prepared.placeholders
+            )
+            candidate = restore_document(
+                document.source, document.plan, effective_request, tuple(responses)
+            )
             values = _derive_target_translations(
                 document.source,
                 document.plan,
