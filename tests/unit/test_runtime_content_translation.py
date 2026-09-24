@@ -469,17 +469,25 @@ def test_non_final_parent_does_not_trigger_adaptive_split() -> None:
     assert len(models.calls) == 1
 
 
-def test_content_filter_on_technical_correction_does_not_split() -> None:
+def test_content_filter_on_technical_correction_publishes_primary_response_red() -> None:
     document = document_for(b"# See [guide](guide.md).\n# Next heading\n")
     prepared = prepare_document(document.source, document.plan, max_characters=100_000)
-    invalid = prepared.chunks[0].text.replace(prepared.placeholders[0].token, "", 1)
+    missing_placeholder = prepared.placeholders[0]
+    invalid = prepared.chunks[0].text.replace(missing_placeholder.token, "", 1)
     models = ScriptedModels([invalid, ModelCallResult(None, AttemptError.CONTENT_FILTER, ())])
+    content = content_with(models)
 
-    with pytest.raises(RuntimeBoundaryError, match="translation_model_failed"):
-        content_with(models).translate_document(document)
+    _accepted, accepted_document = content._translate_document(document)
 
     assert len(models.calls) == 2
     assert "Important correction" in models.calls[1].prompt
+    assert accepted_document.translated_markdown == "# See guide](guide.md).\n# Next heading\n"
+    finding = content.translation_findings[document.entry.pair.target_path][0]
+    assert missing_placeholder.token in finding.reason
+    assert "[" in finding.reason
+    assert finding.searchable_snippet == "# See guide](guide.md)."
+    assert finding.target_line == 1
+    assert "rerun doc_verify" in finding.expected_correction
 
 
 def test_complete_markdown_response_gets_exactly_one_technical_correction() -> None:

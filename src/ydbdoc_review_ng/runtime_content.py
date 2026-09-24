@@ -934,6 +934,7 @@ class RuntimeContent:
             chunk: DocumentChunk, chunk_index: int
         ) -> tuple[str | None, AttemptError | None, bool]:
             note: str | None = None
+            primary_missing_fallback: tuple[str, tuple[str, ...]] | None = None
             for attempt in (1, 2):
                 prompt = build_document_prompt(
                     chunk,
@@ -957,6 +958,31 @@ class RuntimeContent:
                     )
                 )
                 if not result.success or result.text is None:
+                    if attempt == 2 and primary_missing_fallback is not None:
+                        rejected, missing_tokens = primary_missing_fallback
+                        for token in missing_tokens:
+                            placeholder = by_placeholder[token]
+                            source_text, source_line = document_placeholder_context(
+                                document.source, placeholder
+                            )
+                            searchable_snippet, target_line = candidate_location(
+                                chunk, rejected, token
+                            )
+                            degraded_findings.append(
+                                Finding(
+                                    False,
+                                    "The translation model lost protected placeholder "
+                                    f"{token}, which represents source text "
+                                    f"{json.dumps(source_text, ensure_ascii=False)}, near "
+                                    f"source line {source_line}.",
+                                    "Restore this exact source fragment in the corresponding "
+                                    "translated sentence, then rerun doc_verify.",
+                                    searchable_snippet,
+                                    entry.pair.target_path.value,
+                                    target_line,
+                                )
+                            )
+                        return rejected, None, False
                     return None, result.failure, attempt == 1
                 try:
                     validate_chunk_response(chunk, prepared.placeholders, result.text)
@@ -1078,6 +1104,33 @@ class RuntimeContent:
                         code="translation_response_invalid",
                     )
                     missing, _unexpected = _placeholder_differences(chunk.placeholders, result.text)
+                    if (
+                        str(error) == "document_response:placeholder_mismatch"
+                        and missing
+                        and not _unexpected
+                    ):
+                        reduced = chunk.text
+                        for token in missing:
+                            reduced = reduced.replace(token, "", 1)
+                        missing_set = set(missing)
+                        reduced_chunk = DocumentChunk(
+                            reduced,
+                            chunk.block_start,
+                            chunk.block_end,
+                            tuple(
+                                token
+                                for token in chunk.placeholders
+                                if token not in missing_set
+                            ),
+                        )
+                        try:
+                            validate_chunk_response(
+                                reduced_chunk, prepared.placeholders, result.text
+                            )
+                        except DocumentTranslationError:
+                            pass
+                        else:
+                            primary_missing_fallback = (result.text, missing)
                     note = build_document_correction_note(
                         document.source,
                         chunk,
