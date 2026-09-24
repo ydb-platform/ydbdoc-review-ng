@@ -6,11 +6,14 @@ from ydbdoc_review_ng.domain import GitSha, RepoPath, RepositoryId, SnapshotRef
 from ydbdoc_review_ng.parser.markdown import build_markdown_plan
 from ydbdoc_review_ng.plan import ProtectedKind
 from ydbdoc_review_ng.translation.document import (
+    DocumentChunk,
     DocumentTranslationError,
+    DocumentTranslationRequest,
     build_document_correction_note,
     build_document_prompt,
     prepare_document,
     restore_document,
+    split_content_filter_chunk,
 )
 
 SNAPSHOT = SnapshotRef(RepositoryId("ydb-platform/ydb"), GitSha("a" * 40))
@@ -220,23 +223,88 @@ def test_missing_final_lf_is_restored_at_each_chunk_boundary() -> None:
     assert build_markdown_plan(SNAPSHOT, PATH, candidate).blocks == plan.blocks
 
 
-def test_missing_blank_line_at_chunk_boundary_is_cosmetic() -> None:
-    source = b"First paragraph.\n\nSecond paragraph.\n"
-    plan, request = prepared(source, limit=18)
-    assert tuple(chunk.text for chunk in request.chunks) == (
-        "First paragraph.\n\n",
-        "Second paragraph.\n",
+def test_build_critical_blank_line_is_restored_at_chunk_boundary() -> None:
+    source = b"## Heading\n\n* Item\n"
+    plan = build_markdown_plan(SNAPSHOT, PATH, source)
+    request = DocumentTranslationRequest(
+        (
+            DocumentChunk("## Heading\n\n", 0, 2, ()),
+            DocumentChunk("* Item\n", 2, 3, ()),
+        ),
+        (),
     )
 
     candidate = restore_document(
         source,
         plan,
         request,
-        ("Translated first.", "Translated second."),
+        ("## Translated heading", "* Translated item"),
     )
 
-    assert candidate == b"Translated first.\nTranslated second.\n"
-    assert len(build_markdown_plan(SNAPSHOT, PATH, candidate).blocks) != len(plan.blocks)
+    assert candidate == b"## Translated heading\n\n* Translated item\n"
+
+
+def test_source_list_indentation_is_restored_at_chunk_boundary() -> None:
+    source = b"* Parent:\n  * Child one\n  * Child two\n"
+    plan = build_markdown_plan(SNAPSHOT, PATH, source)
+    request = DocumentTranslationRequest(
+        (
+            DocumentChunk("* Parent:\n", 0, 1, ()),
+            DocumentChunk("  * Child one\n", 1, 2, ()),
+            DocumentChunk("  * Child two\n", 2, 3, ()),
+        ),
+        (),
+    )
+    assert tuple(chunk.text for chunk in request.chunks) == (
+        "* Parent:\n",
+        "  * Child one\n",
+        "  * Child two\n",
+    )
+
+    candidate = restore_document(
+        source,
+        plan,
+        request,
+        ("* Parent:", "* Child one", "* Child two"),
+    )
+
+    assert candidate == source
+
+
+def test_adaptive_split_does_not_start_inside_nested_list() -> None:
+    block_texts = (
+        "* Parent:\n",
+        "  * Child one\n",
+        "  * Child two\n\n",
+        "## Next\n\n",
+        "Paragraph.\n",
+    )
+    parent = DocumentChunk("".join(block_texts), 0, len(block_texts), ())
+
+    children = split_content_filter_chunk(parent, block_texts)
+
+    assert children is not None
+    left, right = children
+    assert left.block_end == 3
+    assert right.block_start == 3
+    assert right.text == "## Next\n\nParagraph.\n"
+
+
+def test_initial_chunks_do_not_start_inside_nested_list() -> None:
+    source = (
+        b"Intro paragraph text.\n\n"
+        b"* Parent:\n"
+        b"  * Child one\n"
+        b"  * Child two\n\n"
+        b"## Next\n"
+    )
+    _plan, request = prepared(source, limit=45)
+
+    assert tuple(chunk.text for chunk in request.chunks) == (
+        "Intro paragraph text.\n\n",
+        "* Parent:\n  * Child one\n  * Child two\n\n",
+        "## Next\n",
+    )
 
 
 def test_missing_blank_line_between_top_level_blocks_is_rejected() -> None:

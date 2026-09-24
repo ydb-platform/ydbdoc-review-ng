@@ -324,6 +324,8 @@ def split_content_filter_chunk(
         right = "".join(block_texts[boundary:end])
         if not left or not right or len(left) >= len(chunk.text) or len(right) >= len(chunk.text):
             continue
+        if not _can_start_chunk(right):
+            continue
         if aligned_block_texts is not None:
             aligned_left = "".join(aligned_block_texts[start:boundary])
             aligned_right = "".join(aligned_block_texts[boundary:end])
@@ -343,6 +345,11 @@ def split_content_filter_chunk(
         DocumentChunk(left, start, boundary, tuple(_TOKEN.findall(left))),
         DocumentChunk(right, boundary, end, tuple(_TOKEN.findall(right))),
     )
+
+
+def _can_start_chunk(text: str, /) -> bool:
+    first_content_line = next((line for line in text.splitlines() if line.strip()), None)
+    return first_content_line is None or not first_content_line.startswith((" ", "\t"))
 
 
 def _lines(source: bytes, block: Block) -> tuple[tuple[int, int], ...]:
@@ -576,10 +583,18 @@ def prepare_document(
     text = ""
     for index, block_text in enumerate(rendered_blocks):
         if text and not fits(text + block_text, block_start, index + 1):
-            tokens = tuple(_TOKEN.findall(text))
-            chunks.append(DocumentChunk(text, block_start, index, tokens))
-            block_start = index
-            text = ""
+            boundary = index
+            while boundary > block_start and not _can_start_chunk(rendered_blocks[boundary]):
+                boundary -= 1
+            if boundary == block_start:
+                raise DocumentTranslationError("document_chunk:top_level_block_exceeds_limit")
+            left = "".join(rendered_blocks[block_start:boundary])
+            tokens = tuple(_TOKEN.findall(left))
+            chunks.append(DocumentChunk(left, block_start, boundary, tokens))
+            block_start = boundary
+            text = "".join(rendered_blocks[boundary:index])
+            if text and not fits(text + block_text, block_start, index + 1):
+                raise DocumentTranslationError("document_chunk:top_level_block_exceeds_limit")
         text += block_text
     chunks.append(
         DocumentChunk(text, block_start, len(rendered_blocks), tuple(_TOKEN.findall(text)))
@@ -658,6 +673,40 @@ def _restore_chunk_final_lf(chunk: DocumentChunk, response: str, /) -> str:
     if chunk.text.endswith("\n") and not response.endswith("\n"):
         return response + "\n"
     return response
+
+
+def _restore_chunk_boundary_syntax(
+    chunk: DocumentChunk,
+    response: str,
+    /,
+    *,
+    preserve_leading: bool,
+    preserve_trailing_blank: bool,
+) -> str:
+    source_prefix = (
+        chunk.text[: len(chunk.text) - len(chunk.text.lstrip(" \t"))]
+        if preserve_leading
+        else ""
+    )
+    normalized = source_prefix + response.lstrip(" \t") if preserve_leading else response
+    if not preserve_trailing_blank:
+        return _restore_chunk_final_lf(chunk, normalized)
+    source_final_lfs = len(chunk.text) - len(chunk.text.rstrip("\n"))
+    return normalized.rstrip("\n") + ("\n" * source_final_lfs)
+
+
+def _needs_source_blank_boundary(left: DocumentChunk, right: DocumentChunk, /) -> bool:
+    if not left.text.endswith("\n\n"):
+        return False
+    left_lines = tuple(line for line in left.text.splitlines() if line.strip())
+    right_lines = tuple(line for line in right.text.splitlines() if line.strip())
+    if not left_lines or not right_lines:
+        return False
+    return bool(
+        _ATX_HEADING.match(left_lines[-1])
+        or _ATX_HEADING.match(right_lines[0])
+        or _TOP_LEVEL_LIST_ITEM.match(right_lines[0])
+    )
 
 
 def validate_chunk_response(
@@ -742,12 +791,22 @@ def restore_document(
         raise TypeError("request and responses must have exact public contract types")
     if len(responses) != len(request.chunks) or any(type(item) is not str for item in responses):
         raise DocumentTranslationError("document_response:unit_mismatch")
-    normalized_responses = tuple(
-        _restore_chunk_final_lf(chunk, response)
-        for chunk, response in zip(request.chunks, responses, strict=True)
-    )
-    for chunk, response in zip(request.chunks, normalized_responses, strict=True):
+    for chunk, response in zip(request.chunks, responses, strict=True):
         validate_chunk_response(chunk, request.placeholders, response)
+    normalized_responses = tuple(
+        _restore_chunk_boundary_syntax(
+            chunk,
+            response,
+            preserve_leading=index > 0,
+            preserve_trailing_blank=(
+                index + 1 < len(request.chunks)
+                and _needs_source_blank_boundary(chunk, request.chunks[index + 1])
+            ),
+        )
+        for index, (chunk, response) in enumerate(
+            zip(request.chunks, responses, strict=True)
+        )
+    )
     rendered = "".join(normalized_responses)
     expected = tuple(item.token for item in request.placeholders)
     if Counter(_response_tokens(rendered)) != Counter(expected):
