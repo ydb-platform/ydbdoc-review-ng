@@ -138,6 +138,19 @@ def test_translate_document_uses_complete_markdown_and_selected_direction(
     )
 
 
+def test_translate_restores_source_final_lf_without_technical_correction() -> None:
+    document = document_for(b"# Source heading\n")
+    models = ScriptedModels(["# Translated heading", "unused correction"])
+
+    accepted = content_with(models).translate_document(document)
+
+    assert len(models.calls) == 1
+    assert (
+        assemble_candidate(document.source, document.plan, document.request, accepted.as_dict())
+        == b"# Translated heading\n"
+    )
+
+
 @pytest.mark.parametrize(
     ("source_locale", "source", "translated"),
     [

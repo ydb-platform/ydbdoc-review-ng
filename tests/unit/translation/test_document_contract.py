@@ -192,6 +192,25 @@ def test_limit_uses_minimum_ordered_whole_block_chunks() -> None:
     assert request.chunks[1].block_start == 3
 
 
+def test_missing_final_lf_is_restored_at_each_chunk_boundary() -> None:
+    source = b"# First\n# Second\n"
+    plan, request = prepared(source, limit=9)
+    assert tuple(chunk.text for chunk in request.chunks) == ("# First\n", "# Second\n")
+
+    candidate = restore_document(source, plan, request, ("# First", "# Second"))
+
+    assert candidate == source
+    assert build_markdown_plan(SNAPSHOT, PATH, candidate).blocks == plan.blocks
+
+
+def test_final_lf_restoration_does_not_tolerate_interior_whitespace_change() -> None:
+    source = b"# First\n\n# Second\n"
+    plan, request = prepared(source)
+
+    with pytest.raises(DocumentTranslationError, match="structure_mismatch"):
+        restore_document(source, plan, request, ("# First\n\n\n# Second",))
+
+
 def test_configured_limit_applies_to_each_complete_prompt_with_minimum_chunks() -> None:
     source = b"\n\n".join(
         (

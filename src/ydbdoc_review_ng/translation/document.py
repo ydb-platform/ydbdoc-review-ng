@@ -423,6 +423,16 @@ def build_document_prompt(
     return prompt
 
 
+def _restore_chunk_final_lf(chunk: DocumentChunk, response: str, /) -> str:
+    if (
+        chunk.text.endswith("\n")
+        and not chunk.text.endswith(("\r\n", "\n\n"))
+        and not response.endswith("\n")
+    ):
+        return response + "\n"
+    return response
+
+
 def validate_chunk_response(
     chunk: DocumentChunk,
     placeholders: tuple[DocumentPlaceholder, ...],
@@ -432,6 +442,7 @@ def validate_chunk_response(
     """Validate one provider unit before any later chunk is requested."""
     if type(response) is not str:
         raise DocumentTranslationError("document_response:unit_mismatch")
+    response = _restore_chunk_final_lf(chunk, response)
     response_tokens = _response_tokens(response)
     if Counter(response_tokens) != Counter(chunk.placeholders):
         raise DocumentTranslationError("document_response:placeholder_mismatch")
@@ -499,9 +510,13 @@ def restore_document(
         raise TypeError("request and responses must have exact public contract types")
     if len(responses) != len(request.chunks) or any(type(item) is not str for item in responses):
         raise DocumentTranslationError("document_response:unit_mismatch")
-    for chunk, response in zip(request.chunks, responses, strict=True):
+    normalized_responses = tuple(
+        _restore_chunk_final_lf(chunk, response)
+        for chunk, response in zip(request.chunks, responses, strict=True)
+    )
+    for chunk, response in zip(request.chunks, normalized_responses, strict=True):
         validate_chunk_response(chunk, request.placeholders, response)
-    rendered = "".join(responses)
+    rendered = "".join(normalized_responses)
     expected = tuple(item.token for item in request.placeholders)
     if Counter(_response_tokens(rendered)) != Counter(expected):
         raise DocumentTranslationError("document_response:placeholder_mismatch")
