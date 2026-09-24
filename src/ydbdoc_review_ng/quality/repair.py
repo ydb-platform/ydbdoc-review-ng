@@ -384,12 +384,12 @@ def review_translation(
             source, source_plan, translation_request, target, target_path
         )
     elif accepted_map is not None:
-        target_translations = accepted_map.as_dict()
-        if (
-            accepted_map.target_path != target_path
-            or assemble_candidate(source, source_plan, translation_request, target_translations)
-            != target
-        ):
+        if accepted_map.target_path != target_path:
+            raise QualityInputError
+        target_translations = _derive_target_translations(
+            source, source_plan, translation_request, target, target_path
+        )
+        if target_translations != accepted_map.as_dict():
             raise QualityInputError
     else:
         # A deterministic pinned rename has no accepted map. Its bytes are

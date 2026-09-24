@@ -219,6 +219,76 @@ def test_runtime_publishes_field_local_inline_code_grammar_order_once() -> None:
     ) == 1
 
 
+def test_runtime_preserves_list_formatting_drift_through_critic() -> None:
+    from ydbdoc_review_ng.cli import main
+    from ydbdoc_review_ng.models import HttpResponse
+    from ydbdoc_review_ng.runtime import create_runtime
+
+    class FormattingServices(RuntimeServices):
+        def __init__(self) -> None:
+            super().__init__()
+            self.files["ydb/docs/ru/core/page.md"] = b"* Parent\n  * Nested source item\n"
+            self.raw_calls = 0
+
+        def model(self, request):
+            body = json.loads(request.body)
+            if body.get("jsonSchema") is not None:
+                return super().model(request)
+            self.raw_calls += 1
+            self.events.append(("MODEL", ("raw_markdown",)))
+            return HttpResponse(
+                200,
+                json.dumps(
+                    {
+                        "result": {
+                            "alternatives": [
+                                {
+                                    "status": "ALTERNATIVE_STATUS_FINAL",
+                                    "message": {
+                                        "role": "assistant",
+                                        "text": (
+                                            "* Parent translated\n"
+                                            "* Nested translated item\n"
+                                        ),
+                                    },
+                                }
+                            ],
+                            "usage": {
+                                "inputTextTokens": "10",
+                                "completionTokens": "5",
+                            },
+                        }
+                    }
+                ).encode(),
+                Decimal("0.01"),
+            )
+
+    services = FormattingServices()
+    runtime = create_runtime(
+        environment={
+            "GITHUB_ACTOR": "maintainer",
+            "YDBDOC_ALLOWED_ACTORS": "maintainer",
+            "YANDEX_API_KEY": "secret",
+            "YANDEX_FOLDER_ID": "folder",
+        },
+        ydb_executor=services,
+        github_transport=services.github,
+        model_transport=services.model,
+    )
+
+    exit_code = main(
+        ["translate", "--pr", "42", "--source-sha", services.source, "--budget-rub", "10"],
+        dispatcher=runtime,
+    )
+
+    assert exit_code == 0
+    assert services.raw_calls == 1
+    assert services.files["ydb/docs/en/core/page.md"] == (
+        b"* Parent translated\n* Nested translated item\n"
+    )
+    assert services.events.count(("MODEL", ("verdict", "findings"))) == 1
+
+
 class ContentFilterServices(RuntimeServices):
     def __init__(self, filtered_responses: int) -> None:
         super().__init__()

@@ -134,6 +134,13 @@ def test_formatting_drift_reaches_critic_without_deterministic_repair() -> None:
     target = b"* Parent translated\n* Nested translated item\n"
     plan = build_markdown_plan(SNAPSHOT, SOURCE_PATH, source)
     request = build_translation_request(source, plan)
+    accepted_map = AcceptedMap(
+        PATH,
+        (
+            (request.requested_ids[0], "Parent translated"),
+            (request.requested_ids[1], "Nested translated item"),
+        ),
+    )
     executor = FakeExecutor(critic_json("GREEN", []))
 
     result = review_translation(
@@ -146,6 +153,7 @@ def test_formatting_drift_reaches_critic_without_deterministic_repair() -> None:
         target_path=PATH,
         source_locale=Locale.EN,
         target_locale=Locale.RU,
+        accepted_map=accepted_map,
     )
 
     assert result.primary.verdict is Verdict.GREEN
