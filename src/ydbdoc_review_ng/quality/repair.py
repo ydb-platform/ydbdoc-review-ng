@@ -25,7 +25,6 @@ from ydbdoc_review_ng.translation import (
     DocumentTranslationRequest,
     ProtectedMismatch,
     TranslationRequest,
-    assemble_candidate,
     build_translation_request,
     prepare_document,
     restore_document,
@@ -97,10 +96,9 @@ def _derive_target_translations(
                 ),
                 None,
             )
-            if group_match is None:
-                raise QualityInputError
-            group_map[target_group] = group_match
-            unused_source_groups.remove(group_match)
+            if group_match is not None:
+                group_map[target_group] = group_match
+                unused_source_groups.remove(group_match)
 
         unused = list(request_field.placeholders)
         chunks: list[bytes] = []
@@ -109,6 +107,10 @@ def _derive_target_translations(
             chunks.append(target[cursor : region.span.start])
             region_bytes = target[region.span.start : region.span.end]
             expected_group = group_map.get(region.group) if region.group is not None else None
+            if region.group is not None and expected_group is None:
+                chunks.append(region_bytes)
+                cursor = region.span.end
+                continue
             placeholder_match = next(
                 (
                     placeholder
@@ -120,7 +122,9 @@ def _derive_target_translations(
                 None,
             )
             if placeholder_match is None:
-                raise QualityInputError
+                chunks.append(region_bytes)
+                cursor = region.span.end
+                continue
             chunks.append(placeholder_match.token.encode("ascii"))
             unused.remove(placeholder_match)
             cursor = region.span.end
@@ -133,10 +137,6 @@ def _derive_target_translations(
             )
         except UnicodeDecodeError:
             raise QualityInputError from None
-    try:
-        assemble_candidate(source, source_plan, translation_request, values)
-    except AssemblyError:
-        raise QualityInputError from None
     return values
 
 

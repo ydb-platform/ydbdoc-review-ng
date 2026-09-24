@@ -227,7 +227,10 @@ def test_runtime_preserves_list_formatting_drift_through_critic() -> None:
     class FormattingServices(RuntimeServices):
         def __init__(self) -> None:
             super().__init__()
-            self.files["ydb/docs/ru/core/page.md"] = b"* Parent\n  * Nested source item\n"
+            self.files["ydb/docs/ru/core/page.md"] = (
+                "* Parent\n  * `enable_strict_user_management` — исходный пункт "
+                "(то есть только администратор)\n"
+            ).encode()
             self.raw_calls = 0
 
         def model(self, request):
@@ -248,7 +251,8 @@ def test_runtime_preserves_list_formatting_drift_through_critic() -> None:
                                         "role": "assistant",
                                         "text": (
                                             "* Parent translated\n"
-                                            "* Nested translated item\n"
+                                            "* [[YDBDOC_PROTECTED_0001]] — translated item "
+                                            "(i.e., only an administrator)\n"
                                         ),
                                     },
                                 }
@@ -284,7 +288,9 @@ def test_runtime_preserves_list_formatting_drift_through_critic() -> None:
     assert exit_code == 0
     assert services.raw_calls == 1
     assert services.files["ydb/docs/en/core/page.md"] == (
-        b"* Parent translated\n* Nested translated item\n"
+        b"* Parent translated\n"
+        b"* `enable_strict_user_management` "
+        b"\xe2\x80\x94 translated item (i.e., only an administrator)\n"
     )
     assert services.events.count(("MODEL", ("verdict", "findings"))) == 1
 

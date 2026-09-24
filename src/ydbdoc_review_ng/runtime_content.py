@@ -998,13 +998,35 @@ class RuntimeContent:
         accepted_maps: tuple[AcceptedMap, ...],
         /,
     ) -> WorkflowCandidate:
-        candidate = self.assemble(plans, accepted_maps)
-        files = unpack(candidate.content)
-        for accepted in accepted_documents:
-            if accepted.target_path.value not in files:
-                raise ContinuationStateError()
-            files[accepted.target_path.value] = accepted.translated_markdown.encode("utf-8")
-        return WorkflowCandidate(pack(files), candidate.review_context)
+        if not plans.preparation.for_translation:
+            raise RuntimeBoundaryError("verification_plans_not_translatable")
+        allowed = {document.entry.pair.target_path for document in plans.documents}
+        required_maps = {
+            document.entry.pair.target_path
+            for document in plans.documents
+            if document.entry.operation is not FileOperation.RENAME_TARGET
+        }
+        maps = {item.target_path for item in accepted_maps}
+        documents = {item.target_path: item for item in accepted_documents}
+        document_paths = set(documents)
+        fixed_paths = {path for path, _content in plans.fixed_files}
+        if (
+            len(maps) != len(accepted_maps)
+            or not required_maps <= maps <= allowed
+            or len(documents) != len(accepted_documents)
+            or not required_maps <= document_paths
+            or any(
+                path not in allowed and path.value not in fixed_paths
+                for path in document_paths
+            )
+        ):
+            raise ContinuationStateError()
+        files = dict(plans.fixed_files)
+        for path, accepted in documents.items():
+            files[path.value] = accepted.translated_markdown.encode("utf-8")
+        self.documents = plans.documents
+        self.entries = () if plans.manifest is None else plans.manifest.entries
+        return WorkflowCandidate(pack(files), plans.documents)
 
     def _translate_segments(
         self,
