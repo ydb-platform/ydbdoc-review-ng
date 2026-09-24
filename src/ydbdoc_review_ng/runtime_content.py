@@ -122,6 +122,18 @@ def unpack(content: bytes) -> dict[str, bytes | None]:
     }
 
 
+def _partition_target_reference(value: str | None, count: int, /) -> tuple[str | None, ...]:
+    if value is None:
+        return (None,) * count
+    if count == 1:
+        return (value,)
+    lines = value.splitlines(keepends=True)
+    return tuple(
+        "".join(lines[index * len(lines) // count : (index + 1) * len(lines) // count])
+        for index in range(count)
+    )
+
+
 @dataclass(frozen=True)
 class Document:
     entry: ScopeEntry
@@ -854,6 +866,22 @@ class RuntimeContent:
             operator_context=operator_context,
         )
         block_texts = _document_block_texts(document.source, document.plan, prepared.placeholders)
+        target_reference_bytes = (
+            entry.target_content
+            if entry.target_content is not None
+            else entry.rename_from_target_content
+        )
+        try:
+            target_reference = (
+                None
+                if target_reference_bytes is None
+                else target_reference_bytes.decode("utf-8")
+            )
+        except UnicodeDecodeError:
+            raise RuntimeBoundaryError("translation_target_utf8_invalid") from None
+        target_references = _partition_target_reference(
+            target_reference, len(prepared.chunks)
+        )
         effective_chunks: list[DocumentChunk] = []
         responses: list[str] = []
         degraded_findings: list[Finding] = []
@@ -973,13 +1001,26 @@ class RuntimeContent:
                 return rejected
 
             for attempt in (1, 2):
+                existing_target = target_references[chunk_index - 1]
                 prompt = build_document_prompt(
                     chunk,
                     entry.pair.source_locale.value,
                     entry.pair.target_locale.value,
                     correction=attempt == 2,
                     correction_note=note,
+                    existing_target=existing_target,
                 )
+                if existing_target is not None and len(prompt) > limit:
+                    overflow = len(prompt) - limit
+                    existing_target = existing_target[: max(0, len(existing_target) - overflow)]
+                    prompt = build_document_prompt(
+                        chunk,
+                        entry.pair.source_locale.value,
+                        entry.pair.target_locale.value,
+                        correction=attempt == 2,
+                        correction_note=note,
+                        existing_target=existing_target,
+                    )
                 if operator_context is not None:
                     prompt += "\n\nOperator context:\n" + operator_context
                 if len(prompt) > limit:

@@ -7,6 +7,11 @@ from decimal import Decimal
 
 
 def raw_translation_source(prompt):
+    marker = "<AUTHORITATIVE_SOURCE_"
+    if marker in prompt:
+        start = prompt.index("\n", prompt.index(marker)) + 1
+        end = prompt.index("</AUTHORITATIVE_SOURCE_", start)
+        return prompt[start:end]
     source = prompt.split("\n\n", 1)[1]
     for marker in ("\n\nOperator context:\n", "\n\nImportant correction:\n"):
         source = source.split(marker, 1)[0]

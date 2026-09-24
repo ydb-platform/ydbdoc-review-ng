@@ -44,6 +44,32 @@ def test_complete_markdown_prompt_uses_selected_direction(
     )
 
 
+def test_existing_target_prompt_synchronizes_against_authoritative_source() -> None:
+    source = "# Новый заголовок\n\nНовый текст.\n"
+    chunk = prepare_document(
+        source.encode(),
+        build_markdown_plan(SNAPSHOT, PATH, source.encode()),
+        max_characters=100_000,
+    ).chunks[0]
+    existing_target = "# Existing heading\n\nExisting text with old wording.\n"
+
+    prompt = build_document_prompt(
+        chunk,
+        "ru",
+        "en",
+        existing_target=existing_target,
+    )
+
+    assert "Synchronize the existing en Markdown" in prompt
+    assert "authoritative ru Markdown" in prompt
+    assert "Preserve correct existing target wording" in prompt
+    assert "Existing target is reference context only" in prompt
+    assert "Never copy technical fragments from target" in prompt
+    assert "<AUTHORITATIVE_SOURCE_RU>\n" + source in prompt
+    assert "<EXISTING_TARGET_EN>\n" + existing_target in prompt
+    assert "Return Markdown only" in prompt
+
+
 def test_global_placeholders_restore_exact_bytes_and_reject_contract_drift() -> None:
     source = b"See `SELECT 1` and [guide](guide.md).\n"
     plan, request = prepared(source)

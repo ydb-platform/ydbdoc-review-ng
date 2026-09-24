@@ -61,13 +61,22 @@ class ScriptedModels:
         return ModelCallResult(cast(str, response), None, ())
 
 
+def _source_from_prompt(prompt: str) -> str:
+    marker = "<AUTHORITATIVE_SOURCE_"
+    if marker not in prompt:
+        return prompt.split("\n\n", 1)[1]
+    start = prompt.index("\n", prompt.index(marker)) + 1
+    end = prompt.index("</AUTHORITATIVE_SOURCE_", start)
+    return prompt[start:end]
+
+
 class EchoChunkModels:
     def __init__(self) -> None:
         self.calls: list[ModelRequest] = []
 
     def invoke(self, request: ModelRequest, /) -> ModelCallResult:
         self.calls.append(request)
-        return ModelCallResult(request.prompt.split("\n\n", 1)[1], None, ())
+        return ModelCallResult(_source_from_prompt(request.prompt), None, ())
 
 
 def _heading_block(number: int, length: int) -> str:
@@ -83,7 +92,12 @@ def content_filter_witness(*, with_leading_chunk: bool = False) -> bytes:
     return (_heading_block(999, 15_900) + witness).encode()
 
 
-def document_for(source: bytes, *, source_locale: Locale = Locale.RU) -> Document:
+def document_for(
+    source: bytes,
+    *,
+    source_locale: Locale = Locale.RU,
+    target: bytes | None = b"# Old target\n",
+) -> Document:
     target_locale = Locale.EN if source_locale is Locale.RU else Locale.RU
     source_path, target_path = (
         (SOURCE_PATH, TARGET_PATH) if source_locale is Locale.RU else (TARGET_PATH, SOURCE_PATH)
@@ -92,7 +106,7 @@ def document_for(source: bytes, *, source_locale: Locale = Locale.RU) -> Documen
     entry = ScopeEntry(
         FilePair(source_locale, target_locale, source_path, target_path),
         source,
-        b"# Old target\n",
+        target,
         ScopeOrigin.INITIAL,
         FileOperation.TRANSLATE,
         (key,),
@@ -113,7 +127,7 @@ def content_with(models: object, environment: dict[str, str] | None = None) -> R
 
 @pytest.mark.parametrize(
     ("source_locale", "direction"),
-    [(Locale.RU, "from ru to en"), (Locale.EN, "from en to ru")],
+    [(Locale.RU, "authoritative ru Markdown"), (Locale.EN, "authoritative en Markdown")],
 )
 def test_translate_document_uses_complete_markdown_and_selected_direction(
     source_locale: Locale, direction: str
@@ -132,15 +146,64 @@ def test_translate_document_uses_complete_markdown_and_selected_direction(
 
     assert len(models.calls) == 1
     call = models.calls[0]
-    assert f"Translate the complete Markdown below {direction}" in call.prompt
+    assert direction in call.prompt
+    assert "Synchronize the existing" in call.prompt
     assert "# Исходный заголовок" in call.prompt
     assert "- Один\n- Два" in call.prompt
-    assert "# Old target" not in call.prompt
+    assert "# Old target" in call.prompt
     assert "JSON" not in call.prompt
     assert (
         assemble_candidate(document.source, document.plan, document.request, accepted.as_dict())
         == b"# Translated heading\n\nText with [guide](guide.md).\n\n- One\n- Two\n"
     )
+
+
+def test_translate_without_existing_target_uses_full_translation_prompt() -> None:
+    document = document_for(b"# New source page\n", target=None)
+    models = ScriptedModels(["# New target page\n"])
+
+    content_with(models).translate_document(document)
+
+    assert "Translate the complete Markdown below from ru to en" in models.calls[0].prompt
+    assert "<EXISTING_TARGET_EN>" not in models.calls[0].prompt
+
+
+def test_chunked_sync_uses_ordered_non_overlapping_target_excerpts() -> None:
+    source = (
+        "## Source one\n" + "a" * 900 + "\n\n"
+        "## Source two\n" + "b" * 900 + "\n\n"
+        "## Source three\n" + "c" * 900 + "\n"
+    ).encode()
+    target = (
+        "## Target one\n" + "x" * 90 + "\n\n"
+        "## Target two\n" + "y" * 90 + "\n\n"
+        "## Target three\n" + "z" * 90 + "\n"
+    ).encode()
+    document = document_for(source, target=target)
+    prepared = prepare_document(
+        document.source,
+        document.plan,
+        max_characters=2400,
+        source_locale="ru",
+        target_locale="en",
+    )
+    assert len(prepared.chunks) == 3
+    models = ScriptedModels([chunk.text for chunk in prepared.chunks])
+
+    content_with(models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "2400"}).translate_document(
+        document
+    )
+
+    assert len(models.calls) == 3
+    for index, label in enumerate(("Target one", "Target two", "Target three")):
+        prompt = models.calls[index].prompt
+        assert label in prompt
+        assert all(
+            other not in prompt
+            for other in ("Target one", "Target two", "Target three")
+            if other != label
+        )
+        assert len(prompt) <= 2400
 
 
 def test_translate_restores_source_final_lf_without_technical_correction() -> None:
@@ -345,7 +408,7 @@ def test_large_document_uses_minimum_response_safe_raw_chunks(
         models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "250000"}
     ).translate_document(document)
 
-    raw_chunks = tuple(call.prompt.split("\n\n", 1)[1] for call in models.calls)
+    raw_chunks = tuple(_source_from_prompt(call.prompt) for call in models.calls)
     assert len(raw_chunks) > 1
     assert all(len(chunk) <= 16_000 for chunk in raw_chunks)
     assert all(len(left + right) > 16_000 for left, right in pairwise(raw_chunks))
@@ -390,7 +453,7 @@ def test_exhausted_content_filter_splits_only_original_chunk_nearest_midpoint(
         models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "250000"}
     ).translate_document(document)
 
-    raw_requests = tuple(call.prompt.split("\n\n", 1)[1] for call in models.calls)
+    raw_requests = tuple(_source_from_prompt(call.prompt) for call in models.calls)
     assert tuple(map(len, raw_requests)) == (15_900, 15_801, 7_870, 7_931)
     assert raw_requests.count(first.text) == 1
     assert raw_requests[2] + raw_requests[3] == filtered.text
@@ -423,7 +486,7 @@ def test_content_filter_uses_only_boundary_even_when_one_child_exceeds_half_cap(
 
     accepted = content_with(models).translate_document(document)
 
-    raw_requests = tuple(call.prompt.split("\n\n", 1)[1] for call in models.calls)
+    raw_requests = tuple(_source_from_prompt(call.prompt) for call in models.calls)
     assert tuple(map(len, raw_requests)) == (10_000, 9_000, 1_000)
     assert raw_requests[1] + raw_requests[2] == raw_requests[0]
     assert (
@@ -448,8 +511,8 @@ def test_content_filter_in_child_is_terminal_without_recursive_split() -> None:
         )
 
     assert len(models.calls) == 2
-    assert len(models.calls[0].prompt.split("\n\n", 1)[1]) == 15_801
-    assert len(models.calls[1].prompt.split("\n\n", 1)[1]) == 7_870
+    assert len(_source_from_prompt(models.calls[0].prompt)) == 15_801
+    assert len(_source_from_prompt(models.calls[1].prompt)) == 7_870
 
 
 def test_content_filter_without_top_level_boundary_is_terminal() -> None:
@@ -773,19 +836,19 @@ def test_near_limit_correction_reservation_fails_before_model_call() -> None:
         + "\n\nOperator context:\n"
         + operator_context
     )
-    assert len(initial_prompt) == 589
+    limit = len(initial_prompt)
 
     with pytest.raises(DocumentTranslationError, match="top_level_block_exceeds_limit"):
-        content_with(models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "589"}).translate_document(
-            document, operator_context=operator_context
-        )
+        content_with(
+            models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": str(limit)}
+        ).translate_document(document, operator_context=operator_context)
 
     assert models.calls == []
 
 
 def test_long_protected_fragment_correction_is_reserved_before_model_call() -> None:
     source = b"```text\n" + b"x" * 5_000 + b"\n```\n\nVisible prose.\n"
-    document = document_for(source)
+    document = document_for(source, target=None)
     models = ScriptedModels([])
 
     with pytest.raises(DocumentTranslationError, match="top_level_block_exceeds_limit"):
@@ -807,7 +870,7 @@ def test_multiblock_unit_accepts_cosmetic_blank_line_change_without_retry() -> N
         )
         + b"\n"
     )
-    document = document_for(source)
+    document = document_for(source, target=None)
     invalid = source.decode().replace("\n\n", "\n", 1)
     models = ScriptedModels([invalid])
     operator_context = "Reviewer context"
