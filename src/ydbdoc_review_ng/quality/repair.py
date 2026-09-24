@@ -18,6 +18,7 @@ from ydbdoc_review_ng.quality.types import (
     Finding,
     QualityReviewResult,
     RepairErrorReason,
+    Verdict,
 )
 from ydbdoc_review_ng.translation import (
     AssemblyError,
@@ -53,6 +54,9 @@ class QualityExecutionError(RuntimeError):
     def __init__(self, stage: str, /) -> None:
         self.stage = stage
         super().__init__(f"quality_execution:{stage}")
+
+
+_CRITIC_REQUEST_MAX_CHARACTERS = 80_000
 
 
 def _derive_target_translations(
@@ -155,25 +159,111 @@ def _invoke_critic(
     operator_context: str | None = None,
     before_model_call: Callable[[], None] | None = None,
 ) -> CriticResult:
-    request = build_critic_request(
-        model=model,
-        source=source,
-        target=target,
-        target_path=target_path,
-        source_locale=source_locale,
-        target_locale=target_locale,
-        requested_ids=requested_ids,
-        final=final,
-        operator_context=operator_context,
-    )
-    if before_model_call is not None:
-        before_model_call()
-    response = executor.invoke(request)
-    if not response.success or response.text is None:
-        raise QualityExecutionError("final_critic" if final else "critic")
-    return parse_critic_response(
-        response.text, target_path=target_path, requested_ids=requested_ids
-    )
+    def request_for(
+        source_part: bytes,
+        target_part: bytes = target,
+        *,
+        source_excerpt: bool,
+        target_excerpt: bool = False,
+    ) -> ModelRequest:
+        return build_critic_request(
+            model=model,
+            source=source_part,
+            target=target_part,
+            target_path=target_path,
+            source_locale=source_locale,
+            target_locale=target_locale,
+            requested_ids=requested_ids,
+            final=final,
+            source_is_excerpt=source_excerpt,
+            target_is_excerpt=target_excerpt,
+            operator_context=operator_context,
+        )
+
+    def split_text(text: str) -> tuple[str, str]:
+        if len(text) < 2:
+            raise QualityExecutionError("final_critic" if final else "critic")
+        midpoint = len(text) // 2
+        boundaries = [
+            boundary
+            for marker in ("\n\n", "\n")
+            for boundary in (text.rfind(marker, 0, midpoint), text.find(marker, midpoint))
+            if 0 < boundary < len(text)
+        ]
+        boundary = min(boundaries, key=lambda item: abs(item - midpoint), default=midpoint)
+        return text[:boundary], text[boundary:]
+
+    request = request_for(source, source_excerpt=False)
+    requests: tuple[ModelRequest, ...]
+    if len(request.prompt) <= _CRITIC_REQUEST_MAX_CHARACTERS:
+        requests = (request,)
+    elif (
+        len(request_for(b"", source_excerpt=True).prompt)
+        <= _CRITIC_REQUEST_MAX_CHARACTERS
+    ):
+        pending = [source.decode("utf-8")]
+        parts: list[bytes] = []
+        while pending:
+            text = pending.pop()
+            part = text.encode("utf-8")
+            if (
+                len(request_for(part, source_excerpt=True).prompt)
+                <= _CRITIC_REQUEST_MAX_CHARACTERS
+            ):
+                parts.append(part)
+                continue
+            left, right = split_text(text)
+            pending.append(right)
+            pending.append(left)
+        requests = tuple(request_for(part, source_excerpt=True) for part in parts)
+    else:
+        pending_pairs = [(source.decode("utf-8"), target.decode("utf-8"))]
+        pairs: list[tuple[bytes, bytes]] = []
+        while pending_pairs:
+            source_text, target_text = pending_pairs.pop()
+            source_part, target_part = source_text.encode(), target_text.encode()
+            pair_request = request_for(
+                source_part,
+                target_part,
+                source_excerpt=True,
+                target_excerpt=True,
+            )
+            if len(pair_request.prompt) <= _CRITIC_REQUEST_MAX_CHARACTERS:
+                pairs.append((source_part, target_part))
+                continue
+            source_left, source_right = split_text(source_text)
+            target_left, target_right = split_text(target_text)
+            pending_pairs.append((source_right, target_right))
+            pending_pairs.append((source_left, target_left))
+        requests = tuple(
+            request_for(
+                source_part,
+                target_part,
+                source_excerpt=True,
+                target_excerpt=True,
+            )
+            for source_part, target_part in pairs
+        )
+
+    results: list[CriticResult] = []
+    for item in requests:
+        if before_model_call is not None:
+            before_model_call()
+        response = executor.invoke(item)
+        if not response.success or response.text is None:
+            raise QualityExecutionError("final_critic" if final else "critic")
+        results.append(
+            parse_critic_response(
+                response.text, target_path=target_path, requested_ids=requested_ids
+            )
+        )
+    findings: list[Finding] = []
+    for result in results:
+        for finding in result.findings:
+            if finding not in findings:
+                findings.append(finding)
+    verdict = Verdict.RED if any(result.verdict is Verdict.RED for result in results) else Verdict.GREEN
+    return CriticResult(verdict, tuple(findings))
 
 
 def _safe_repair_findings(

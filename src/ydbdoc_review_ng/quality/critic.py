@@ -98,6 +98,8 @@ def build_critic_request(
     target_locale: Locale,
     requested_ids: tuple[str, ...],
     final: bool = False,
+    source_is_excerpt: bool = False,
+    target_is_excerpt: bool = False,
     operator_context: str | None = None,
 ) -> ModelRequest:
     if type(source) is not bytes or type(target) is not bytes:
@@ -110,8 +112,22 @@ def build_critic_request(
         if requested_ids
         else "Do not include field_ids because this document has no repairable fields.\n"
     )
+    if target_is_excerpt:
+        source_scope_instruction = (
+            "The authoritative source and target below are corresponding ordered excerpts of "
+            "larger documents. Review only this excerpt pair. "
+        )
+    elif source_is_excerpt:
+        source_scope_instruction = (
+            "The authoritative source below is one ordered excerpt of a larger document. "
+            "Review only target material corresponding to this source excerpt. The complete "
+            "target is included for context; do not flag its other sections as extra content. "
+        )
+    else:
+        source_scope_instruction = ""
     prompt = (
         "Compare the authoritative source with the complete translated target. "
+        f"{source_scope_instruction}"
         "Use RED only for a concrete, currently present, material translation defect: "
         "wrong or reversed meaning; missing user-facing information; untranslated user-facing "
         "prose; wrong technical terminology that can mislead use; or broken or purpose-changing "

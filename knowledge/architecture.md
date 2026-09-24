@@ -42,7 +42,10 @@ semantic stop наследует первоначальный expiry. Infrastruc
   URL/path/code относительно authoritative source без navigation graph или link
   resolver.
 - Model critic сравнивает authoritative source и final target, проверяя смысл,
-  полноту, терминологию и работоспособность ссылок.
+  полноту, терминологию и работоспособность ссылок. Большой source проверяется
+  упорядоченными excerpts с полным target в каждом prompt, а при слишком большом
+  target соответствующими source/target excerpt-парами; verdict и findings
+  объединяются.
 - Add source-TOC-reachable страницы добавляет target TOC entry без redirect;
   add вне source TOC не обязан менять TOC; rename обновляет target TOC path и
   создаёт прямой redirect old→new; ordinary edit не меняет ни TOC, ни redirects.

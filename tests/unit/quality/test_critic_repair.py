@@ -129,6 +129,40 @@ def test_green_uses_one_critic_and_does_not_attempt_repair() -> None:
     assert PATH.value in executor.calls[0].prompt
 
 
+def test_large_critic_reviews_source_excerpts_with_complete_target_under_limit() -> None:
+    sections = [
+        f"## Раздел {index}\n\n" + (f"Исходный текст {index}. " * 30) + "\n\n"
+        for index in range(80)
+    ]
+    source = "".join(sections).encode()
+    target = "".join(
+        section.replace("Исходный текст", "Translated text") for section in sections
+    ).encode()
+    plan = build_markdown_plan(SNAPSHOT, SOURCE_PATH, source)
+    request = build_translation_request(source, plan)
+    executor = FakeExecutor(*(critic_json("GREEN", []) for _ in range(16)))
+
+    result = review_translation(
+        executor,
+        model="model",
+        source=source,
+        source_plan=plan,
+        translation_request=request,
+        target=target,
+        target_path=PATH,
+        source_locale=Locale.RU,
+        target_locale=Locale.EN,
+        allow_repair=False,
+        max_request_characters=250_000,
+    )
+
+    assert result.primary.verdict is Verdict.GREEN
+    assert len(executor.calls) > 1
+    assert all(len(call.prompt) <= 80_000 for call in executor.calls)
+    assert all(target.decode() in call.prompt for call in executor.calls)
+    assert all("ordered excerpt" in call.prompt for call in executor.calls)
+
+
 def test_formatting_drift_reaches_critic_without_deterministic_repair() -> None:
     source = b"* Parent\n  * Nested source item\n"
     target = b"* Parent translated\n* Nested translated item\n"
