@@ -495,6 +495,31 @@ def test_content_filter_uses_only_boundary_even_when_one_child_exceeds_half_cap(
     )
 
 
+def test_content_filter_children_do_not_repeat_filtered_target_reference() -> None:
+    source = content_filter_witness()
+    document = document_for(source, target=b"# Existing target reference\n")
+    prepared = prepare_document(
+        source,
+        document.plan,
+        max_characters=250_000,
+        source_locale="ru",
+        target_locale="en",
+    )
+    parent = prepared.chunks[0]
+    models = ScriptedModels(
+        [
+            ModelCallResult(None, AttemptError.CONTENT_FILTER, ()),
+            parent.text[:7_870],
+            parent.text[7_870:],
+        ]
+    )
+
+    content_with(models).translate_document(document)
+
+    assert "<EXISTING_TARGET_EN>" in models.calls[0].prompt
+    assert all("<EXISTING_TARGET_EN>" not in call.prompt for call in models.calls[1:])
+
+
 def test_content_filter_in_child_is_terminal_without_recursive_split() -> None:
     source = content_filter_witness()
     document = document_for(source)

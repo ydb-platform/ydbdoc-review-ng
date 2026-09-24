@@ -964,7 +964,10 @@ class RuntimeContent:
             return not returned_stack
 
         def invoke_chunk(
-            chunk: DocumentChunk, chunk_index: int
+            chunk: DocumentChunk,
+            chunk_index: int,
+            *,
+            use_target_reference: bool = True,
         ) -> tuple[str | None, AttemptError | None, bool]:
             nonlocal unvalidated_missing
             note: str | None = None
@@ -1001,7 +1004,9 @@ class RuntimeContent:
                 return rejected
 
             for attempt in (1, 2):
-                existing_target = target_references[chunk_index - 1]
+                existing_target = (
+                    target_references[chunk_index - 1] if use_target_reference else None
+                )
                 prompt = build_document_prompt(
                     chunk,
                     entry.pair.source_locale.value,
@@ -1187,7 +1192,7 @@ class RuntimeContent:
                     raise RuntimeBoundaryError("translation_model_failed")
                 for child in children:
                     child_response, _child_failure, _child_primary = invoke_chunk(
-                        child, chunk_index
+                        child, chunk_index, use_target_reference=False
                     )
                     if child_response is None:
                         raise RuntimeBoundaryError("translation_model_failed")
