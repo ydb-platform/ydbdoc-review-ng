@@ -307,13 +307,45 @@ def test_initial_chunks_do_not_start_inside_nested_list() -> None:
     )
 
 
-def test_missing_blank_line_between_top_level_blocks_is_rejected() -> None:
+def test_missing_blank_line_between_top_level_blocks_is_restored() -> None:
     source = b"* First item.\n\n## Second [guide](guide.md)\n"
     plan, request = prepared(source)
     response = request.chunks[0].text.replace("\n\n", "\n", 1)
 
-    with pytest.raises(DocumentTranslationError, match="markdown_invalid"):
-        restore_document(source, plan, request, (response,))
+    candidate = restore_document(source, plan, request, (response,))
+
+    assert candidate == source
+
+
+def test_missing_blank_after_heading_is_restored_before_publication() -> None:
+    source = b"## Heading\n\nRelease date: July 27, 2026.\n"
+    plan, request = prepared(source)
+    response = "## Translated heading\nRelease date: July 27, 2026.\n"
+
+    candidate = restore_document(source, plan, request, (response,))
+
+    assert candidate == b"## Translated heading\n\nRelease date: July 27, 2026.\n"
+
+
+def test_missing_blank_after_heading_is_restored_across_adaptive_chunks() -> None:
+    source = b"## Heading\n\nRelease date: July 27, 2026.\n"
+    plan = build_markdown_plan(SNAPSHOT, PATH, source)
+    request = DocumentTranslationRequest(
+        (
+            DocumentChunk("## Heading\n", 0, 1, ()),
+            DocumentChunk("\nRelease date: July 27, 2026.\n", 1, 2, ()),
+        ),
+        (),
+    )
+
+    candidate = restore_document(
+        source,
+        plan,
+        request,
+        ("## Translated heading", "Release date: July 27, 2026."),
+    )
+
+    assert candidate == b"## Translated heading\n\nRelease date: July 27, 2026.\n"
 
 
 def test_empty_markdown_link_is_rejected_before_publication() -> None:

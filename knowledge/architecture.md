@@ -34,7 +34,9 @@ semantic stop наследует первоначальный expiry. Infrastruc
 
 - Локальный детерминированный слой проверяет strict JSON, exact field IDs,
   placeholders/container pairs, source-fragment restoration, повторный parse и
-  простые build-breaking дефекты Markdown. Невалидный большой translate chunk
+  простые build-breaking дефекты Markdown. Потерянные моделью обязательные
+  пустые строки вокруг заголовков и списков восстанавливаются во всём candidate,
+  если такого дефекта не было в source. Невалидный большой translate chunk
   после одной correction рекурсивно делится по top-level block boundary, пока
   диапазон source blocks строго уменьшается; неделимый невалидный chunk не
   публикуется.

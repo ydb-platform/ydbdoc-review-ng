@@ -96,6 +96,40 @@ def _validate_publishable_markdown(source: bytes, target: bytes, /) -> None:
             )
 
 
+def _normalize_publishable_markdown(source: bytes, target: bytes, /) -> bytes:
+    """Restore build-critical blank lines only when translation introduced the defect."""
+    allowed = Counter(problem for problem, _line_number in _markdown_style_problems(source))
+    seen: Counter[str] = Counter()
+    before: set[int] = set()
+    after: set[int] = set()
+    for problem, line_number in _markdown_style_problems(target):
+        seen[problem] += 1
+        if line_number is None or seen[problem] <= allowed[problem]:
+            continue
+        if problem in {"blank_before_heading", "blank_before_list"}:
+            before.add(line_number)
+        elif problem == "blank_after_heading":
+            after.add(line_number)
+
+    if not before and not after:
+        return target
+    text = target.decode("utf-8")
+    lines = text.splitlines(keepends=True)
+    newline = "\r\n" if "\r\n" in text else "\n"
+    result: list[str] = []
+    for line_number, line in enumerate(lines, 1):
+        if line_number in before and result and result[-1].strip():
+            result.append(newline)
+        result.append(line)
+        if (
+            line_number in after
+            and line_number < len(lines)
+            and lines[line_number].strip()
+        ):
+            result.append(newline)
+    return "".join(result).encode("utf-8")
+
+
 def _restore_placeholders(
     value: str, by_token: dict[str, bytes], /
 ) -> tuple[bytes, dict[str, tuple[int, int]]]:
@@ -791,7 +825,14 @@ def restore_document(
         raise TypeError("request and responses must have exact public contract types")
     if len(responses) != len(request.chunks) or any(type(item) is not str for item in responses):
         raise DocumentTranslationError("document_response:unit_mismatch")
-    for chunk, response in zip(request.chunks, responses, strict=True):
+    normalized_inputs = tuple(
+        _normalize_publishable_markdown(
+            chunk.text.encode("utf-8"),
+            _restore_chunk_final_lf(chunk, response).encode("utf-8"),
+        ).decode("utf-8")
+        for chunk, response in zip(request.chunks, responses, strict=True)
+    )
+    for chunk, response in zip(request.chunks, normalized_inputs, strict=True):
         validate_chunk_response(chunk, request.placeholders, response)
     normalized_responses = tuple(
         _restore_chunk_boundary_syntax(
@@ -804,7 +845,7 @@ def restore_document(
             ),
         )
         for index, (chunk, response) in enumerate(
-            zip(request.chunks, responses, strict=True)
+            zip(request.chunks, normalized_inputs, strict=True)
         )
     )
     rendered = "".join(normalized_responses)
@@ -815,6 +856,7 @@ def restore_document(
     candidate = _TOKEN.sub(lambda match: by_token[match.group()].decode("utf-8"), rendered).encode(
         "utf-8"
     )
+    candidate = _normalize_publishable_markdown(source, candidate)
     try:
         target_plan = build_markdown_plan(plan.source_snapshot, plan.source_path, candidate)
         verify_document_candidate(source, plan, candidate, target_plan)
