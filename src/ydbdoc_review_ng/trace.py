@@ -37,6 +37,7 @@ _ALLOWED_DETAILS = frozenset(
         "model_role",
         "pr_number",
         "rows",
+        "response_status",
         "scopes_total",
         "stage",
     }
