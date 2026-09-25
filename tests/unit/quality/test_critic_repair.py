@@ -215,6 +215,36 @@ def test_primary_critic_applies_its_own_correction_without_repair_call() -> None
     assert executor.calls[0].schema is not None
 
 
+def test_green_critic_editor_change_is_applied_and_independently_reviewed() -> None:
+    plan, request, values, target = prepared()
+    field_id = request.fields[1].field_id
+    corrected_values = {
+        **values,
+        field_id: values[field_id].replace("Прочитайте", "Обязательно прочитайте"),
+    }
+    corrected = assemble_candidate(SOURCE, plan, request, corrected_values)
+    executor = FakeExecutor(
+        critic_editor_json("GREEN", [], raw_document(corrected)),
+        critic_json("GREEN", []),
+    )
+
+    result = review_translation(
+        executor,
+        model="model",
+        source=SOURCE,
+        source_plan=plan,
+        translation_request=request,
+        target=target,
+        target_path=PATH,
+        source_locale=Locale.EN,
+        target_locale=Locale.RU,
+    )
+
+    assert result.final_candidate == corrected
+    assert result.repair_applied
+    assert [call.role.value for call in executor.calls] == ["critic", "final_critic"]
+
+
 def test_large_critic_reviews_corresponding_source_and_target_excerpts() -> None:
     sections = [
         f"## Раздел {index}\n\n" + (f"Исходный текст {index}. " * 30) + "\n\n"
@@ -1502,17 +1532,17 @@ def test_critic_parser_rejects_malformed_extra_duplicate_and_inconsistent_result
     assert raw not in repr(caught.value)
 
 
-def test_green_critic_editor_cannot_modify_target() -> None:
-    with pytest.raises(CriticResponseError) as caught:
-        parse_critic_response(
-            critic_editor_json("GREEN", [], "changed"),
-            target_path=PATH,
-            requested_ids=(),
-            editable=True,
-            current_target="unchanged",
-        )
+def test_green_critic_editor_may_return_a_valid_correction() -> None:
+    result = parse_critic_response(
+        critic_editor_json("GREEN", [], "changed"),
+        target_path=PATH,
+        requested_ids=(),
+        editable=True,
+        current_target="unchanged",
+    )
 
-    assert caught.value.reason is CriticResponseErrorReason.INCONSISTENT_RESULT
+    assert result.verdict is Verdict.GREEN
+    assert result.corrected_markdown == "changed"
 
 
 @pytest.mark.parametrize(

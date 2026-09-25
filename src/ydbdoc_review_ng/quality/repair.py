@@ -536,6 +536,7 @@ def review_translation(
     effective_chunks: list[DocumentChunk] = []
     responses: list[str] = []
     editor_results: list[CriticResult] = []
+    editor_changed_target = False
 
     def child_editor_request(chunk: DocumentChunk) -> ModelRequest:
         request = _editor_request(
@@ -560,6 +561,7 @@ def review_translation(
     def accept_editor_response(
         chunk: DocumentChunk, response: ModelCallResult, /
     ) -> None:
+        nonlocal editor_changed_target
         if not response.success or response.text is None:
             raise QualityExecutionError("critic")
         current_target = "".join(target_blocks[chunk.block_start : chunk.block_end])
@@ -572,6 +574,7 @@ def review_translation(
         )
         correction = result.corrected_markdown
         assert correction is not None
+        editor_changed_target = editor_changed_target or correction != current_target
         editor_results.append(result)
         validate_chunk_response(chunk, document_request.placeholders, correction)
         effective_chunks.append(chunk)
@@ -617,7 +620,7 @@ def review_translation(
         else Verdict.GREEN,
         tuple(findings),
     )
-    if primary.verdict is Verdict.GREEN:
+    if primary.verdict is Verdict.GREEN and not editor_changed_target:
         return QualityReviewResult(
             target,
             None,

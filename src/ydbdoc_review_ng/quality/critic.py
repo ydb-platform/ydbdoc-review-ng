@@ -288,6 +288,4 @@ def parse_critic_response(
         if type(raw_correction) is not str or current_target is None:
             raise CriticResponseError(CriticResponseErrorReason.INVALID_FINDING)
         corrected_markdown = raw_correction
-        if verdict is Verdict.GREEN and corrected_markdown != current_target:
-            raise CriticResponseError(CriticResponseErrorReason.INCONSISTENT_RESULT)
     return CriticResult(verdict, tuple(findings), corrected_markdown)
