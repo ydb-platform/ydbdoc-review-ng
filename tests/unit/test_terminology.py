@@ -31,3 +31,27 @@ def test_short_bold_emphasis_does_not_match_every_document() -> None:
     target = b"## Rule {#rule}\n\n**not** a term.\n"
 
     assert bilingual_glossary_context("Unrelated article", source, target) is None
+
+
+def test_glossary_context_is_bounded_and_prefers_more_relevant_entries() -> None:
+    from ydbdoc_review_ng.terminology import bilingual_glossary_context
+
+    source_entries = "\n\n".join(
+        f"#### Term {index} {{#term-{index}}}\n\n"
+        f"**{'priority alpha beta gamma' if index == 19 else 'common term'}**."
+        for index in range(20)
+    )
+    target_entries = "\n\n".join(
+        f"#### Term {index} {{#term-{index}}}\n\n"
+        f"**{'priority alpha beta gamma' if index == 19 else 'common target'}**."
+        for index in range(20)
+    )
+
+    context = bilingual_glossary_context(
+        "common term and priority alpha beta gamma", source_entries.encode(), target_entries.encode()
+    )
+
+    assert context is not None
+    assert len(context) <= 24_000
+    assert 'anchor="term-19"' in context
+    assert context.count("<glossary-entry") <= 12

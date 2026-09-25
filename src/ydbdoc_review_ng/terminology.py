@@ -7,6 +7,8 @@ import re
 _HEADING = re.compile(r"(?m)^(#{2,6})\s+.*?\{#([A-Za-z0-9_.:-]+)\}\s*$")
 _BOLD = re.compile(r"\*\*([^*]+)\*\*")
 _WORD = re.compile(r"[^\W_]+", re.UNICODE)
+_MAX_ENTRIES = 12
+_MAX_CHARACTERS = 24_000
 
 
 def _sections(markdown: str) -> dict[str, str]:
@@ -37,16 +39,33 @@ def bilingual_glossary_context(
     except UnicodeDecodeError:
         return None
     document_words = _stemmed_words(source_text)
-    selected: list[str] = []
+    candidates: list[tuple[int, str, str]] = []
     for anchor in sorted(source_sections.keys() & target_sections.keys()):
         section = source_sections[anchor]
         aliases = _BOLD.findall(section)
         term_sets = tuple(words for alias in aliases if (words := _stemmed_words(alias)))
-        if not any(words <= document_words for words in term_sets):
+        score = sum(len(words) for words in term_sets if words <= document_words)
+        if score == 0:
             continue
-        selected.append(
-            f"<glossary-entry anchor=\"{anchor}\">\n"
-            f"SOURCE:\n{section}\nTARGET:\n{target_sections[anchor]}\n"
-            "</glossary-entry>"
+        candidates.append(
+            (
+                score,
+                anchor,
+                (
+                    f"<glossary-entry anchor=\"{anchor}\">\n"
+                    f"SOURCE:\n{section}\nTARGET:\n{target_sections[anchor]}\n"
+                    "</glossary-entry>"
+                ),
+            )
         )
-    return "\n\n".join(selected) or None
+    selected: list[tuple[str, str]] = []
+    used = 0
+    for _score, anchor, entry in sorted(candidates, key=lambda item: (-item[0], item[1])):
+        if len(selected) >= _MAX_ENTRIES:
+            break
+        extra = len(entry) if not selected else len(entry) + 2
+        if used + extra > _MAX_CHARACTERS:
+            continue
+        selected.append((anchor, entry))
+        used += extra
+    return "\n\n".join(entry for _anchor, entry in sorted(selected)) or None
