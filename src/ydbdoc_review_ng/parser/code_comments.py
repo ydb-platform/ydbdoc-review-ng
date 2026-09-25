@@ -12,6 +12,7 @@ _SLASH = frozenset((b"cpp", b"c++", b"cc", b"cxx", b"java", b"javascript", b"js"
 _PYTHON = frozenset((b"python", b"py"))
 _BASH = frozenset((b"bash", b"sh", b"shell"))
 _HASH = frozenset((b"yaml", b"yml"))
+_SQL = frozenset((b"sql", b"yql"))
 _YAML_BLOCK_HEADER = re.compile(
     rb'^( *)(?:-[ \t]+)?(?:[A-Za-z_][A-Za-z0-9_-]*|"[A-Za-z_][A-Za-z0-9_-]*")'
     rb"[ \t]*:[ \t]*"
@@ -31,6 +32,8 @@ def comment_style(language: bytes) -> str | None:
         return "bash"
     if normalized in _HASH:
         return "hash"
+    if normalized in _SQL:
+        return "sql"
     if normalized == b"html":
         return "html"
     return None
@@ -159,6 +162,13 @@ def comment_spans(data: bytes, base: int, style: str) -> tuple[ByteSpan, ...]:
         if style in {"hash", "python", "bash"} and current == 35:
             end = _line_end(data, cursor + 1)
             span = _trimmed(data, cursor + 1, end, base)
+            if span is not None:
+                result.append(span)
+            cursor = end
+            continue
+        if style == "sql" and data.startswith(b"--", cursor):
+            end = _line_end(data, cursor + 2)
+            span = _trimmed(data, cursor + 2, end, base)
             if span is not None:
                 result.append(span)
             cursor = end

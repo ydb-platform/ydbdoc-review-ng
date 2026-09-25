@@ -466,6 +466,27 @@ def test_assembly_preserves_fenced_code_and_comment_syntax_around_translated_com
     )
 
 
+def test_assembly_translates_text_fence_description_after_syntax_separator() -> None:
+    source = (
+        b"```text\nJoinType(TableList JoinType)\n\n"
+        b"where:\nTableList - table names from the query\n```\n"
+    )
+    plan, request = prepared(source)
+
+    assert assemble_candidate(
+        source,
+        plan,
+        request,
+        {
+            request.fields[0].field_id: request.fields[0]
+            .text.replace("where", "где")
+            .replace("table names from the query", "имена таблиц из запроса")
+        },
+    ) == b"```text\nJoinType(TableList JoinType)\n\n" + (
+        "где:\nTableList - имена таблиц из запроса\n```\n".encode()
+    )
+
+
 @pytest.mark.parametrize(
     "source,target",
     [

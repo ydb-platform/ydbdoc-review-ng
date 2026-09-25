@@ -164,10 +164,7 @@ def _fence_fields(
     match = _FENCE.match(_body(source, lines[index]))
     assert match is not None
     info = match.group(2).strip(b" \t")
-    language = info.split(None, 1)[0] if info else b""
-    style = comment_style(language)
-    if style is None:
-        return ()
+    language = (info.split(None, 1)[0] if info else b"").lower()
     marker = match.group(1)
     close = re.compile(
         rb"^ {0,3}" + re.escape(marker[:1]) + rb"{" + str(len(marker)).encode() + rb",}[ \t]*$"
@@ -177,6 +174,22 @@ def _fence_fields(
     content_end = (
         lines[final_index].start if close.match(_body(source, lines[final_index])) else end
     )
+    if language == b"text":
+        content = source[content_start:content_end]
+        separator = re.search(rb"(?:\r?\n)[ \t]*(?:\r?\n)", content)
+        if separator is None:
+            return ()
+        field_start = content_start + separator.end()
+        field_end = content_end
+        while field_end > field_start and source[field_end - 1] in (9, 10, 13, 32):
+            field_end -= 1
+        field, malformed = _field_for_span(
+            source, lines, FieldKind.PARAGRAPH, field_start, field_end
+        )
+        return () if malformed or field is None else (field,)
+    style = comment_style(language)
+    if style is None:
+        return ()
     fields: list[_FieldDraft] = []
     for span in comment_spans(source[content_start:content_end], content_start, style):
         field, malformed = _field_for_span(source, lines, FieldKind.PARAGRAPH, span.start, span.end)

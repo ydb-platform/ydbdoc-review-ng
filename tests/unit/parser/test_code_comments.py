@@ -44,6 +44,24 @@ def test_html_comment_is_extracted_but_quoted_marker_is_not() -> None:
     assert values(source) == [b"Translate this"]
 
 
+@pytest.mark.parametrize("language", [b"sql", b"yql"])
+def test_sql_comment_language_aliases_extract_real_comment_only(language: bytes) -> None:
+    source = (
+        b"```" + language + b"\nSELECT '-- hidden'; -- Translate this\n```\n"
+    )
+
+    assert values(source) == [b"Translate this"]
+
+
+def test_text_fence_exposes_description_after_syntax_separator() -> None:
+    source = (
+        b"```text\nJoinType(TableList JoinType)\n\n"
+        b"where:\nTableList - table names from the query\n```\n"
+    )
+
+    assert values(source) == [b"where:\nTableList - table names from the query"]
+
+
 def test_javascript_backtick_and_escaped_quotes_hide_comment_markers() -> None:
     source = (
         b'```js\nconst a = "escaped \\" // hidden";\nconst b = `/* hidden */`; // Visible\n```\n'
