@@ -110,7 +110,9 @@ if TYPE_CHECKING:
     from ydbdoc_review_ng.runtime import RecordedModels, RuntimeSource
     from ydbdoc_review_ng.runtime_continue import ContinueReplay
 
-_DIAGNOSTIC_PLACEHOLDER = re.compile(r"\[\[[A-Z_]+_[0-9]+\]\]")
+_DIAGNOSTIC_PLACEHOLDER = re.compile(
+    r"\[\[YDBDOC_PROTECTED_(?:[0-9]+|LINK_[0-9]+_(?:OPEN|CLOSE))\]\]"
+)
 _PLACEHOLDER_PREFIX = "[[YDBDOC_PROTECTED_"
 _INVALID_RESPONSE_SPLIT_MIN_CHARACTERS = 4_000
 

@@ -21,9 +21,13 @@ from ydbdoc_review_ng.plan import (
     validate_source_plan,
 )
 
-_TOKEN = re.compile(r"\[\[YDBDOC_PROTECTED_[0-9]+\]\]")
+_TOKEN = re.compile(
+    r"\[\[YDBDOC_PROTECTED_(?:[0-9]+|LINK_[0-9]+_(?:OPEN|CLOSE))\]\]"
+)
 _PLACEHOLDER_LIKE = re.compile(r"\[\[YDBDOC_PROTECTED_[^\]\r\n]{0,64}\]\]")
-_PLACEHOLDER_RESIDUE = re.compile(r"YDBDOC_PROTECTED_[0-9]+")
+_PLACEHOLDER_RESIDUE = re.compile(
+    r"YDBDOC_PROTECTED_(?:[0-9]+|LINK_[0-9]+_(?:OPEN|CLOSE))"
+)
 _EMPTY_LINK = re.compile(r"\]\(\s*\)")
 _ATX_HEADING = re.compile(r"^ {0,3}#{1,6}(?:\s|$)")
 _TOP_LEVEL_LIST_ITEM = re.compile(r"^(?:[*+-]|[0-9]+[.)])\s+")
@@ -727,15 +731,39 @@ def prepare_document(
     regions: list[tuple[int, int, DocumentPlaceholder]] = []
     next_number = 1
     cursor = 0
+    link_pairs: list[tuple[ProtectedKind, int]] = []
     for start, end, kind, replacement in raw_regions:
         if start < cursor:
             raise DocumentTranslationError("document_request:overlapping_opaque_regions")
         cursor = end
-        while True:
-            token = f"[[YDBDOC_PROTECTED_{next_number:04d}]]"
-            next_number += 1
-            if token.encode("ascii") not in source:
-                break
+        if kind in {ProtectedKind.LINK_OPEN, ProtectedKind.IMAGE_OPEN}:
+            expected_close = (
+                ProtectedKind.LINK_CLOSE
+                if kind is ProtectedKind.LINK_OPEN
+                else ProtectedKind.IMAGE_CLOSE
+            )
+            while True:
+                pair_number = next_number
+                next_number += 1
+                open_token = f"[[YDBDOC_PROTECTED_LINK_{pair_number:04d}_OPEN]]"
+                close_token = f"[[YDBDOC_PROTECTED_LINK_{pair_number:04d}_CLOSE]]"
+                if open_token.encode("ascii") not in source and close_token.encode(
+                    "ascii"
+                ) not in source:
+                    break
+            token = open_token
+            link_pairs.append((expected_close, pair_number))
+        elif kind in {ProtectedKind.LINK_CLOSE, ProtectedKind.IMAGE_CLOSE}:
+            if not link_pairs or link_pairs[-1][0] is not kind:
+                raise DocumentTranslationError("document_request:unpaired_link_boundary")
+            _expected_close, pair_number = link_pairs.pop()
+            token = f"[[YDBDOC_PROTECTED_LINK_{pair_number:04d}_CLOSE]]"
+        else:
+            while True:
+                token = f"[[YDBDOC_PROTECTED_{next_number:04d}]]"
+                next_number += 1
+                if token.encode("ascii") not in source:
+                    break
         placeholder = DocumentPlaceholder(
             token,
             replacement,
@@ -745,6 +773,8 @@ def prepare_document(
         )
         placeholders.append(placeholder)
         regions.append((start, end, placeholder))
+    if link_pairs:
+        raise DocumentTranslationError("document_request:unpaired_link_boundary")
 
     def fits(text: str, block_start: int, block_end: int) -> bool:
         if source_locale is None or target_locale is None:

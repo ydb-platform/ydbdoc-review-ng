@@ -39,7 +39,8 @@ def test_complete_markdown_prompt_uses_selected_direction(
     assert "Абзац с" in prompt
     assert "- Первый пункт\n- Второй пункт" in prompt
     assert "guide.md" not in prompt
-    assert "[[YDBDOC_PROTECTED_0001]]" in prompt
+    assert "[[YDBDOC_PROTECTED_LINK_0001_OPEN]]" in prompt
+    assert "[[YDBDOC_PROTECTED_LINK_0001_CLOSE]]" in prompt
     assert "JSON" not in prompt
     assert "Translate every user-facing heading" in prompt
     assert "link/image label" in prompt
@@ -84,7 +85,8 @@ def test_markdown_link_destination_is_always_protected_from_the_model() -> None:
     )
 
     assert (
-        "[[YDBDOC_PROTECTED_0001]]query hints[[YDBDOC_PROTECTED_0002]]"
+        "[[YDBDOC_PROTECTED_LINK_0001_OPEN]]query hints"
+        "[[YDBDOC_PROTECTED_LINK_0001_CLOSE]]"
         in request.chunks[0].text
     )
     assert "optimization/hints.md" not in request.chunks[0].text
@@ -113,8 +115,8 @@ def test_link_destination_is_hidden_inside_markdown_syntax_and_restored_from_res
     text = request.chunks[0].text
 
     assert text == (
-        "See [[YDBDOC_PROTECTED_0001]]query hints"
-        "[[YDBDOC_PROTECTED_0002]].\n"
+        "See [[YDBDOC_PROTECTED_LINK_0001_OPEN]]query hints"
+        "[[YDBDOC_PROTECTED_LINK_0001_CLOSE]].\n"
     )
     assert "optimization/hints.md" not in text
     translated = text.replace("query hints", "query execution hints")
@@ -134,6 +136,12 @@ def test_link_boundaries_prevent_model_from_merging_two_links() -> None:
     request = prepare_document(source, plan, max_characters=100_000)
     tokens = tuple(item.token for item in request.placeholders)
 
+    assert tokens == (
+        "[[YDBDOC_PROTECTED_LINK_0001_OPEN]]",
+        "[[YDBDOC_PROTECTED_LINK_0001_CLOSE]]",
+        "[[YDBDOC_PROTECTED_LINK_0002_OPEN]]",
+        "[[YDBDOC_PROTECTED_LINK_0002_CLOSE]]",
+    )
     assert request.chunks[0].text == (
         f"* {tokens[0]}Оптимизировано{tokens[1]} потребление CPU репликами "
         f"{tokens[2]}SchemeShard{tokens[3]}.\n"
@@ -215,12 +223,16 @@ def test_link_destination_token_ids_cannot_exchange_pairs() -> None:
     source = b"Read [one](one.md), then [two](two.md).\n"
     plan, request = prepared(source)
     assert request.chunks[0].text == (
-        "Read [[YDBDOC_PROTECTED_0001]]one[[YDBDOC_PROTECTED_0002]], then "
-        "[[YDBDOC_PROTECTED_0003]]two[[YDBDOC_PROTECTED_0004]].\n"
+        "Read [[YDBDOC_PROTECTED_LINK_0001_OPEN]]one"
+        "[[YDBDOC_PROTECTED_LINK_0001_CLOSE]], then "
+        "[[YDBDOC_PROTECTED_LINK_0002_OPEN]]two"
+        "[[YDBDOC_PROTECTED_LINK_0002_CLOSE]].\n"
     )
     exchanged = (
-        "Read [[YDBDOC_PROTECTED_0003]]one[[YDBDOC_PROTECTED_0004]], then "
-        "[[YDBDOC_PROTECTED_0001]]two[[YDBDOC_PROTECTED_0002]].\n"
+        "Read [[YDBDOC_PROTECTED_LINK_0002_OPEN]]one"
+        "[[YDBDOC_PROTECTED_LINK_0002_CLOSE]], then "
+        "[[YDBDOC_PROTECTED_LINK_0001_OPEN]]two"
+        "[[YDBDOC_PROTECTED_LINK_0001_CLOSE]].\n"
     )
 
     with pytest.raises(DocumentTranslationError, match="placeholder_mismatch"):

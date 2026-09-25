@@ -90,11 +90,12 @@ Transport, persistence, GitHub и прочие инфраструктурные 
 Перед вызовом модели непрозрачные фрагменты заменяются уникальными
 placeholders. Каждая Markdown link/image-конструкция передаётся как отдельная
 пара защищённых границ вокруг переводимой подписи, например
-`[[YDBDOC_PROTECTED_0001]]label[[YDBDOC_PROTECTED_0002]]`. Первая граница
+`[[YDBDOC_PROTECTED_LINK_0001_OPEN]]label[[YDBDOC_PROTECTED_LINK_0001_CLOSE]]`.
+Обе границы имеют одинаковый pair-id и явные роли `OPEN`/`CLOSE`. Первая
 восстанавливает исходное начало конструкции, вторая восстанавливает её окончание
-с детерминированно выбранным
-destination. Поэтому модель видит и переводит подпись, но не видит URL и не
-может слить две соседние ссылки в одну без потери проверяемой пары. Защищены:
+с детерминированно выбранным destination. Поэтому модель видит и переводит
+подпись, но не видит URL и не может слить, вложить или переставить две соседние
+ссылки без нарушения проверяемых пар. Защищены:
 
 - URL, path, anchors, identifiers, templates и inline code;
 - код вне выделенных комментариев, конфигурации, Mermaid, include;
@@ -157,8 +158,9 @@ fenced block защищён. Нельзя обещать полноценную 
   Return only the translated Markdown, without explanations or an outer code fence.
   Translate all user-facing prose, headings, link labels, image alt text, supported
   code comments, and translatable front matter values. Preserve Markdown/YFM structure.
-  Keep every [[YDBDOC_PROTECTED_NNNN]] placeholder exactly once in its source
-  top-level block. Independent inline-code and atomic inline-template placeholders
+  Keep every [[YDBDOC_PROTECTED_NNNN]] and every paired
+  [[YDBDOC_PROTECTED_LINK_NNNN_OPEN/CLOSE]] placeholder exactly once in its
+  source top-level block. Independent inline-code and atomic inline-template placeholders
   may move within their translatable field when grammar requires it. Keep every
   other placeholder in source order. Link/image placeholder pairs surround their
   translatable labels; keep every pair separate and ordered.

@@ -265,7 +265,8 @@ def test_translate_document_uses_complete_markdown_and_selected_direction(
     )
     response = (
         "# Translated heading\n\nText with "
-        "[[YDBDOC_PROTECTED_0001]]guide[[YDBDOC_PROTECTED_0002]].\n\n- One\n- Two\n"
+        "[[YDBDOC_PROTECTED_LINK_0001_OPEN]]guide"
+        "[[YDBDOC_PROTECTED_LINK_0001_CLOSE]].\n\n- One\n- Two\n"
     )
     models = ScriptedModels([response])
 
@@ -279,7 +280,8 @@ def test_translate_document_uses_complete_markdown_and_selected_direction(
     assert "- Один\n- Два" in call.prompt
     assert "guide.md" not in call.prompt
     assert (
-        "[[YDBDOC_PROTECTED_0001]]руководством[[YDBDOC_PROTECTED_0002]]"
+        "[[YDBDOC_PROTECTED_LINK_0001_OPEN]]руководством"
+        "[[YDBDOC_PROTECTED_LINK_0001_CLOSE]]"
         in call.prompt
     )
     assert "# Old target" in call.prompt
@@ -306,14 +308,20 @@ def test_existing_target_cannot_override_symmetric_source_link_destination() -> 
         target=b"See [query hints](./dev/query-execution-optimization/query-hints.md).\n",
     )
     models = ScriptedModels(
-        ["See [[YDBDOC_PROTECTED_0001]]query hints[[YDBDOC_PROTECTED_0002]].\n"]
+        [
+            (
+                "See [[YDBDOC_PROTECTED_LINK_0001_OPEN]]query hints"
+                "[[YDBDOC_PROTECTED_LINK_0001_CLOSE]].\n"
+            )
+        ]
     )
 
     _accepted, accepted_document = content_with(models)._translate_document(document)
 
     assert "(./dev/optimization/hints.md)" not in models.calls[0].prompt
     assert (
-        "[[YDBDOC_PROTECTED_0001]]query hints[[YDBDOC_PROTECTED_0002]]"
+        "[[YDBDOC_PROTECTED_LINK_0001_OPEN]]query hints"
+        "[[YDBDOC_PROTECTED_LINK_0001_CLOSE]]"
         in models.calls[0].prompt
     )
     assert "(./dev/query-execution-optimization/query-hints.md)" in models.calls[0].prompt
