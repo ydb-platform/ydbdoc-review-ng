@@ -94,12 +94,14 @@ target-страницы, а continuation и publication validation не обхо
 а обычные anchors используют валидный старый target-fragment или однозначную
 singular/plural-коррекцию. Focused scope/integration suite после исправления:
 58 passed; Ruff, mypy и diff-check зелёные. Итоговый полный suite после этого
-исправления: 1858 passed, 2 deselected за 134.04 s.
+исправления: 1859 passed, 2 deselected за 130.64 s.
 
-Изменения опубликованы двумя commits:
+Изменения опубликованы следующими commits:
 
 - `aaf982e` (`Improve translation terminology and link anchors`);
-- `dc3c8c4` (`Bound missing-anchor scope to glossary`).
+- `dc3c8c4` (`Bound missing-anchor scope to glossary`);
+- `191fb24` (`Bound changelog dependency closure`);
+- `280bef1` (`Bound model request size independently`).
 
 Старый translation PR `ydb-platform/ydb#54159` закрыт, его ветка
 `translation/pr-50858` удалена. Второй clean restart, workflow `36152234777`,
@@ -114,11 +116,17 @@ singular/plural-коррекцию. Focused scope/integration suite после �
 трактуются так же, как новые зависимости текущего PR. Исправление ограничивает
 такое расширение для `changelog-enterprise.md` и `changelog-server.md`, оставляя
 dependency audit, но не добавляя их старый граф в текущий перевод. Обычные
-документы сохраняют рекурсивный closure.
+документы сохраняют рекурсивный closure. После этого `prepare_source` прошёл,
+но первый model-call получил non-retryable HTTP failure (run `36153912925`).
+Попытка с лимитом `100000` не дошла до модели: один indivisible top-level
+changelog block оказался больше лимита (run `36155088682`). Лимит model request
+установлен в `200000`, отдельно от workflow scope limit `250000`; trace теперь
+сохраняет безопасный HTTP-код.
 
 Дальше:
 
-1. Завершить проверки фикса: полный suite, Ruff, mypy и diff-check.
+1. Завершить проверки текущего model-limit фикса: полный suite, Ruff, mypy и
+   diff-check.
 2. Commit в `main`, push и передвинуть `v1.0.1` на новый кодовый commit.
 3. Запустить чистый `doc_translate` повторно.
 4. Если создан новый translation PR, независимо проверить перевод, особенно
