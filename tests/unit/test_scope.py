@@ -716,3 +716,51 @@ def test_a013_retained_freeze_state_and_identity_matrix() -> None:
         forbidden not in signature.parameters
         for forbidden in ("reader", "scanner", "preflight", "model", "mutation")
     )
+
+
+def test_existing_target_adds_missing_symmetric_linked_article_to_scope() -> None:
+    key = PairKey(RepoPath("changelog.md"))
+    parent = _inventory(
+        "changelog.md",
+        b"See [hints](optimization/hints.md).",
+        b"See [hints](query-optimization/query-hints.md).",
+        (_change(Locale.RU, ChangedFileKind.MODIFIED, key),),
+    )
+    dependency_path = RepoPath("ydb/docs/ru/optimization/hints.md")
+    dependency_target = RepoPath("ydb/docs/en/optimization/hints.md")
+    potential = scope.build_potential_scopes(
+        _Reader({dependency_path: b"# Hints\n", dependency_target: None}),
+        _Scanner(
+            {
+                parent.ru.path: (
+                    dependencies.DependencyLink(parent.ru.path, dependency_path),
+                ),
+                dependency_path: (),
+            }
+        ),
+        _Preflight(),
+        _snapshots(),
+        (parent,),
+        dependencies.RedirectCatalog(_snapshot(), _roots(), ()),
+    )
+
+    selected = scope.freeze_scope_manifest(
+        potential,
+        DirectionSelectionResult(
+            DirectionSelectionState.SELECTED,
+            Direction.RU_TO_EN,
+            (DirectionPairDecision(parent, DirectionPairVerdict.RU_TO_EN),),
+            None,
+        ),
+    )
+
+    assert selected.manifest is not None
+    assert tuple(entry.pair.source_path for entry in selected.manifest.entries) == (
+        parent.ru.path,
+        dependency_path,
+    )
+    dependency = selected.manifest.entries[1]
+    assert dependency.origin is scope.ScopeOrigin.DEPENDENCY
+    assert dependency.pair.target_path == dependency_target
+    assert dependency.target_content is None
+    assert selected.manifest.dependency_file_count == 1

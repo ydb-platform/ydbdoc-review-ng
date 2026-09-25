@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Protocol
 
-from ydbdoc_review_ng.domain import GitSha, Mode
+from ydbdoc_review_ng.domain import GitSha, Mode, RepoPath
 from ydbdoc_review_ng.publication import GitPublicationAdapter, PublicationContext, PublicationError
 from ydbdoc_review_ng.quality import Finding, QualityReviewResult, Verdict
 
@@ -25,6 +25,12 @@ class CheckResult:
 class Readiness:
     status: str
     reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class ProbableDuplicate:
+    new_target_path: RepoPath
+    existing_target_path: RepoPath
 
 
 def merge_readiness(head: GitSha, checks: tuple[CheckResult, ...]) -> Readiness:
@@ -57,6 +63,7 @@ class ReportContext:
     source_sha: GitSha
     target_sha: GitSha
     job_cost_rub: Decimal | None
+    probable_duplicates: tuple[ProbableDuplicate, ...] = ()
 
 
 def _line(value: str) -> str:
@@ -115,6 +122,8 @@ def render_report(
 ) -> str:
     readiness = merge_readiness(commit_sha, checks)
     status = "RED" if review.final.verdict is Verdict.RED else readiness.status
+    if status == "GREEN" and context.probable_duplicates:
+        status = "YELLOW"
     cost = "неизвестна" if context.job_cost_rub is None else f"{context.job_cost_rub} RUB"
     lines = [
         f"{_STATUS_ICONS[status]} {status}",
@@ -131,6 +140,18 @@ def render_report(
                     "label `doc_continue`."
                 ),
             )
+        )
+    elif context.probable_duplicates:
+        lines.append("### Возможный дубликат")
+        for warning in context.probable_duplicates:
+            lines.append(
+                f"- Создана новая статья `{warning.new_target_path.value}`, но, возможно, "
+                f"она дублирует существующую `{warning.existing_target_path.value}`."
+            )
+        if readiness.status != "GREEN":
+            lines.append(f"Проверки: {readiness.reason}.")
+        lines.append(
+            "Разберитесь вручную с возможным дубликатом, затем повторно запустите `doc_verify`."
         )
     elif readiness.status == "GREEN":
         lines.append("Перевод проверен. Исправления не требуются.")

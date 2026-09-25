@@ -8,6 +8,7 @@ from typing import cast
 import pytest
 import yaml
 
+from ydbdoc_review_ng import dependencies, runtime_content
 from ydbdoc_review_ng.application import ImmutableRunSnapshot, WorkflowCandidate
 from ydbdoc_review_ng.continuation import AcceptedDocument
 from ydbdoc_review_ng.domain import (
@@ -176,6 +177,79 @@ def content_with(models: object, environment: dict[str, str] | None = None) -> R
         cast(RecordedModels, models),
         environment or {},
     )
+
+
+def test_probable_duplicate_pairs_missing_symmetric_link_with_existing_target_link() -> None:
+    source = b"See [query hints](optimization/hints.md).\n"
+    target = b"See [query hints](query-execution-optimization/query-hints.md).\n"
+    entry = document_for(source, target=target).entry
+    missing_source = RepoPath("ydb/docs/ru/core/optimization/hints.md")
+    missing_target = RepoPath("ydb/docs/en/core/optimization/hints.md")
+    old_target = RepoPath(
+        "ydb/docs/en/core/query-execution-optimization/query-hints.md"
+    )
+    resolved = dependencies.ResolvedDependency(
+        dependencies.DependencyLink(SOURCE_PATH, missing_source),
+        missing_source,
+        missing_target,
+        dependencies.DependencyResolutionState.TARGET_MISSING_SOURCE_EXISTS,
+    )
+
+    class Reader:
+        def read_bytes(self, snapshot: SnapshotRef, path: RepoPath, /) -> bytes | None:
+            return b"# Existing article\n" if path == old_target else None
+
+    warnings = runtime_content._probable_duplicate_warnings(
+        Reader(), SNAPSHOT, (entry,), (resolved,)
+    )
+
+    assert tuple((item.new_target_path, item.existing_target_path) for item in warnings) == (
+        (missing_target, old_target),
+    )
+
+
+def test_dependency_article_is_added_to_symmetric_target_toc() -> None:
+    target_snapshot = SnapshotRef(SNAPSHOT.repository, GitSha("b" * 40))
+    source_path = RepoPath("ydb/docs/ru/core/optimization/hints.md")
+    target_path = RepoPath("ydb/docs/en/core/optimization/hints.md")
+    values = {
+        (SNAPSHOT, RepoPath("ydb/docs/ru/core/toc.yaml")): (
+            b"items:\n  - name: Hints\n    href: optimization/hints.md\n"
+        ),
+        (target_snapshot, RepoPath("ydb/docs/en/core/toc.yaml")): b"items:\n",
+    }
+
+    class Reader:
+        def read_bytes(self, snapshot: SnapshotRef, path: RepoPath, /) -> bytes | None:
+            return values.get((snapshot, path))
+
+    entry = ScopeEntry(
+        FilePair(Locale.RU, Locale.EN, source_path, target_path),
+        b"# Hints\n",
+        None,
+        ScopeOrigin.DEPENDENCY,
+        FileOperation.TRANSLATE,
+        (PairKey(RepoPath("changelog.md")),),
+        None,
+        None,
+    )
+    source = cast(RuntimeSource, SimpleNamespace(github=Reader()))
+    content = RuntimeContent(source, cast(RecordedModels, object()), {})
+    preparation = cast(
+        FrozenPreparation,
+        SimpleNamespace(
+            snapshots=SimpleNamespace(source_snapshot=SNAPSHOT),
+            metadata_snapshot=target_snapshot,
+            inventory=SimpleNamespace(files=()),
+        ),
+    )
+    files: dict[str, bytes | None] = {}
+
+    content._metadata(preparation, entry, files)
+
+    target_toc = files["ydb/docs/en/core/toc.yaml"]
+    assert target_toc is not None
+    assert b"href: optimization/hints.md" in target_toc
 
 
 @pytest.mark.parametrize(

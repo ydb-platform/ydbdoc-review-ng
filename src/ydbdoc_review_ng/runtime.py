@@ -45,7 +45,7 @@ from ydbdoc_review_ng.publication import (
     PublicationPlan,
 )
 from ydbdoc_review_ng.quality import QualityReviewResult
-from ydbdoc_review_ng.reporting import QAReporter, ReportContext
+from ydbdoc_review_ng.reporting import ProbableDuplicate, QAReporter, ReportContext
 from ydbdoc_review_ng.repository import BaseBranch, PullRequestState, ResolvedRepositorySnapshots
 from ydbdoc_review_ng.runtime_continue import CheckpointReader, ContinueAdmission, admit_continue
 from ydbdoc_review_ng.runtime_github import (
@@ -134,6 +134,7 @@ class RuntimeSource:
         self.metadata_snapshot: SnapshotRef
         self.source_pr = 0
         self.continue_target_sha: GitSha | None = None
+        self.probable_duplicates: tuple[ProbableDuplicate, ...] = ()
 
     def _authorize(self) -> None:
         actor = self.environment.get("GITHUB_TRIGGERING_ACTOR") or self.environment.get(
@@ -350,6 +351,7 @@ class RuntimeReporter:
                 self.source.snapshots.source_snapshot.commit_sha,
                 commit_sha,
                 self.models.cost,
+                self.source.probable_duplicates,
             ),
             lambda: self.source.github.checks(commit_sha),
             verification_context=self.source.context,

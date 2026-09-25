@@ -3,6 +3,7 @@ from decimal import Decimal
 
 import pytest
 
+from ydbdoc_review_ng import reporting
 from ydbdoc_review_ng.application import ImmutableRunSnapshot, WorkflowCandidate
 from ydbdoc_review_ng.domain import GitSha, Mode, RepoPath
 from ydbdoc_review_ng.publication import (
@@ -480,6 +481,36 @@ def test_report_never_renders_unknown_cost_as_zero() -> None:
 
     assert "Стоимость запуска: неизвестна" in report
     assert "0 RUB" not in report
+
+
+def test_probable_duplicate_keeps_green_checks_yellow_and_names_both_files() -> None:
+    new_path = RepoPath("ydb/docs/en/core/dev/optimization/hints.md")
+    old_path = RepoPath(
+        "ydb/docs/en/core/dev/query-execution-optimization/query-hints.md"
+    )
+    context = ReportContext(
+        SOURCE,
+        TARGET,
+        Decimal("2.50"),
+        (reporting.ProbableDuplicate(new_path, old_path),),
+    )
+
+    report = render_report(
+        review(),
+        COMMIT,
+        context,
+        (
+            CheckResult("doc_verify", COMMIT, "success"),
+            CheckResult("build-docs", COMMIT, "success"),
+        ),
+    )
+
+    assert report.startswith("🟡 YELLOW")
+    assert new_path.value in report
+    assert old_path.value in report
+    assert "возможный дубликат" in report.lower()
+    assert "разберитесь вручную" in report.lower()
+    assert "doc_verify" in report
 
 
 @pytest.mark.parametrize(

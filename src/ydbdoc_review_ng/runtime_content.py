@@ -24,7 +24,12 @@ from ydbdoc_review_ng.continuation import (
     candidate_sha256,
     checkpoint_scope_sha256,
 )
-from ydbdoc_review_ng.dependencies import DependencyLink, RedirectCatalog
+from ydbdoc_review_ng.dependencies import (
+    DependencyLink,
+    DependencyResolutionState,
+    RedirectCatalog,
+    ResolvedDependency,
+)
 from ydbdoc_review_ng.direction import (
     DIRECTION_UNDETERMINED_ACTION,
     DIRECTION_UNDETERMINED_WARNING,
@@ -51,6 +56,7 @@ from ydbdoc_review_ng.models import AttemptError, ModelRequest
 from ydbdoc_review_ng.models.types import FrozenJson, mutable_json
 from ydbdoc_review_ng.parser.markdown import build_markdown_plan
 from ydbdoc_review_ng.plan import ProtectedKind, SourcePlan, fields_of
+from ydbdoc_review_ng.ports import SnapshotReader
 from ydbdoc_review_ng.publication import FileChange, GitPublicationAdapter, PublicationPlan
 from ydbdoc_review_ng.quality import (
     CriticResult,
@@ -60,6 +66,7 @@ from ydbdoc_review_ng.quality import (
     review_translation,
 )
 from ydbdoc_review_ng.quality.repair import _derive_target_translations
+from ydbdoc_review_ng.reporting import ProbableDuplicate
 from ydbdoc_review_ng.repository import ResolvedRepositorySnapshots
 from ydbdoc_review_ng.runtime_github import RuntimeBoundaryError
 from ydbdoc_review_ng.runtime_metadata import MetadataProducer, read_redirects
@@ -68,6 +75,7 @@ from ydbdoc_review_ng.scope import (
     PotentialScopeSet,
     ScopeEntry,
     ScopeManifest,
+    ScopeOrigin,
     ScopePreflightRequest,
     build_potential_scopes,
     freeze_scope_manifest,
@@ -381,6 +389,74 @@ class MarkdownDependencies:
         )
 
 
+def _ordered_markdown_dependency_paths(
+    snapshot: SnapshotRef, source_path: RepoPath, content: bytes
+) -> tuple[RepoPath, ...]:
+    plan = build_markdown_plan(snapshot, source_path, content)
+    destinations: list[str] = []
+    for field in fields_of(plan):
+        for region in field.protected_regions:
+            if region.kind in {ProtectedKind.LINK_CLOSE, ProtectedKind.IMAGE_CLOSE}:
+                raw = content[region.span.start : region.span.end].decode()
+                match = re.match(r"\]\(<?([^\s)>]+)", raw)
+                if match:
+                    destinations.append(match[1])
+    paths = []
+    for destination in destinations:
+        path = destination.split("#", 1)[0]
+        if path.endswith(".md") and ":" not in path and not path.startswith("/"):
+            paths.append(
+                RepoPath(
+                    posixpath.normpath(posixpath.join(posixpath.dirname(source_path.value), path))
+                )
+            )
+    return tuple(paths)
+
+
+def _probable_duplicate_warnings(
+    reader: SnapshotReader,
+    target_snapshot: SnapshotRef,
+    entries: tuple[ScopeEntry, ...],
+    resolved_dependencies: tuple[ResolvedDependency, ...],
+) -> tuple[ProbableDuplicate, ...]:
+    missing_by_parent: dict[RepoPath, list[ResolvedDependency]] = {}
+    for item in resolved_dependencies:
+        if item.state is DependencyResolutionState.TARGET_MISSING_SOURCE_EXISTS:
+            missing_by_parent.setdefault(item.link.source_path, []).append(item)
+    warnings: set[ProbableDuplicate] = set()
+    for entry in entries:
+        dependencies = missing_by_parent.get(entry.pair.source_path, ())
+        if not dependencies or entry.source_content is None or entry.target_content is None:
+            continue
+        source_links = _ordered_markdown_dependency_paths(
+            target_snapshot, entry.pair.source_path, entry.source_content
+        )
+        target_links = _ordered_markdown_dependency_paths(
+            target_snapshot, entry.pair.target_path, entry.target_content
+        )
+        for source_link, target_link in zip(source_links, target_links):
+            dependency = next(
+                (
+                    item
+                    for item in dependencies
+                    if source_link in {item.link.destination_source_path, item.source_path}
+                ),
+                None,
+            )
+            if dependency is None:
+                continue
+            if target_link == dependency.target_path:
+                continue
+            if reader.read_bytes(target_snapshot, target_link) is not None:
+                warnings.add(ProbableDuplicate(dependency.target_path, target_link))
+    return tuple(
+        sorted(
+            warnings,
+            key=lambda item: (item.new_target_path.value, item.existing_target_path.value),
+        )
+    )
+
+
 class Limits:
     def __init__(self, environment: Mapping[str, str]) -> None:
         self.files = int(environment.get("YDBDOC_MAX_DEPENDENCY_FILES_PER_ARTICLE") or "100")
@@ -563,6 +639,30 @@ class RuntimeContent:
             raise SemanticCheckpointStop(self._capture(preparation, state))
         selection = freeze_scope_manifest(preparation.potential, direction)
         self.entries = () if selection.manifest is None else selection.manifest.entries
+        selected_scope = next(
+            (
+                item
+                for item in preparation.potential.scopes
+                if item.direction is direction.direction
+            ),
+            None,
+        )
+        retained_sources = {entry.pair.source_path for entry in self.entries}
+        retained_dependencies = (
+            ()
+            if selected_scope is None
+            else tuple(
+                item
+                for item in selected_scope.dependencies
+                if item.link.source_path in retained_sources
+            )
+        )
+        self.source.probable_duplicates = _probable_duplicate_warnings(
+            self.source.github,
+            preparation.metadata_snapshot,
+            self.entries,
+            retained_dependencies,
+        )
         files: dict[str, bytes | None] = {}
         metadata_preparation = replace(
             preparation, metadata_snapshot=snapshots.translation_base_snapshot
@@ -704,7 +804,8 @@ class RuntimeContent:
         for change in producer.changes(
             entry.pair.source_path,
             entry.pair.target_path,
-            new=any(
+            new=entry.origin is ScopeOrigin.DEPENDENCY
+            or any(
                 raw.status == "added" and raw.path == entry.pair.source_path
                 for raw in preparation.inventory.files
             ),
