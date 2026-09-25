@@ -28,6 +28,7 @@ _ALLOWED_DETAILS = frozenset(
         "error_type",
         "field_index",
         "fields_total",
+        "http_status",
         "inventory_files",
         "job_id",
         "locale_pairs",

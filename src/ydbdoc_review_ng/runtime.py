@@ -121,6 +121,7 @@ class RecordedModels:
             **details,
             attempts_total=len(result.attempts),
             code=None if result.failure is None else result.failure.value,
+            http_status=None if not result.attempts else result.attempts[-1].http_status,
         )
         return result
 
