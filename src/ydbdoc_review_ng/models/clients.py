@@ -337,6 +337,13 @@ class _BaseYandexClient:
                     usage=ModelUsage(),
                 )
             )
+            response_status = (
+                parsed.status
+                if parsed.status is not None
+                else None
+                if document is None
+                else _string(document.get("code"))
+            )
             cost = response.billable_cost_rub
             if cost is None:
                 cost = _provider_cost(document)
@@ -359,7 +366,7 @@ class _BaseYandexClient:
                 error,
                 response.status_code,
                 response.body,
-                parsed.status,
+                response_status,
                 parsed.model,
                 parsed.role,
                 parsed.text,
