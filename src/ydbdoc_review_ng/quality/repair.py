@@ -36,7 +36,9 @@ from ydbdoc_review_ng.translation import (
 from ydbdoc_review_ng.translation.contract import field_request_text
 from ydbdoc_review_ng.translation.document import (
     RAW_MARKDOWN_RESPONSE_MAX_CHARACTERS,
+    LinkResolver,
     _document_block_texts,
+    verify_document_candidate_with_links,
 )
 
 
@@ -284,6 +286,7 @@ def _editor_requests(
     requested_ids: tuple[str, ...],
     operator_context: str | None,
     max_characters: int,
+    link_resolver: LinkResolver | None = None,
 ) -> tuple[
     tuple[ModelRequest, ...],
     DocumentTranslationRequest,
@@ -292,10 +295,20 @@ def _editor_requests(
 ]:
     target_plan = build_markdown_plan(source_plan.source_snapshot, target_path, target)
     try:
-        verify_document_candidate(source, source_plan, target, target_plan)
+        if link_resolver is None:
+            verify_document_candidate(source, source_plan, target, target_plan)
+        else:
+            verify_document_candidate_with_links(
+                source, source_plan, target, target_plan, link_resolver
+            )
     except (ProtectedMismatch, TypeError, ValueError):
         raise QualityInputError from None
-    source_document = prepare_document(source, source_plan, max_characters=2**63 - 1)
+    source_document = prepare_document(
+        source,
+        source_plan,
+        max_characters=2**63 - 1,
+        link_resolver=link_resolver,
+    )
     target_document = prepare_document(target, target_plan, max_characters=2**63 - 1)
     unused_source = list(source_document.placeholders)
     target_replacements: dict[str, str] = {}
@@ -453,6 +466,7 @@ def review_translation(
     before_model_call: Callable[[], None] | None = None,
     before_repaired_map: Callable[[AcceptedMap], None] | None = None,
     max_request_characters: int = 200_000,
+    link_resolver: LinkResolver | None = None,
 ) -> QualityReviewResult:
     """Let one critic edit the candidate, then independently review any correction."""
     if accepted_map is None and not full_repair:
@@ -515,6 +529,7 @@ def review_translation(
         requested_ids=translation_request.requested_ids,
         operator_context=operator_context,
         max_characters=max_request_characters,
+        link_resolver=link_resolver,
     )
     repair_error: RepairErrorReason | None = None
     repaired_candidate: bytes | None = None

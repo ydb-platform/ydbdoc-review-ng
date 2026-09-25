@@ -6,10 +6,10 @@
   tip по уже реализованным контрактам T003–T006.
 - Candidate собирается из source plan, валидных model values и exact protected
   fragments исходника. Старый target не является материалом для склейки.
-- URL, path, anchor и код являются protected source fragments. Для нового target
-  модель не задаёт их содержимое. При синхронизации существующего target только
-  Markdown link/image-конструкция может сохранить target-local путь; parse и
-  полный Diplodoc build проверяют результат до публикации.
+- URL, path, anchor и код являются protected fragments, модель не задаёт их
+  содержимое. Внутренний YDB URL меняет только locale, Wikipedia может получить
+  официальный target URL через fail-open `langlinks`, остальные значения берутся
+  из source. Parse и полный Diplodoc build проверяют результат до публикации.
 
 ## Минимальный поток
 
@@ -52,9 +52,9 @@ semantic stop наследует первоначальный expiry. Infrastruc
   Privileged workflow не checkout-ит и не исполняет
   содержимое source PR.
 - В `doc_verify` protected-fragment invariant отвергает ручное изменение
-  URL/path/code относительно authoritative source, кроме валидных target-local
-  Markdown link/image destinations. Navigation graph и отдельный link resolver
-  не строятся; результат проверяет полный Diplodoc build.
+  URL/path/code относительно вычисленного ожидаемого значения. Глобальный
+  navigation graph не строится; узкий resolver знает только YDB locale и
+  Wikipedia `langlinks`, результат проверяет полный Diplodoc build.
 - Model critic сравнивает authoritative source и final target, проверяя смысл,
   полноту, терминологию и работоспособность ссылок. Если совместный prompt велик,
   critic получает соответствующие source/target excerpt-пары, а не полный target

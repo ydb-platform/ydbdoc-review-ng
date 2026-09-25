@@ -190,7 +190,8 @@ def test_translate_document_uses_complete_markdown_and_selected_direction(
         source_locale=source_locale,
     )
     response = (
-        "# Translated heading\n\nText with [guide](guide.md).\n\n- One\n- Two\n"
+        "# Translated heading\n\nText with "
+        "[guide]([[YDBDOC_PROTECTED_0001]]).\n\n- One\n- Two\n"
     )
     models = ScriptedModels([response])
 
@@ -202,6 +203,8 @@ def test_translate_document_uses_complete_markdown_and_selected_direction(
     assert "Synchronize the existing" in call.prompt
     assert "# Исходный заголовок" in call.prompt
     assert "- Один\n- Два" in call.prompt
+    assert "guide.md" not in call.prompt
+    assert "[руководством]([[YDBDOC_PROTECTED_0001]])" in call.prompt
     assert "# Old target" in call.prompt
     assert "JSON" not in call.prompt
     assert (
@@ -220,23 +223,22 @@ def test_translate_without_existing_target_uses_full_translation_prompt() -> Non
     assert "<EXISTING_TARGET_EN>" not in models.calls[0].prompt
 
 
-def test_existing_target_preserves_its_localized_link_destination() -> None:
+def test_existing_target_cannot_override_symmetric_source_link_destination() -> None:
     document = document_for(
         b"See [query hints](./dev/optimization/hints.md).\n",
         target=b"See [query hints](./dev/query-execution-optimization/query-hints.md).\n",
     )
     models = ScriptedModels(
-        [
-            "See [query hints](./dev/query-execution-optimization/query-hints.md).\n"
-        ]
+        ["See [query hints]([[YDBDOC_PROTECTED_0001]]).\n"]
     )
 
     _accepted, accepted_document = content_with(models)._translate_document(document)
 
-    assert "(./dev/optimization/hints.md)" in models.calls[0].prompt
+    assert "(./dev/optimization/hints.md)" not in models.calls[0].prompt
+    assert "[query hints]([[YDBDOC_PROTECTED_0001]])" in models.calls[0].prompt
     assert "(./dev/query-execution-optimization/query-hints.md)" in models.calls[0].prompt
     assert accepted_document.translated_markdown == (
-        "See [query hints](./dev/query-execution-optimization/query-hints.md).\n"
+        "See [query hints](./dev/optimization/hints.md).\n"
     )
 
 
@@ -689,12 +691,12 @@ def test_exhausted_missing_placeholder_rejects_malformed_markdown() -> None:
     )
     document = document_for(source)
     prepared = prepare_document(document.source, document.plan, max_characters=100_000)
-    first_open, first_close, _missing_code, second_open, second_close, second_code = (
+    first_destination, _missing_code, second_destination, second_code = (
         item.token for item in prepared.placeholders
     )
     malformed = (
-        f"* {first_open}First{first_close} uses . {second_open}\n"
-        f"* {second_close}Second uses {second_code}.\n"
+        f"* [First]({first_destination}) uses . [\n"
+        f"* Second]({second_destination}) uses {second_code}.\n"
     )
     models = ScriptedModels([malformed, malformed])
     content = content_with(models)
@@ -757,7 +759,7 @@ def test_validate_plan_never_allows_unvalidated_translation_bytes() -> None:
         content.validate_plan(cast(ImmutableRunSnapshot, object()), candidate, plan)
 
 
-def test_validate_plan_accepts_localized_links_for_existing_target() -> None:
+def test_validate_plan_rejects_nonsymmetric_existing_target_link() -> None:
     document = document_for(
         b"See [query hints](./dev/optimization/hints.md).\n",
         target=b"See [query hints](./dev/query-execution-optimization/query-hints.md).\n",
@@ -769,7 +771,8 @@ def test_validate_plan_accepts_localized_links_for_existing_target() -> None:
     candidate = WorkflowCandidate(pack({target_path.value: localized}), None)
     plan = PublicationPlan((FileChange(target_path, document.entry.target_content, localized),), ())
 
-    content.validate_plan(cast(ImmutableRunSnapshot, object()), candidate, plan)
+    with pytest.raises(DocumentTranslationError, match="structure_mismatch"):
+        content.validate_plan(cast(ImmutableRunSnapshot, object()), candidate, plan)
 
 
 def test_lost_placeholder_candidate_is_not_created() -> None:
@@ -788,10 +791,10 @@ def test_lost_placeholder_candidate_is_not_created() -> None:
 def test_reordered_link_pairs_are_not_published() -> None:
     document = document_for(b"Read [one](one.md), then [two](two.md).\n")
     prepared = prepare_document(document.source, document.plan, max_characters=100_000)
-    first_open, first_close, second_open, second_close = (
-        item.token for item in prepared.placeholders
+    first_destination, second_destination = (item.token for item in prepared.placeholders)
+    reordered = (
+        f"Read [two]({second_destination}), after [one]({first_destination}).\n"
     )
-    reordered = f"Read {second_open}two{second_close}, after {first_open}one{first_close}.\n"
     models = ScriptedModels([reordered, reordered])
     content = content_with(models)
 
@@ -804,12 +807,10 @@ def test_reordered_link_pairs_are_not_published() -> None:
 def test_live_nested_link_reorder_witness_is_not_published() -> None:
     document = document_for("* [Добавлена](issue) поддержка [репликации](guide).\n".encode())
     prepared = prepare_document(document.source, document.plan, max_characters=100_000)
-    outer_open, outer_close, inner_open, inner_close = (
-        item.token for item in prepared.placeholders
-    )
+    outer_destination, inner_destination = (item.token for item in prepared.placeholders)
     reordered = (
-        f"* {outer_open}Support for {inner_open}replication{inner_close} "
-        f"has been added{outer_close}.\n"
+        f"* [Support for replication]({inner_destination}) "
+        f"[has been added]({outer_destination}).\n"
     )
     models = ScriptedModels([reordered, reordered])
     content = content_with(models)

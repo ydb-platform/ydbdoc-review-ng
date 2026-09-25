@@ -73,7 +73,7 @@ def test_existing_target_prompt_synchronizes_against_authoritative_source() -> N
     assert "Return Markdown only" in prompt
 
 
-def test_existing_target_can_localize_markdown_link_destinations() -> None:
+def test_markdown_link_destination_is_always_protected_from_the_model() -> None:
     source = b"See [query hints](./dev/optimization/hints.md).\n"
     plan = build_markdown_plan(SNAPSHOT, PATH, source)
 
@@ -81,11 +81,38 @@ def test_existing_target_can_localize_markdown_link_destinations() -> None:
         source,
         plan,
         max_characters=100_000,
-        localize_link_destinations=True,
     )
 
-    assert "[query hints](./dev/optimization/hints.md)" in request.chunks[0].text
-    assert all(item.kind not in {ProtectedKind.LINK_OPEN, ProtectedKind.LINK_CLOSE} for item in request.placeholders)
+    assert "[query hints]([[YDBDOC_PROTECTED_0001]])" in request.chunks[0].text
+    assert "optimization/hints.md" not in request.chunks[0].text
+    assert all(item.kind is not ProtectedKind.LINK_CLOSE for item in request.placeholders)
+
+
+def test_link_destination_is_hidden_inside_markdown_syntax_and_restored_from_resolver() -> None:
+    source = b"See [query hints](../dev/optimization/hints.md).\n"
+    plan = build_markdown_plan(SNAPSHOT, PATH, source)
+
+    request = prepare_document(
+        source,
+        plan,
+        max_characters=100_000,
+        source_locale="ru",
+        target_locale="en",
+        link_resolver=lambda value: (
+            "../dev/query-execution-optimization/query-hints.md"
+            if value == "../dev/optimization/hints.md"
+            else value
+        ),
+    )
+    text = request.chunks[0].text
+
+    assert "[query hints]([[YDBDOC_PROTECTED_0001]])" in text
+    assert "optimization/hints.md" not in text
+    translated = text.replace("query hints", "query execution hints")
+    assert restore_document(source, plan, request, (translated,)) == (
+        b"See [query execution hints]"
+        b"(../dev/query-execution-optimization/query-hints.md).\n"
+    )
 
 
 def test_global_placeholders_restore_exact_bytes_and_reject_contract_drift() -> None:
@@ -151,16 +178,16 @@ def test_identical_inline_code_tokens_cannot_exchange_source_fields() -> None:
         restore_document(source, plan, request, (exchanged,))
 
 
-def test_identical_link_opening_token_ids_cannot_exchange_pairs() -> None:
+def test_link_destination_token_ids_cannot_exchange_pairs() -> None:
     source = b"Read [one](one.md), then [two](two.md).\n"
     plan, request = prepared(source)
     assert request.chunks[0].text == (
-        "Read [[YDBDOC_PROTECTED_0001]]one[[YDBDOC_PROTECTED_0002]], then "
-        "[[YDBDOC_PROTECTED_0003]]two[[YDBDOC_PROTECTED_0004]].\n"
+        "Read [one]([[YDBDOC_PROTECTED_0001]]), then "
+        "[two]([[YDBDOC_PROTECTED_0002]]).\n"
     )
     exchanged = (
-        "Read [[YDBDOC_PROTECTED_0003]]one[[YDBDOC_PROTECTED_0002]], then "
-        "[[YDBDOC_PROTECTED_0001]]two[[YDBDOC_PROTECTED_0004]].\n"
+        "Read [one]([[YDBDOC_PROTECTED_0002]]), then "
+        "[two]([[YDBDOC_PROTECTED_0001]]).\n"
     )
 
     with pytest.raises(DocumentTranslationError, match="placeholder_mismatch"):
@@ -191,11 +218,11 @@ def test_field_local_mobility_rejects_linked_image_endpoint_repairing() -> None:
     plan, request = prepared(source)
     text = request.chunks[0].text
     tokens = tuple(item.token for item in request.placeholders)
-    assert len(tokens) == 4
+    assert len(tokens) == 2
     repaired = (
-        text.replace(tokens[2], "TEMP", 1)
-        .replace(tokens[3], tokens[2], 1)
-        .replace("TEMP", tokens[3], 1)
+        text.replace(tokens[0], "TEMP", 1)
+        .replace(tokens[1], tokens[0], 1)
+        .replace("TEMP", tokens[1], 1)
     )
 
     with pytest.raises(DocumentTranslationError, match="placeholder_mismatch"):
@@ -382,8 +409,8 @@ def test_whole_document_response_rejects_invented_link() -> None:
 def test_whole_document_response_rejects_link_move_between_preserved_blocks() -> None:
     source = b"[Guide](guide.md) first.\n\nSecond paragraph.\n"
     plan, request = prepared(source)
-    open_token, close_token = (item.token for item in request.placeholders)
-    response = f"First paragraph.\n\nSecond {open_token}Guide{close_token}.\n"
+    (destination_token,) = (item.token for item in request.placeholders)
+    response = f"First paragraph.\n\nSecond [Guide]({destination_token}).\n"
 
     with pytest.raises(DocumentTranslationError, match="placeholder_mismatch"):
         restore_document(source, plan, request, (response,))
@@ -392,8 +419,10 @@ def test_whole_document_response_rejects_link_move_between_preserved_blocks() ->
 def test_block_merge_does_not_hide_link_move_between_other_blocks() -> None:
     source = b"[Guide](guide.md) first.\n\nSecond paragraph.\n\nThird paragraph.\n"
     plan, request = prepared(source)
-    open_token, close_token = (item.token for item in request.placeholders)
-    response = f"First paragraph.\n\nSecond {open_token}Guide{close_token}.\nThird paragraph.\n"
+    (destination_token,) = (item.token for item in request.placeholders)
+    response = (
+        f"First paragraph.\n\nSecond [Guide]({destination_token}).\nThird paragraph.\n"
+    )
 
     with pytest.raises(DocumentTranslationError, match="placeholder_mismatch"):
         restore_document(source, plan, request, (response,))

@@ -37,6 +37,7 @@ from ydbdoc_review_ng.direction import (
     select_direction,
 )
 from ydbdoc_review_ng.domain import GitSha, Mode, ModelRole, RepoPath, SnapshotRef
+from ydbdoc_review_ng.links import LinkDestinationResolver, WikipediaLanglinks
 from ydbdoc_review_ng.locales import (
     ChangedFileKind,
     ChangedFileMetadata,
@@ -93,7 +94,7 @@ from ydbdoc_review_ng.translation import (
 )
 from ydbdoc_review_ng.translation.document import (
     _document_block_texts,
-    _verify_with_localized_links,
+    verify_document_candidate_with_links,
 )
 
 if TYPE_CHECKING:
@@ -459,6 +460,7 @@ class RuntimeContent:
     ) -> None:
         self.source, self.models, self.environment = source, models, environment
         self.model = environment.get("YDBDOC_MODEL") or "yandexgpt-5.1/latest"
+        self.wikipedia = WikipediaLanglinks()
         self.roots = LocaleRoots(RepoPath("ydb/docs/ru/core"), RepoPath("ydb/docs/en/core"))
         self.documents: tuple[Document, ...] = ()
         self.entries: tuple[ScopeEntry, ...] = ()
@@ -868,7 +870,11 @@ class RuntimeContent:
             source_locale=entry.pair.source_locale.value,
             target_locale=entry.pair.target_locale.value,
             operator_context=operator_context,
-            localize_link_destinations=target_reference_bytes is not None,
+            link_resolver=LinkDestinationResolver(
+                entry.pair.source_locale.value,
+                entry.pair.target_locale.value,
+                self.wikipedia,
+            ),
         )
         block_texts = _document_block_texts(document.source, document.plan, prepared.placeholders)
         try:
@@ -1070,14 +1076,15 @@ class RuntimeContent:
                 target_plan = build_markdown_plan(
                     document.plan.source_snapshot, accepted.target_path, target
                 )
-                _verify_with_localized_links(
+                verify_document_candidate_with_links(
                     document.source,
                     document.plan,
                     target,
                     target_plan,
-                    localized_links=(
-                        document.entry.target_content is not None
-                        or document.entry.rename_from_target_content is not None
+                    LinkDestinationResolver(
+                        document.entry.pair.source_locale.value,
+                        document.entry.pair.target_locale.value,
+                        self.wikipedia,
                     ),
                 )
                 try:
@@ -1221,14 +1228,15 @@ class RuntimeContent:
             target_plan = build_markdown_plan(
                 document.plan.source_snapshot, document.entry.pair.target_path, target
             )
-            _verify_with_localized_links(
+            verify_document_candidate_with_links(
                 document.source,
                 document.plan,
                 target,
                 target_plan,
-                localized_links=(
-                    document.entry.target_content is not None
-                    or document.entry.rename_from_target_content is not None
+                LinkDestinationResolver(
+                    document.entry.pair.source_locale.value,
+                    document.entry.pair.target_locale.value,
+                    self.wikipedia,
                 ),
             )
 
@@ -1302,6 +1310,11 @@ class RuntimeContent:
                 operator_context=self.review_operator_context,
                 before_model_call=check_head if selective else None,
                 before_repaired_map=publish_map if selective else None,
+                link_resolver=LinkDestinationResolver(
+                    document.entry.pair.source_locale.value,
+                    document.entry.pair.target_locale.value,
+                    self.wikipedia,
+                ),
                 max_request_characters=int(
                     self.environment.get("YDBDOC_MAX_MODEL_REQUEST_CHARACTERS")
                     or self.environment.get("YDBDOC_MAX_SOURCE_CHARACTERS")

@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import re
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Protocol
 
 import yaml  # type: ignore[import-untyped]
 
@@ -31,6 +33,12 @@ CORRECTION_SOURCE_EXCERPT_MAX_CHARACTERS = 160
 
 class DocumentTranslationError(ValueError):
     """A document response cannot be restored into a valid source-shaped candidate."""
+
+
+class LinkResolver(Protocol):
+    def __call__(self, destination: str, /) -> str: ...
+
+    def allows(self, source: str, target: str, /) -> bool: ...
 
 
 def _response_tokens(value: str) -> tuple[str, ...]:
@@ -567,6 +575,76 @@ def _verify_with_localized_links(
     verify_document_candidate(source, source_plan, normalized, normalized_plan)
 
 
+def verify_document_candidate_with_links(
+    source: bytes,
+    source_plan: SourcePlan,
+    target: bytes,
+    target_plan: SourcePlan,
+    resolver: LinkResolver,
+    /,
+) -> None:
+    """Verify exact protected values, allowing only resolver-approved destinations."""
+
+    def regions(
+        content: bytes, value: SourcePlan
+    ) -> tuple[tuple[ProtectedKind, int, int, bytes], ...]:
+        kinds = _LOCALIZABLE_LINK_KINDS | {ProtectedKind.URL}
+        return tuple(
+            sorted(
+                (
+                    (
+                        region.kind,
+                        region.span.start,
+                        region.span.end,
+                        content[region.span.start : region.span.end],
+                    )
+                    for field in fields_of(value)
+                    for region in field.protected_regions
+                    if region.kind in kinds
+                ),
+                key=lambda item: item[1],
+            )
+        )
+
+    source_regions = regions(source, source_plan)
+    target_regions = regions(target, target_plan)
+    if len(source_regions) != len(target_regions) or tuple(
+        item[0] for item in source_regions
+    ) != tuple(item[0] for item in target_regions):
+        raise DocumentTranslationError("document_response:structure_mismatch")
+    for source_region, target_region in zip(source_regions, target_regions, strict=True):
+        kind, source_value, target_value = source_region[0], source_region[3], target_region[3]
+        if kind in {ProtectedKind.LINK_OPEN, ProtectedKind.IMAGE_OPEN}:
+            valid = source_value == target_value
+        elif kind in {ProtectedKind.LINK_CLOSE, ProtectedKind.IMAGE_CLOSE}:
+            valid = (
+                source_value.startswith(b"](")
+                and source_value.endswith(b")")
+                and target_value.startswith(b"](")
+                and target_value.endswith(b")")
+                and resolver.allows(
+                    source_value[2:-1].decode("utf-8"),
+                    target_value[2:-1].decode("utf-8"),
+                )
+            )
+        else:
+            valid = resolver.allows(
+                source_value.decode("utf-8"), target_value.decode("utf-8")
+            )
+        if not valid:
+            raise DocumentTranslationError("document_response:structure_mismatch")
+    normalized = bytearray(target)
+    for source_region, target_region in reversed(tuple(zip(source_regions, target_regions, strict=True))):
+        normalized[target_region[1] : target_region[2]] = source_region[3]
+    normalized_value = bytes(normalized)
+    normalized_plan = build_markdown_plan(
+        target_plan.source_snapshot,
+        target_plan.source_path,
+        normalized_value,
+    )
+    verify_document_candidate(source, source_plan, normalized_value, normalized_plan)
+
+
 def _render_span(
     source: bytes,
     start: int,
@@ -594,7 +672,7 @@ def prepare_document(
     source_locale: str | None = None,
     target_locale: str | None = None,
     operator_context: str | None = None,
-    localize_link_destinations: bool = False,
+    link_resolver: Callable[[str], str] | None = None,
 ) -> DocumentTranslationRequest:
     """Expose complete Markdown, replacing only parser-owned opaque regions globally."""
     if type(source) is not bytes or type(plan) is not SourcePlan:
@@ -607,32 +685,46 @@ def prepare_document(
         raise TypeError("source and target locale must both be strings or both be omitted")
     if operator_context is not None and type(operator_context) is not str:
         raise TypeError("operator_context must be a string or None")
-    if type(localize_link_destinations) is not bool:
-        raise TypeError("localize_link_destinations must be a bool")
+    if link_resolver is not None and not callable(link_resolver):
+        raise TypeError("link_resolver must be callable or None")
     validate_source_plan(source, plan)
 
-    raw_regions = sorted(
-        tuple(
-            (region.span.start, region.span.end, region.kind)
-            for field in fields_of(plan)
-            for region in field.protected_regions
-            if not (
-                localize_link_destinations
-                and region.kind in _LOCALIZABLE_LINK_KINDS
-            )
-        )
-        + tuple(
-            (start, end, ProtectedKind.MARKDOWN_SYNTAX)
-            for start, end in _source_owned_spans(source, plan)
-            if start < end
-        ),
-        key=lambda region: region[0],
+    raw_regions: list[tuple[int, int, ProtectedKind, bytes]] = []
+    for field in fields_of(plan):
+        for region in field.protected_regions:
+            start, end, kind = region.span.start, region.span.end, region.kind
+            if kind in {ProtectedKind.LINK_OPEN, ProtectedKind.IMAGE_OPEN}:
+                continue
+            if kind in {ProtectedKind.LINK_CLOSE, ProtectedKind.IMAGE_CLOSE}:
+                value = source[start:end]
+                if value.startswith(b"](") and value.endswith(b")"):
+                    start += 2
+                    end -= 1
+                    kind = ProtectedKind.URL
+            replacement = source[start:end]
+            if link_resolver is not None and kind is ProtectedKind.URL:
+                try:
+                    text = replacement.decode("utf-8")
+                    if text.startswith("<") and text.endswith(">"):
+                        replacement = (
+                            "<" + link_resolver(text[1:-1]) + ">"
+                        ).encode("utf-8")
+                    elif not any(character.isspace() for character in text):
+                        replacement = link_resolver(text).encode("utf-8")
+                except UnicodeError:
+                    pass
+            raw_regions.append((start, end, kind, replacement))
+    raw_regions.extend(
+        (start, end, ProtectedKind.MARKDOWN_SYNTAX, source[start:end])
+        for start, end in _source_owned_spans(source, plan)
+        if start < end
     )
+    raw_regions.sort(key=lambda region: region[0])
     placeholders: list[DocumentPlaceholder] = []
     regions: list[tuple[int, int, DocumentPlaceholder]] = []
     next_number = 1
     cursor = 0
-    for start, end, kind in raw_regions:
+    for start, end, kind, replacement in raw_regions:
         if start < cursor:
             raise DocumentTranslationError("document_request:overlapping_opaque_regions")
         cursor = end
@@ -643,7 +735,7 @@ def prepare_document(
                 break
         placeholder = DocumentPlaceholder(
             token,
-            source[start:end],
+            replacement,
             kind,
             start,
             end,

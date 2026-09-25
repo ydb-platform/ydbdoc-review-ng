@@ -14,12 +14,14 @@ templates, inline code, нетранслируемый код и служебн�
 target. Source остаётся authoritative, а target используется только как
 справочник готовых корректных формулировок: их следует сохранить, недостающее
 добавить, изменившееся обновить, лишнее относительно source удалить. Сборщик не
-берёт из старого target готовые блоки документа. Узкое исключение, Markdown
-link/image-конструкции: при существующем target они видимы модели, чтобы она
-сохранила корректный локализованный путь, когда RU и EN имеют разную структуру.
-Для нового target destinations остаются source-owned placeholders. Любой
-выбранный моделью target-local destination обязан пройти parse и полный
-Diplodoc build до публикации.
+берёт из старого target готовые блоки документа или URL. Destination каждой
+Markdown link/image-конструкции заменяется внутри сохранённого синтаксиса:
+`[label]([[YDBDOC_PROTECTED_NNNN]])`. Модель переводит label, но не видит URL.
+Внутренний YDB URL меняет только `/docs/ru/` ↔ `/docs/en/`; относительный path,
+query и fragment сохраняются. Обычный внешний URL возвращается из source.
+Только для чистой статьи Wikipedia без query/fragment официальный MediaWiki
+`langlinks` может вернуть URL target-языка. Отсутствие соответствия или сбой API
+оставляет source Wikipedia URL и не создаёт RED.
 
 Dependency closure применяется к документам без target. Уже существующий target
 не расширяет scope обходом всех исторических ссылок source: такой обход ошибочно
@@ -50,11 +52,10 @@ parse без diagnostics и protected invariants. Совпадение
 До восстановления проверяются точное множество placeholders, единственность и
 принадлежность исходному верхнеуровневому блоку. Независимые `inline_code` и
 атомарные `template` могут переставляться внутри одного переводимого поля ради
-грамматики; остальные одиночные fragments сохраняют порядок, а link/image
-delimiters, пары и вложенность не меняются. При синхронизации существующего
-target destination может отличаться от source, но сама link/image-конструкция
-обязана остаться валидной. Затем placeholders заменяются только исходными
-fragments, candidate повторно разбирается как Markdown/YFM без
+грамматики; остальные одиночные fragments сохраняют порядок, а каждый
+link/image destination остаётся внутри исходной link/image-конструкции. Затем
+placeholders заменяются source или детерминированно локализованными fragments,
+candidate повторно разбирается как Markdown/YFM без
 diagnostics. Косметические и иные изменения model Markdown не отклоняются по
 сравнению parser shape с source; существенную порчу структуры, смысла или полноты
 проверяет critic. Невалидный ответ получает не более одной технической попытки
@@ -71,9 +72,9 @@ checkout base-ветки, запускает полный официальный
 блокирует публикацию. Это проверяет реальные YFM, TOC, include,
 anchors и Markdown rules вместо дальнейшего расширения собственного parser.
 После build checkout восстанавливается. При `doc_verify`
-те же protected fragments сверяются с текущим target. Исключение составляют
-валидные target-local Markdown link/image destinations; остальные URL, path и
-code относительно authoritative source изменять нельзя.
+те же protected fragments сверяются с текущим target, включая вычисленные YDB
+locale и Wikipedia destinations; остальные URL, path и code относительно
+authoritative source изменять нельзя.
 
 ## Fenced comments
 
