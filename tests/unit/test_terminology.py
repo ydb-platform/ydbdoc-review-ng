@@ -52,6 +52,6 @@ def test_glossary_context_is_bounded_and_prefers_more_relevant_entries() -> None
     )
 
     assert context is not None
-    assert len(context) <= 24_000
+    assert len(context) <= 8_000
     assert 'anchor="term-19"' in context
-    assert context.count("<glossary-entry") <= 12
+    assert context.count("<glossary-entry") <= 8

@@ -7,8 +7,8 @@ import re
 _HEADING = re.compile(r"(?m)^(#{2,6})\s+.*?\{#([A-Za-z0-9_.:-]+)\}\s*$")
 _BOLD = re.compile(r"\*\*([^*]+)\*\*")
 _WORD = re.compile(r"[^\W_]+", re.UNICODE)
-_MAX_ENTRIES = 12
-_MAX_CHARACTERS = 24_000
+_MAX_ENTRIES = 8
+_MAX_CHARACTERS = 8_000
 
 
 def _sections(markdown: str) -> dict[str, str]:
