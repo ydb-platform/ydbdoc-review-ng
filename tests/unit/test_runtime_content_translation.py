@@ -265,7 +265,7 @@ def test_translate_document_uses_complete_markdown_and_selected_direction(
     )
     response = (
         "# Translated heading\n\nText with "
-        "[guide]([[YDBDOC_PROTECTED_0001]]).\n\n- One\n- Two\n"
+        "[[YDBDOC_PROTECTED_0001]]guide[[YDBDOC_PROTECTED_0002]].\n\n- One\n- Two\n"
     )
     models = ScriptedModels([response])
 
@@ -278,7 +278,10 @@ def test_translate_document_uses_complete_markdown_and_selected_direction(
     assert "# Исходный заголовок" in call.prompt
     assert "- Один\n- Два" in call.prompt
     assert "guide.md" not in call.prompt
-    assert "[руководством]([[YDBDOC_PROTECTED_0001]])" in call.prompt
+    assert (
+        "[[YDBDOC_PROTECTED_0001]]руководством[[YDBDOC_PROTECTED_0002]]"
+        in call.prompt
+    )
     assert "# Old target" in call.prompt
     assert "JSON" not in call.prompt
     assert (
@@ -303,13 +306,16 @@ def test_existing_target_cannot_override_symmetric_source_link_destination() -> 
         target=b"See [query hints](./dev/query-execution-optimization/query-hints.md).\n",
     )
     models = ScriptedModels(
-        ["See [query hints]([[YDBDOC_PROTECTED_0001]]).\n"]
+        ["See [[YDBDOC_PROTECTED_0001]]query hints[[YDBDOC_PROTECTED_0002]].\n"]
     )
 
     _accepted, accepted_document = content_with(models)._translate_document(document)
 
     assert "(./dev/optimization/hints.md)" not in models.calls[0].prompt
-    assert "[query hints]([[YDBDOC_PROTECTED_0001]])" in models.calls[0].prompt
+    assert (
+        "[[YDBDOC_PROTECTED_0001]]query hints[[YDBDOC_PROTECTED_0002]]"
+        in models.calls[0].prompt
+    )
     assert "(./dev/query-execution-optimization/query-hints.md)" in models.calls[0].prompt
     assert accepted_document.translated_markdown == (
         "See [query hints](./dev/optimization/hints.md).\n"
@@ -431,7 +437,7 @@ def test_translate_accepts_field_local_inline_code_grammar_order(
 
     assert len(models.calls) == 1
     assert "exactly once" in models.calls[0].prompt
-    assert "source top-level block" in models.calls[0].prompt
+    assert "top-level source block" in models.calls[0].prompt
     assert (
         assemble_candidate(document.source, document.plan, document.request, accepted.as_dict())
         == translated
@@ -765,12 +771,12 @@ def test_exhausted_missing_placeholder_rejects_malformed_markdown() -> None:
     )
     document = document_for(source)
     prepared = prepare_document(document.source, document.plan, max_characters=100_000)
-    first_destination, _missing_code, second_destination, second_code = (
+    first_open, first_close, _missing_code, second_open, second_close, second_code = (
         item.token for item in prepared.placeholders
     )
     malformed = (
-        f"* [First]({first_destination}) uses . [\n"
-        f"* Second]({second_destination}) uses {second_code}.\n"
+        f"* {first_open}First{first_close} uses . [\n"
+        f"* Second]{second_open}{second_close} uses {second_code}.\n"
     )
     models = ScriptedModels([malformed, malformed])
     content = content_with(models)
@@ -865,10 +871,10 @@ def test_lost_placeholder_candidate_is_not_created() -> None:
 def test_reordered_link_pairs_are_not_published() -> None:
     document = document_for(b"Read [one](one.md), then [two](two.md).\n")
     prepared = prepare_document(document.source, document.plan, max_characters=100_000)
-    first_destination, second_destination = (item.token for item in prepared.placeholders)
-    reordered = (
-        f"Read [two]({second_destination}), after [one]({first_destination}).\n"
+    first_open, first_close, second_open, second_close = (
+        item.token for item in prepared.placeholders
     )
+    reordered = f"Read {second_open}two{second_close}, after {first_open}one{first_close}.\n"
     models = ScriptedModels([reordered, reordered])
     content = content_with(models)
 
@@ -881,10 +887,12 @@ def test_reordered_link_pairs_are_not_published() -> None:
 def test_live_nested_link_reorder_witness_is_not_published() -> None:
     document = document_for("* [Добавлена](issue) поддержка [репликации](guide).\n".encode())
     prepared = prepare_document(document.source, document.plan, max_characters=100_000)
-    outer_destination, inner_destination = (item.token for item in prepared.placeholders)
+    outer_open, outer_close, inner_open, inner_close = (
+        item.token for item in prepared.placeholders
+    )
     reordered = (
-        f"* [Support for replication]({inner_destination}) "
-        f"[has been added]({outer_destination}).\n"
+        f"* {inner_open}Support for replication{inner_close} "
+        f"{outer_open}has been added{outer_close}.\n"
     )
     models = ScriptedModels([reordered, reordered])
     content = content_with(models)
