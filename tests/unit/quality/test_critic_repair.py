@@ -215,7 +215,7 @@ def test_primary_critic_applies_its_own_correction_without_repair_call() -> None
     assert executor.calls[0].schema is not None
 
 
-def test_green_critic_editor_change_is_applied_and_independently_reviewed() -> None:
+def test_green_critic_editor_change_is_ignored() -> None:
     plan, request, values, target = prepared()
     field_id = request.fields[1].field_id
     corrected_values = {
@@ -240,9 +240,9 @@ def test_green_critic_editor_change_is_applied_and_independently_reviewed() -> N
         target_locale=Locale.RU,
     )
 
-    assert result.final_candidate == corrected
-    assert result.repair_applied
-    assert [call.role.value for call in executor.calls] == ["critic", "final_critic"]
+    assert result.final_candidate == target
+    assert not result.repair_applied
+    assert [call.role.value for call in executor.calls] == ["critic"]
 
 
 def test_large_critic_reviews_corresponding_source_and_target_excerpts() -> None:

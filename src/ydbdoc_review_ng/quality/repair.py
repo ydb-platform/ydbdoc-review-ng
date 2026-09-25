@@ -572,8 +572,11 @@ def review_translation(
             editable=True,
             current_target=current_target,
         )
-        correction = result.corrected_markdown
-        assert correction is not None
+        proposed_correction = result.corrected_markdown
+        assert proposed_correction is not None
+        correction = (
+            proposed_correction if result.verdict is Verdict.RED else current_target
+        )
         editor_changed_target = editor_changed_target or correction != current_target
         editor_results.append(result)
         validate_chunk_response(chunk, document_request.placeholders, correction)
