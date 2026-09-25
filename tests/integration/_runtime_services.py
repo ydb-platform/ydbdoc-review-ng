@@ -50,6 +50,7 @@ class RuntimeServices:
         self.events = []
         self.audit = []
         self.comments = []
+        self.source_comments = []
         self.branch_head = None
         self.pr_exists = False
         self.files = {
@@ -159,6 +160,8 @@ class RuntimeServices:
             return {"number": 43}
         if path == "/issues/43/comments?per_page=100":
             return self.comments
+        if path == "/issues/42/comments?per_page=100":
+            return self.source_comments
         if path == "/issues/43/comments":
             self.comments.append(
                 {
@@ -168,8 +171,20 @@ class RuntimeServices:
                 }
             )
             return {"id": 7}
+        if path == "/issues/42/comments":
+            self.source_comments.append(
+                {
+                    "id": 8,
+                    "user": {"id": 42, "type": "User", "login": "pat-publisher"},
+                    "body": payload["body"],
+                }
+            )
+            return {"id": 8}
         if path == "/issues/comments/7":
             self.comments[0]["body"] = payload["body"]
+            return {}
+        if path == "/issues/comments/8":
+            self.source_comments[0]["body"] = payload["body"]
             return {}
         raise AssertionError((method, path))
 

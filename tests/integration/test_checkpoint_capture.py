@@ -160,7 +160,19 @@ class CaptureServices(RuntimeServices):
             self.files = dict(self.snapshots[self.branch_head])
             return {}
         if relative == "/issues/42/comments" and method == "POST":
-            self.comments.append({"id": 8, "body": payload["body"]})
+            comments = (
+                self.source_comments
+                if "ydbdoc-translation-pr" in payload["body"]
+                else self.comments
+            )
+            comment = {"id": 8, "body": payload["body"]}
+            if comments is self.source_comments:
+                comment["user"] = {
+                    "id": 42,
+                    "type": "User",
+                    "login": "pat-publisher",
+                }
+            comments.append(comment)
             return {"id": 8}
         result = super().github(method, path, payload)
         if self.failure == "head" and method == "POST" and relative == "/issues/43/comments":

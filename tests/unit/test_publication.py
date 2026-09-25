@@ -1,5 +1,6 @@
 from dataclasses import replace
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 
@@ -24,6 +25,7 @@ from ydbdoc_review_ng.reporting import (
     merge_readiness,
     render_report,
 )
+from ydbdoc_review_ng.runtime import RuntimeReporter
 from ydbdoc_review_ng.runtime_github import GitHubBackend
 from ydbdoc_review_ng.scope import FileOperation
 
@@ -504,6 +506,91 @@ def test_report_never_renders_unknown_cost_as_zero() -> None:
 
     assert "Стоимость запуска: неизвестна" in report
     assert "0 RUB" not in report
+
+
+def test_report_names_the_source_pr_being_translated() -> None:
+    report = render_report(
+        review(),
+        COMMIT,
+        ReportContext(SOURCE, TARGET, Decimal("1.25"), source_pr_number=50858),
+        (
+            CheckResult("doc_verify", COMMIT, "success"),
+            CheckResult("build-docs", COMMIT, "success"),
+        ),
+    )
+
+    assert "Перевод PR #50858" in report
+
+
+def test_translate_links_source_pr_to_one_current_translation_pr_comment() -> None:
+    class PerPrBackend(Backend):
+        def __init__(self) -> None:
+            super().__init__()
+            self.comments_by_pr: dict[int, list[Comment]] = {}
+
+        def list_comments(self, pr_number):
+            return tuple(self.comments_by_pr.get(pr_number, ()))
+
+        def create_comment(self, pr_number, body):
+            self.events.append(("create_comment", pr_number))
+            comments = self.comments_by_pr.setdefault(pr_number, [])
+            comments.append(Comment(pr_number * 10 + len(comments), True, body))
+
+        def update_comment(self, pr_number, comment_id, body):
+            self.events.append(("update_comment", pr_number, comment_id))
+            comments = self.comments_by_pr[pr_number]
+            index = next(i for i, comment in enumerate(comments) if comment.id == comment_id)
+            comments[index] = Comment(comment_id, True, body)
+
+        def head(self, _branch):
+            return COMMIT
+
+        def checks(self, _commit_sha):
+            return ()
+
+    backend = PerPrBackend()
+    context = PublicationContext("ydb-platform/ydb", "translation/42", "main", "main", TARGET)
+    snapshot = ImmutableRunSnapshot(Mode.DOC_TRANSLATE, SOURCE, TARGET, context.branch, context)
+    candidate = WorkflowCandidate(b"New", SECRET)
+    publisher = GitPublicationAdapter(
+        backend,
+        lambda _snapshot, current: PublicationPlan(
+            (FileChange(PATH, b"Old", current.content),), ()
+        ),
+        lambda *_args: None,
+    )
+    publisher.validate_candidate(snapshot, candidate)
+    commit = publisher.publish(snapshot, candidate)
+    runtime_reporter = RuntimeReporter(
+        SimpleNamespace(
+            github=backend,
+            snapshots=SimpleNamespace(
+                source_snapshot=SimpleNamespace(commit_sha=SOURCE)
+            ),
+            probable_duplicates=(),
+            context=context,
+            source_pr=42,
+            continue_target_sha=None,
+        ),
+        publisher,
+        SimpleNamespace(cost=Decimal("1.25")),
+    )
+
+    for _ in range(2):
+        runtime_reporter.update_current_pr(
+            mode=Mode.DOC_TRANSLATE,
+            pr_number=42,
+            branch=snapshot.branch,
+            commit_sha=commit,
+            review=review(),
+        )
+
+    assert len(backend.comments_by_pr[42]) == 1
+    assert backend.comments_by_pr[42][0].body.startswith(
+        "Перевод этого PR: https://github.com/ydb-platform/ydb/pull/123"
+    )
+    assert len(backend.comments_by_pr[123]) == 1
+    assert "Перевод PR #42" in backend.comments_by_pr[123][0].body
 
 
 def test_probable_duplicate_keeps_green_checks_yellow_and_names_both_files() -> None:

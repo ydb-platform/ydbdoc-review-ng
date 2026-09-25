@@ -10,6 +10,7 @@ from ydbdoc_review_ng.publication import GitPublicationAdapter, PublicationConte
 from ydbdoc_review_ng.quality import Finding, QualityReviewResult, Verdict
 
 QA_MARKER = "<!-- ydbdoc-current-qa -->"
+TRANSLATION_LINK_MARKER = "<!-- ydbdoc-translation-pr -->"
 _MAX_REPORTED_FILES = 10
 _STATUS_ICONS = {"GREEN": "🟢", "YELLOW": "🟡", "RED": "🔴"}
 
@@ -64,6 +65,7 @@ class ReportContext:
     target_sha: GitSha
     job_cost_rub: Decimal | None
     probable_duplicates: tuple[ProbableDuplicate, ...] = ()
+    source_pr_number: int | None = None
 
 
 def _line(value: str) -> str:
@@ -129,6 +131,8 @@ def render_report(
         f"{_STATUS_ICONS[status]} {status}",
         f"Стоимость запуска: {cost}",
     ]
+    if context.source_pr_number is not None:
+        lines.append(f"Перевод PR #{context.source_pr_number}")
     if review.final.verdict is Verdict.RED:
         lines.extend(_finding_lines(review))
         lines.extend(
@@ -233,7 +237,8 @@ class QAReporter:
                     for check in checks
                     if check.name != "doc_verify" or check.head_sha != commit_sha
                 ) + (CheckResult("doc_verify", commit_sha, "success"),)
-            body = render_report(review, commit_sha, self._report_context(), checks)
+            report_context = self._report_context()
+            body = render_report(review, commit_sha, report_context, checks)
             body += "\n" + QA_MARKER
             if self._publisher.context is not None and not self._publisher.noop:
                 if self._current_head is not None and self._current_head() != commit_sha:
@@ -257,6 +262,29 @@ class QAReporter:
                 self._backend.create_comment(number, body)
             else:
                 self._backend.update_comment(number, existing.id, body)
+            if mode is Mode.DOC_TRANSLATE and report_context.source_pr_number is not None:
+                source_body = (
+                    "Перевод этого PR: "
+                    f"https://github.com/{context.repository}/pull/{number}\n"
+                    f"{TRANSLATION_LINK_MARKER}"
+                )
+                source_comment = next(
+                    (
+                        comment
+                        for comment in self._backend.list_comments(
+                            report_context.source_pr_number
+                        )
+                        if comment.authored_by_publisher
+                        and TRANSLATION_LINK_MARKER in comment.body
+                    ),
+                    None,
+                )
+                if source_comment is None:
+                    self._backend.create_comment(report_context.source_pr_number, source_body)
+                else:
+                    self._backend.update_comment(
+                        report_context.source_pr_number, source_comment.id, source_body
+                    )
             # The SHA-labelled comment may have been written during a ref race.
             # Do not acknowledge reporting success or allow checkpoint handoff.
             if self._current_head is not None and self._current_head() != commit_sha:

@@ -352,6 +352,7 @@ class RuntimeReporter:
                 commit_sha,
                 self.models.cost,
                 self.source.probable_duplicates,
+                self.source.source_pr,
             ),
             lambda: self.source.github.checks(commit_sha),
             verification_context=self.source.context,
