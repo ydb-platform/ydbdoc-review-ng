@@ -31,7 +31,10 @@
 
 Нативный Foundation Models API принимает `reasoningOptions.mode = DISABLED` и
 JSON Schema. В интеграционном прогоне PR 51079 все 361 принятых ответа сообщили
-`reasoningTokens = 0`. Это основная подтверждённая модель перевода.
+`reasoningTokens = 0`. Канонический текущий model URI:
+`gpt://<folder>/yandexgpt-5.1`; суффикс `/latest` не используется в default,
+но явный `YDBDOC_MODEL` сохраняет возможность выбрать другой URI. Это основная
+подтверждённая модель перевода.
 
 ### DeepSeek V4 Flash
 

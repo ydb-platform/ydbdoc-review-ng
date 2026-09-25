@@ -60,11 +60,16 @@ from ydbdoc_review_ng.trace import traced, write_trace
 _YANDEXGPT_5_1_TOKEN_RUB = Decimal("0.0012")
 _PRODUCTION_PRICING = PerModelPricing(
     {
+        "yandexgpt-5.1": ModelTokenPrice(
+            _YANDEXGPT_5_1_TOKEN_RUB,
+            _YANDEXGPT_5_1_TOKEN_RUB,
+            _YANDEXGPT_5_1_TOKEN_RUB,
+        ),
         "yandexgpt-5.1/latest": ModelTokenPrice(
             _YANDEXGPT_5_1_TOKEN_RUB,
             _YANDEXGPT_5_1_TOKEN_RUB,
             _YANDEXGPT_5_1_TOKEN_RUB,
-        )
+        ),
     }
 )
 

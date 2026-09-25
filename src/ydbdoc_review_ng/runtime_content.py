@@ -554,7 +554,7 @@ class RuntimeContent:
         self, source: RuntimeSource, models: RecordedModels, environment: Mapping[str, str]
     ) -> None:
         self.source, self.models, self.environment = source, models, environment
-        self.model = environment.get("YDBDOC_MODEL") or "yandexgpt-5.1/latest"
+        self.model = environment.get("YDBDOC_MODEL") or "yandexgpt-5.1"
         self.wikipedia = WikipediaLanglinks()
         self.roots = LocaleRoots(RepoPath("ydb/docs/ru/core"), RepoPath("ydb/docs/en/core"))
         self.documents: tuple[Document, ...] = ()
