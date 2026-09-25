@@ -713,6 +713,50 @@ def test_operator_context_is_not_part_of_authoritative_markdown() -> None:
     assert "never include or translate it in the output" in models.calls[0].prompt
 
 
+def test_same_page_target_fragment_must_exist_in_candidate() -> None:
+    document = document_for(b"## Source {#source}\n\nSee [section](#source).\n")
+    content = content_with(ScriptedModels([]))
+    valid = b"## Target {#target}\n\nSee [section](#target).\n"
+    dangling = b"## Other {#other}\n\nSee [section](#target).\n"
+
+    assert content._link_resolver(document, valid).allows("#source", "#target")
+    assert not content._link_resolver(document, dangling).allows("#source", "#target")
+    unchanged_dangling = b"## Other {#other}\n\nSee [section](#source).\n"
+    assert not content._link_resolver(document, unchanged_dangling).allows(
+        "#source", "#source"
+    )
+
+
+def test_absolute_internal_link_fragment_is_checked_against_target_page() -> None:
+    destination = (
+        "https://ydb.tech/docs/ru/concepts/table#row-oriented-table"
+    )
+    document = document_for(f"See [table]({destination}).\n".encode())
+    target_page = RepoPath("ydb/docs/en/core/concepts/table.md")
+
+    class Github:
+        def read_bytes(self, _snapshot: SnapshotRef, path: RepoPath, /) -> bytes | None:
+            if path == target_page:
+                return b"## Row tables {#row-oriented-tables}\n"
+            return None
+
+    content = content_with(ScriptedModels([]))
+    content.source = cast(RuntimeSource, SimpleNamespace(github=Github()))
+    content.plans = cast(
+        FrozenSourcePlans,
+        SimpleNamespace(
+            preparation=SimpleNamespace(
+                snapshots=SimpleNamespace(source_snapshot=SNAPSHOT),
+                metadata_snapshot=SNAPSHOT,
+            )
+        ),
+    )
+
+    assert content._link_resolver(document, None)(destination) == (
+        "https://ydb.tech/docs/en/concepts/table#row-oriented-tables"
+    )
+
+
 def test_content_filter_in_child_recursively_splits_and_preserves_document() -> None:
     source = content_filter_witness()
     document = document_for(source)

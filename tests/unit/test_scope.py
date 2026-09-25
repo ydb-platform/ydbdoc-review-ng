@@ -764,3 +764,88 @@ def test_existing_target_adds_missing_symmetric_linked_article_to_scope() -> Non
     assert dependency.pair.target_path == dependency_target
     assert dependency.target_content is None
     assert selected.manifest.dependency_file_count == 1
+
+
+def test_existing_target_missing_linked_anchor_adds_article_to_scope() -> None:
+    key = PairKey(RepoPath("article.md"))
+    parent = _inventory(
+        "article.md",
+        b"See [operator](glossary.md#operator).",
+        b"See glossary.",
+        (_change(Locale.RU, ChangedFileKind.MODIFIED, key),),
+    )
+    dependency_path = RepoPath("ydb/docs/ru/glossary.md")
+    dependency_target = RepoPath("ydb/docs/en/glossary.md")
+    potential = scope.build_potential_scopes(
+        _Reader(
+            {
+                dependency_path: b"## Operator {#operator}\n",
+                dependency_target: b"## Database {#database}\n",
+            }
+        ),
+        _Scanner(
+            {
+                parent.ru.path: (
+                    dependencies.DependencyLink(
+                        parent.ru.path, dependency_path, "operator"
+                    ),
+                ),
+                dependency_path: (),
+            }
+        ),
+        _Preflight(),
+        _snapshots(),
+        (parent,),
+        dependencies.RedirectCatalog(_snapshot(), _roots(), ()),
+    )
+
+    selected = scope.freeze_scope_manifest(
+        potential,
+        DirectionSelectionResult(
+            DirectionSelectionState.SELECTED,
+            Direction.RU_TO_EN,
+            (DirectionPairDecision(parent, DirectionPairVerdict.RU_TO_EN),),
+            None,
+        ),
+    )
+
+    assert selected.manifest is not None
+    dependency = selected.manifest.entries[1]
+    assert dependency.pair.target_path == dependency_target
+    assert dependency.target_content == b"## Database {#database}\n"
+    assert selected.manifest.dependency_file_count == 1
+
+
+def test_unique_plural_target_anchor_does_not_expand_dependency_scope() -> None:
+    key = PairKey(RepoPath("article.md"))
+    parent = _inventory(
+        "article.md",
+        b"See [tables](tables.md#row-oriented-table).",
+        b"See tables.",
+        (_change(Locale.RU, ChangedFileKind.MODIFIED, key),),
+    )
+    source_path = RepoPath("ydb/docs/ru/tables.md")
+    target_path = RepoPath("ydb/docs/en/tables.md")
+    potential = scope.build_potential_scopes(
+        _Reader(
+            {
+                source_path: b"## Tables {#row-oriented-table}\n",
+                target_path: b"## Tables {#row-oriented-tables}\n",
+            }
+        ),
+        _Scanner(
+            {
+                parent.ru.path: (
+                    dependencies.DependencyLink(
+                        parent.ru.path, source_path, "row-oriented-table"
+                    ),
+                )
+            }
+        ),
+        _Preflight(),
+        _snapshots(),
+        (parent,),
+        dependencies.RedirectCatalog(_snapshot(), _roots(), ()),
+    )
+
+    assert potential.scopes[0].measurement.dependency_file_count == 0

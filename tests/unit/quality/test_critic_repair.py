@@ -1811,6 +1811,24 @@ def test_critic_request_subordinates_operator_context_to_current_bytes(final: bo
     assert "must not force a finding that is no longer present" in built.prompt
 
 
+def test_critic_editor_receives_project_glossary_context() -> None:
+    built = build_critic_request(
+        model="model",
+        source="Строковые таблицы".encode(),
+        target=b"String tables",
+        target_path=PATH,
+        source_locale=Locale.RU,
+        target_locale=Locale.EN,
+        requested_ids=(),
+        editable=True,
+        terminology_context="SOURCE: Строковые таблицы\nTARGET: Row-oriented tables",
+    )
+
+    assert "<project-glossary>" in built.prompt
+    assert "Row-oriented tables" in built.prompt
+    assert "Use these target-language terms when judging or correcting" in built.prompt
+
+
 def test_critic_schema_omits_field_ids_when_document_has_no_repairable_fields() -> None:
     request = build_critic_request(
         model="model",

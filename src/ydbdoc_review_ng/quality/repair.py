@@ -159,6 +159,7 @@ def _invoke_critic(
     final: bool,
     operator_context: str | None = None,
     before_model_call: Callable[[], None] | None = None,
+    terminology_context: str | None = None,
 ) -> CriticResult:
     def request_for(
         source_part: bytes,
@@ -179,6 +180,7 @@ def _invoke_critic(
             source_is_excerpt=source_excerpt,
             target_is_excerpt=target_excerpt,
             operator_context=operator_context,
+            terminology_context=terminology_context,
         )
 
     def split_text(text: str) -> tuple[str, str]:
@@ -258,6 +260,7 @@ def _editor_request(
     target_locale: Locale,
     requested_ids: tuple[str, ...],
     operator_context: str | None = None,
+    terminology_context: str | None = None,
 ) -> ModelRequest:
     return build_critic_request(
         model=model,
@@ -271,6 +274,7 @@ def _editor_request(
         target_is_excerpt=True,
         operator_context=operator_context,
         editable=True,
+        terminology_context=terminology_context,
     )
 
 
@@ -287,6 +291,7 @@ def _editor_requests(
     operator_context: str | None,
     max_characters: int,
     link_resolver: LinkResolver | None = None,
+    terminology_context: str | None = None,
 ) -> tuple[
     tuple[ModelRequest, ...],
     DocumentTranslationRequest,
@@ -404,6 +409,7 @@ def _editor_requests(
             target_locale=target_locale,
             requested_ids=requested_ids,
             operator_context=operator_context,
+            terminology_context=terminology_context,
         )
         return chunk, request
 
@@ -467,6 +473,7 @@ def review_translation(
     before_repaired_map: Callable[[AcceptedMap], None] | None = None,
     max_request_characters: int = 200_000,
     link_resolver: LinkResolver | None = None,
+    terminology_context: str | None = None,
 ) -> QualityReviewResult:
     """Let one critic edit the candidate, then independently review any correction."""
     if accepted_map is None and not full_repair:
@@ -506,6 +513,7 @@ def review_translation(
             final=False,
             operator_context=operator_context,
             before_model_call=before_model_call,
+            terminology_context=terminology_context,
         )
         return QualityReviewResult(
             target,
@@ -530,6 +538,7 @@ def review_translation(
         operator_context=operator_context,
         max_characters=max_request_characters,
         link_resolver=link_resolver,
+        terminology_context=terminology_context,
     )
     repair_error: RepairErrorReason | None = None
     repaired_candidate: bytes | None = None
@@ -548,6 +557,7 @@ def review_translation(
             target_locale=target_locale,
             requested_ids=translation_request.requested_ids,
             operator_context=operator_context,
+            terminology_context=terminology_context,
         )
         if len(request.prompt) > max_request_characters:
             raise QualityInputError
@@ -705,6 +715,7 @@ def review_translation(
         final=True,
         operator_context=operator_context,
         before_model_call=before_model_call,
+        terminology_context=terminology_context,
     )
     return QualityReviewResult(
         target,

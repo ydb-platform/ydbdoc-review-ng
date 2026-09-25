@@ -61,7 +61,7 @@ def test_public_dependency_contract_inventory() -> None:
     }
     assert set(dependencies.__all__) == expected
     assert len(tuple(dependencies.DependencyInputReason)) == 9
-    assert len(tuple(dependencies.DependencyResolutionState)) == 4
+    assert len(tuple(dependencies.DependencyResolutionState)) == 5
     assert all(
         issubclass(item, str) and issubclass(item, Enum)
         for item in (
@@ -74,7 +74,7 @@ def test_public_dependency_contract_inventory() -> None:
 @pytest.mark.parametrize(
     ("record", "field_names"),
     [
-        (dependencies.DependencyLink, ("source_path", "destination_source_path")),
+        (dependencies.DependencyLink, ("source_path", "destination_source_path", "fragment")),
         (dependencies.RedirectEntry, ("from_path", "to_path")),
         (dependencies.RedirectCatalog, ("snapshot", "roots", "entries")),
         (dependencies.ResolvedDependency, ("link", "source_path", "target_path", "state")),
@@ -902,6 +902,7 @@ def test_dependency_enum_names_and_wire_values_are_exact() -> None:
         "TARGET_EXISTS": "target_exists",
         "TARGET_REDIRECT_EXISTS": "target_redirect_exists",
         "TARGET_MISSING_SOURCE_EXISTS": "target_missing_source_exists",
+        "TARGET_MISSING_ANCHOR_SOURCE_EXISTS": "target_missing_anchor_source_exists",
         "SOURCE_MISSING": "source_missing",
     }
 

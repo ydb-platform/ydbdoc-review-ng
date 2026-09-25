@@ -113,6 +113,7 @@ def build_critic_request(
     target_is_excerpt: bool = False,
     operator_context: str | None = None,
     editable: bool = False,
+    terminology_context: str | None = None,
 ) -> ModelRequest:
     if type(source) is not bytes or type(target) is not bytes:
         raise TypeError("source and target must be exact bytes")
@@ -181,6 +182,12 @@ def build_critic_request(
     )
     if operator_context is not None:
         prompt += "\n<operator-context>\n" + operator_context + "</operator-context>"
+    if terminology_context:
+        prompt += (
+            "\n<project-glossary>\n"
+            + terminology_context
+            + "\n</project-glossary>\nUse these target-language terms when judging or correcting."
+        )
     role = ModelRole.FINAL_CRITIC if final else ModelRole.CRITIC
     schema = cast(FrozenJson, critic_schema(target_path, requested_ids, editable=editable))
     return ModelRequest(

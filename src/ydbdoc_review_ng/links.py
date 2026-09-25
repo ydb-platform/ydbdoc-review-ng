@@ -14,6 +14,66 @@ _MAX_WIKIPEDIA_RESPONSE_BYTES = 1_000_000
 
 JsonFetcher = Callable[[str], object]
 
+_MARKDOWN_DESTINATION = re.compile(rb"(?<!!)\[[^\]]*\]\(<?([^\s)>]+)>?\)")
+
+
+def _anchor_key(value: str) -> str:
+    return "-".join(part.removesuffix("s") for part in value.split("-"))
+
+
+def closest_target_anchor(fragment: str, anchors: set[str] | frozenset[str], /) -> str | None:
+    """Resolve the conservative singular/plural spelling difference, or decline."""
+    key = _anchor_key(fragment.casefold())
+    matches = sorted(anchor for anchor in anchors if _anchor_key(anchor.casefold()) == key)
+    return matches[0] if len(matches) == 1 else None
+
+
+def _same_internal_page(source: str, target: str) -> bool:
+    """Return whether two destinations address the same YDB documentation page."""
+    try:
+        left = urllib.parse.urlsplit(source)
+        right = urllib.parse.urlsplit(target)
+    except ValueError:
+        return False
+    if (left.scheme or left.netloc or right.scheme or right.netloc) and (
+        (left.hostname or "") not in _YDB_HOSTS
+        or (right.hostname or "") not in _YDB_HOSTS
+    ):
+        return False
+    left_path = re.sub(r"^/docs/(?:ru|en)(?=/|$)", "/docs/{locale}", left.path)
+    right_path = re.sub(r"^/docs/(?:ru|en)(?=/|$)", "/docs/{locale}", right.path)
+    return left_path == right_path and left.query == right.query
+
+
+def existing_target_link_overrides(source: bytes, target: bytes | None, /) -> dict[str, str]:
+    """Reuse a target-local fragment only when it unambiguously belongs to the same page."""
+    if target is None:
+        return {}
+    source_values = [match.group(1).decode("utf-8") for match in _MARKDOWN_DESTINATION.finditer(source)]
+    target_values = [match.group(1).decode("utf-8") for match in _MARKDOWN_DESTINATION.finditer(target)]
+    result: dict[str, str] = {}
+    for source_value in source_values:
+        matches = {
+            target_value
+            for target_value in target_values
+            if _same_internal_page(source_value, target_value)
+        }
+        if len(matches) == 1:
+            target_value = matches.pop()
+            fragment = urllib.parse.urlsplit(target_value).fragment
+            if fragment:
+                source_parts = urllib.parse.urlsplit(source_value)
+                result[source_value] = urllib.parse.urlunsplit(
+                    (
+                        source_parts.scheme,
+                        source_parts.netloc,
+                        source_parts.path,
+                        source_parts.query,
+                        fragment,
+                    )
+                )
+    return result
+
 
 def _fetch_json(url: str) -> object:
     request = urllib.request.Request(
@@ -115,16 +175,24 @@ class LinkDestinationResolver:
         source_locale: str,
         target_locale: str,
         wikipedia: WikipediaLanglinks | None = None,
+        *,
+        overrides: Mapping[str, str] | None = None,
+        invalid_sources: frozenset[str] = frozenset(),
     ) -> None:
         self.source_locale = source_locale
         self.target_locale = target_locale
         self.wikipedia = wikipedia
+        self.overrides = dict(overrides or {})
+        self.invalid_sources = invalid_sources
 
     def __call__(self, destination: str, /) -> str:
         if destination.startswith("<") and destination.endswith(">"):
             return "<" + self(destination[1:-1]) + ">"
         if any(character.isspace() for character in destination):
             return destination
+        overridden = self.overrides.get(destination)
+        if overridden is not None and _same_internal_page(destination, overridden):
+            destination = overridden
         try:
             parsed = urllib.parse.urlsplit(destination)
         except ValueError:
@@ -143,6 +211,8 @@ class LinkDestinationResolver:
         return destination
 
     def allows(self, source: str, target: str, /) -> bool:
+        if source in self.invalid_sources:
+            return False
         expected = self(source)
         if target == expected:
             return True

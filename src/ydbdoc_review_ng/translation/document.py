@@ -702,6 +702,7 @@ def prepare_document(
     target_locale: str | None = None,
     operator_context: str | None = None,
     link_resolver: Callable[[str], str] | None = None,
+    terminology_context: str | None = None,
 ) -> DocumentTranslationRequest:
     """Expose complete Markdown, replacing only parser-owned opaque regions globally."""
     if type(source) is not bytes or type(plan) is not SourcePlan:
@@ -714,6 +715,8 @@ def prepare_document(
         raise TypeError("source and target locale must both be strings or both be omitted")
     if operator_context is not None and type(operator_context) is not str:
         raise TypeError("operator_context must be a string or None")
+    if terminology_context is not None and type(terminology_context) is not str:
+        raise TypeError("terminology_context must be a string or None")
     if link_resolver is not None and not callable(link_resolver):
         raise TypeError("link_resolver must be callable or None")
     validate_source_plan(source, plan)
@@ -815,13 +818,19 @@ def prepare_document(
             chunk.placeholders,
         )
         prompts = [
-            build_document_prompt(chunk, source_locale, target_locale),
+            build_document_prompt(
+                chunk,
+                source_locale,
+                target_locale,
+                terminology_context=terminology_context,
+            ),
             build_document_prompt(
                 chunk,
                 source_locale,
                 target_locale,
                 correction=True,
                 correction_note=correction_note,
+                terminology_context=terminology_context,
             ),
         ]
         if operator_context is not None:
@@ -881,6 +890,7 @@ def build_document_prompt(
     correction: bool = False,
     correction_note: str | None = None,
     existing_target: str | None = None,
+    terminology_context: str | None = None,
 ) -> str:
     """Build a raw-Markdown provider request for one whole document unit."""
     if (
@@ -893,6 +903,8 @@ def build_document_prompt(
         raise ValueError("correction requires a non-empty safe correction note")
     if existing_target is not None and type(existing_target) is not str:
         raise TypeError("existing_target must be a string or None")
+    if terminology_context is not None and type(terminology_context) is not str:
+        raise TypeError("terminology_context must be a string or None")
     common = (
         "Return Markdown only, no outer code fence. Translate every user-facing heading, prose, "
         "list/table text, link/image label, supported code comment, and translatable frontmatter "
@@ -928,6 +940,14 @@ def build_document_prompt(
     if correction:
         assert correction_note is not None
         prompt += "\n\nImportant correction:\n" + correction_note
+    if terminology_context:
+        prompt += (
+            "\n\nUse the following project glossary for terminology. It is reference context, "
+            "not document content. Prefer the target-language terms shown here.\n"
+            "<PROJECT_GLOSSARY>\n"
+            + terminology_context
+            + "\n</PROJECT_GLOSSARY>"
+        )
     return prompt
 
 

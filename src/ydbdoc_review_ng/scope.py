@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Protocol, cast
 
+from ydbdoc_review_ng.anchors import markdown_anchors
 from ydbdoc_review_ng.dependencies import (
     DependencyInputReason,
     DependencyLink,
@@ -25,6 +26,7 @@ from ydbdoc_review_ng.direction import (
 )
 from ydbdoc_review_ng.domain import FilePair, Locale, RepoPath, SnapshotRef
 from ydbdoc_review_ng.errors import InvariantViolation
+from ydbdoc_review_ng.links import closest_target_anchor
 from ydbdoc_review_ng.locales import (
     ChangedFileKind,
     ChangedMarkdownFile,
@@ -177,7 +179,6 @@ class ScopeEntry:
         if translate:
             valid = (
                 self.source_content is not None
-                and (self.origin is ScopeOrigin.INITIAL or self.target_content is None)
                 and self.rename_from_target_path is None
                 and self.rename_from_target_content is None
             )
@@ -495,10 +496,11 @@ def _entry_key(entry: ScopeEntry) -> tuple[str, str, str, str]:
     )
 
 
-def _dependency_key(item: ResolvedDependency) -> tuple[str, str, str, str, str]:
+def _dependency_key(item: ResolvedDependency) -> tuple[str, str, str, str, str, str]:
     return (
         item.link.source_path.value,
         item.link.destination_source_path.value,
+        item.link.fragment or "",
         item.source_path.value,
         item.target_path.value,
         item.state.value,
@@ -786,7 +788,11 @@ def _build_direction(
         canonical_links = tuple(
             sorted(
                 set(links),
-                key=lambda link: (link.source_path.value, link.destination_source_path.value),
+                key=lambda link: (
+                    link.source_path.value,
+                    link.destination_source_path.value,
+                    link.fragment or "",
+                ),
             )
         )
         mismatches = sorted(
@@ -843,11 +849,30 @@ def _build_direction(
                 terminal_target = resolve_redirect(redirects, target_locale, target)
                 target_content = read(terminal_target)
                 if target_content is not None:
-                    dependency_state = (
-                        DependencyResolutionState.TARGET_REDIRECT_EXISTS
-                        if terminal_target != target
-                        else DependencyResolutionState.TARGET_EXISTS
+                    missing_anchor = (
+                        link.fragment is not None
+                        and link.fragment in markdown_anchors(dep_source_content)
+                        and link.fragment not in markdown_anchors(target_content)
+                        and closest_target_anchor(
+                            link.fragment, markdown_anchors(target_content)
+                        )
+                        is None
                     )
+                    if missing_anchor:
+                        dependency_state = (
+                            DependencyResolutionState.TARGET_MISSING_ANCHOR_SOURCE_EXISTS
+                        )
+                        missing_edges.add((current, terminal_source))
+                        source_bytes[terminal_source] = dep_source_content
+                        queue.add(terminal_source)
+                        if terminal_source not in initial_by_source:
+                            dependency_paths.add(terminal_source)
+                    else:
+                        dependency_state = (
+                            DependencyResolutionState.TARGET_REDIRECT_EXISTS
+                            if terminal_target != target
+                            else DependencyResolutionState.TARGET_EXISTS
+                        )
                 else:
                     dependency_state = DependencyResolutionState.TARGET_MISSING_SOURCE_EXISTS
                     missing_edges.add((current, terminal_source))
@@ -882,7 +907,7 @@ def _build_direction(
             ScopeEntry(
                 _pair_for(direction, path, target),
                 source_bytes[path],
-                None,
+                read(target),
                 ScopeOrigin.DEPENDENCY,
                 FileOperation.TRANSLATE,
                 keys,

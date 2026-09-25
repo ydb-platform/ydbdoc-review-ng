@@ -6,11 +6,13 @@ import base64
 import json
 import posixpath
 import re
+import urllib.parse
 from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, cast
 
+from ydbdoc_review_ng.anchors import markdown_anchors
 from ydbdoc_review_ng.application import ImmutableRunSnapshot, WorkflowCandidate
 from ydbdoc_review_ng.application.workflows import CheckpointCapture, SemanticCheckpointStop
 from ydbdoc_review_ng.continuation import (
@@ -42,7 +44,12 @@ from ydbdoc_review_ng.direction import (
     select_direction,
 )
 from ydbdoc_review_ng.domain import GitSha, Mode, ModelRole, RepoPath, SnapshotRef
-from ydbdoc_review_ng.links import LinkDestinationResolver, WikipediaLanglinks
+from ydbdoc_review_ng.links import (
+    LinkDestinationResolver,
+    WikipediaLanglinks,
+    closest_target_anchor,
+    existing_target_link_overrides,
+)
 from ydbdoc_review_ng.locales import (
     ChangedFileKind,
     ChangedFileMetadata,
@@ -80,6 +87,7 @@ from ydbdoc_review_ng.scope import (
     build_potential_scopes,
     freeze_scope_manifest,
 )
+from ydbdoc_review_ng.terminology import bilingual_glossary_context
 from ydbdoc_review_ng.trace import traced, write_trace
 from ydbdoc_review_ng.translation import (
     AssemblyError,
@@ -377,18 +385,26 @@ class MarkdownDependencies:
             source_content,
         ):
             destinations.append((byte_match[1] or byte_match[2]).decode())
-        paths = set()
+        paths: set[tuple[RepoPath, str | None]] = set()
         for destination in destinations:
-            path = destination.split("#", 1)[0]
+            path, separator, fragment = destination.partition("#")
             if not path.endswith(".md") or ":" in path or path.startswith("/"):
                 continue
             paths.add(
-                RepoPath(
-                    posixpath.normpath(posixpath.join(posixpath.dirname(source_path.value), path))
+                (
+                    RepoPath(
+                        posixpath.normpath(
+                            posixpath.join(posixpath.dirname(source_path.value), path)
+                        )
+                    ),
+                    fragment if separator and fragment else None,
                 )
             )
         return tuple(
-            DependencyLink(source_path, path) for path in sorted(paths, key=lambda p: p.value)
+            DependencyLink(source_path, path, fragment)
+            for path, fragment in sorted(
+                paths, key=lambda item: (item[0].value, item[1] or "")
+            )
         )
 
 
@@ -549,6 +565,139 @@ class RuntimeContent:
         self.review_paths: tuple[RepoPath, ...] | None = None
         self.review_operator_context: str | None = None
         self.publisher: GitPublicationAdapter
+
+    def _terminology_context(self, document: Document, /) -> str | None:
+        plans = self.plans
+        if plans is None:
+            return None
+        source_root = (
+            self.roots.ru
+            if document.entry.pair.source_locale.value == "ru"
+            else self.roots.en
+        )
+        target_root = (
+            self.roots.ru
+            if document.entry.pair.target_locale.value == "ru"
+            else self.roots.en
+        )
+        source_glossary = self.source.github.read_bytes(
+            plans.preparation.snapshots.source_snapshot,
+            RepoPath(f"{source_root.value}/concepts/glossary.md"),
+        )
+        target_snapshot = SnapshotRef(
+            plans.preparation.snapshots.source_snapshot.repository,
+            plans.preparation.metadata_snapshot.commit_sha,
+        )
+        target_glossary = self.source.github.read_bytes(
+            target_snapshot,
+            RepoPath(f"{target_root.value}/concepts/glossary.md"),
+        )
+        return bilingual_glossary_context(
+            document.source.decode("utf-8"), source_glossary, target_glossary
+        )
+
+    def _link_resolver(
+        self, document: Document, target_reference: bytes | None, /
+    ) -> LinkDestinationResolver:
+        overrides = existing_target_link_overrides(document.source, target_reference)
+        invalid_sources: set[str] = set()
+        destinations = tuple(
+            match.group(1).decode("utf-8")
+            for match in re.finditer(
+                rb"(?<!!)\[[^\]]*\]\(<?([^\s)>]+)>?\)", document.source
+            )
+        )
+        if target_reference is not None:
+            self_anchors = markdown_anchors(target_reference)
+            for destination in destinations:
+                parsed = urllib.parse.urlsplit(destination)
+                if parsed.path or not parsed.fragment:
+                    continue
+                existing = overrides.get(destination)
+                if existing is not None and urllib.parse.urlsplit(existing).fragment not in self_anchors:
+                    overrides.pop(destination)
+                if destination not in overrides and parsed.fragment not in self_anchors:
+                    replacement = closest_target_anchor(parsed.fragment, self_anchors)
+                    if replacement is not None:
+                        overrides[destination] = f"#{replacement}"
+                    else:
+                        invalid_sources.add(destination)
+        plans = self.plans
+        if plans is not None:
+            target_snapshot = SnapshotRef(
+                plans.preparation.snapshots.source_snapshot.repository,
+                plans.preparation.metadata_snapshot.commit_sha,
+            )
+            for destination in destinations:
+                parsed = urllib.parse.urlsplit(destination)
+                if not parsed.fragment:
+                    continue
+                if parsed.scheme or parsed.netloc:
+                    prefix = f"/docs/{document.entry.pair.source_locale.value}"
+                    if (
+                        parsed.scheme not in {"http", "https"}
+                        or parsed.hostname not in {"ydb.tech", "www.ydb.tech"}
+                        or not parsed.path.startswith(prefix + "/")
+                    ):
+                        continue
+                    suffix = parsed.path[len(prefix) :].lstrip("/")
+                    if not suffix.endswith(".md"):
+                        suffix += ".md"
+                    target_root = (
+                        self.roots.ru
+                        if document.entry.pair.target_locale.value == "ru"
+                        else self.roots.en
+                    )
+                    target_content = self.source.github.read_bytes(
+                        target_snapshot, RepoPath(f"{target_root.value}/{suffix}")
+                    )
+                elif parsed.path:
+                    if not parsed.path.endswith(".md"):
+                        continue
+                    source_link_path = RepoPath(
+                        posixpath.normpath(
+                            posixpath.join(
+                                posixpath.dirname(document.entry.pair.source_path.value),
+                                parsed.path,
+                            )
+                        )
+                    )
+                    try:
+                        target_link_path = paired_markdown_path(self.roots, source_link_path)
+                    except ValueError:
+                        continue
+                    target_content = self.source.github.read_bytes(
+                        target_snapshot, target_link_path
+                    )
+                else:
+                    target_content = target_reference
+                if target_content is None:
+                    continue
+                anchors = markdown_anchors(target_content)
+                existing = overrides.get(destination)
+                if existing is not None:
+                    existing_fragment = urllib.parse.urlsplit(existing).fragment
+                    if existing_fragment not in anchors:
+                        overrides.pop(destination)
+                if destination not in overrides and parsed.fragment not in anchors:
+                    replacement = closest_target_anchor(parsed.fragment, anchors)
+                    if replacement is not None:
+                        overrides[destination] = urllib.parse.urlunsplit(
+                            (
+                                parsed.scheme,
+                                parsed.netloc,
+                                parsed.path,
+                                parsed.query,
+                                replacement,
+                            )
+                        )
+        return LinkDestinationResolver(
+            document.entry.pair.source_locale.value,
+            document.entry.pair.target_locale.value,
+            self.wikipedia,
+            overrides=overrides,
+            invalid_sources=frozenset(invalid_sources),
+        )
 
     def prepare_source(
         self, snapshot: ImmutableRunSnapshot, /, *, translate: bool = True
@@ -967,6 +1116,8 @@ class RuntimeContent:
             if entry.target_content is not None
             else entry.rename_from_target_content
         )
+        terminology_context = self._terminology_context(document)
+        link_resolver = self._link_resolver(document, target_reference_bytes)
         prepared = prepare_document(
             document.source,
             document.plan,
@@ -974,11 +1125,8 @@ class RuntimeContent:
             source_locale=entry.pair.source_locale.value,
             target_locale=entry.pair.target_locale.value,
             operator_context=operator_context,
-            link_resolver=LinkDestinationResolver(
-                entry.pair.source_locale.value,
-                entry.pair.target_locale.value,
-                self.wikipedia,
-            ),
+            link_resolver=link_resolver,
+            terminology_context=terminology_context,
         )
         block_texts = _document_block_texts(document.source, document.plan, prepared.placeholders)
         try:
@@ -1014,6 +1162,7 @@ class RuntimeContent:
                     correction=attempt == 2,
                     correction_note=note,
                     existing_target=existing_target,
+                    terminology_context=terminology_context,
                 )
                 if existing_target is not None and len(prompt) > limit:
                     overflow = len(prompt) - limit
@@ -1025,6 +1174,7 @@ class RuntimeContent:
                         correction=attempt == 2,
                         correction_note=note,
                         existing_target=existing_target,
+                        terminology_context=terminology_context,
                     )
                 if operator_context is not None:
                     prompt += document_operator_guidance(operator_context)
@@ -1144,6 +1294,16 @@ class RuntimeContent:
             candidate = restore_document(
                 document.source, document.plan, effective_request, tuple(responses)
             )
+            candidate_plan = build_markdown_plan(
+                document.plan.source_snapshot, entry.pair.target_path, candidate
+            )
+            verify_document_candidate_with_links(
+                document.source,
+                document.plan,
+                candidate,
+                candidate_plan,
+                self._link_resolver(document, candidate),
+            )
             try:
                 values = _derive_target_translations(
                     document.source,
@@ -1192,11 +1352,7 @@ class RuntimeContent:
                     document.plan,
                     target,
                     target_plan,
-                    LinkDestinationResolver(
-                        document.entry.pair.source_locale.value,
-                        document.entry.pair.target_locale.value,
-                        self.wikipedia,
-                    ),
+                    self._link_resolver(document, target),
                 )
                 try:
                     values = _derive_target_translations(
@@ -1344,11 +1500,7 @@ class RuntimeContent:
                 document.plan,
                 target,
                 target_plan,
-                LinkDestinationResolver(
-                    document.entry.pair.source_locale.value,
-                    document.entry.pair.target_locale.value,
-                    self.wikipedia,
-                ),
+                self._link_resolver(document, target),
             )
 
     def validate_candidate(
@@ -1419,12 +1571,14 @@ class RuntimeContent:
                 accepted_map=restored_map,
                 full_repair=selective and restored_map is None,
                 operator_context=self.review_operator_context,
+                terminology_context=self._terminology_context(document),
                 before_model_call=check_head if selective else None,
                 before_repaired_map=publish_map if selective else None,
-                link_resolver=LinkDestinationResolver(
-                    document.entry.pair.source_locale.value,
-                    document.entry.pair.target_locale.value,
-                    self.wikipedia,
+                link_resolver=self._link_resolver(
+                    document,
+                    document.entry.target_content
+                    if document.entry.target_content is not None
+                    else document.entry.rename_from_target_content,
                 ),
                 max_request_characters=int(
                     self.environment.get("YDBDOC_MAX_MODEL_REQUEST_CHARACTERS")

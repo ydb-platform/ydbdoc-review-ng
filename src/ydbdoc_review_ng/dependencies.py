@@ -54,6 +54,7 @@ class DependencyResolutionState(str, Enum):
     TARGET_EXISTS = "target_exists"
     TARGET_REDIRECT_EXISTS = "target_redirect_exists"
     TARGET_MISSING_SOURCE_EXISTS = "target_missing_source_exists"
+    TARGET_MISSING_ANCHOR_SOURCE_EXISTS = "target_missing_anchor_source_exists"
     SOURCE_MISSING = "source_missing"
 
 
@@ -61,6 +62,7 @@ class DependencyResolutionState(str, Enum):
 class DependencyLink:
     source_path: RepoPath
     destination_source_path: RepoPath
+    fragment: str | None = None
 
     def __post_init__(self) -> None:
         _exact(self.source_path, RepoPath, "DependencyLink", "source_path")
@@ -70,6 +72,10 @@ class DependencyLink:
             "DependencyLink",
             "destination_source_path",
         )
+        if self.fragment is not None:
+            _exact(self.fragment, str, "DependencyLink", "fragment")
+            if not self.fragment:
+                raise _invariant("DependencyLink", "fragment", "None or non-empty string")
 
 
 @dataclass(frozen=True, slots=True)
