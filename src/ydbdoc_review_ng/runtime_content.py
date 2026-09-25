@@ -1084,6 +1084,13 @@ class RuntimeContent:
             is_adaptive_child: bool,
             use_target_reference: bool,
         ) -> None:
+            if not any(
+                block.fields
+                for block in document.plan.blocks[chunk.block_start : chunk.block_end]
+            ):
+                effective_chunks.append(chunk)
+                responses.append(chunk.text)
+                return
             accepted_response, failure, should_split = invoke_chunk(
                 chunk,
                 chunk_index,

@@ -682,6 +682,20 @@ def test_content_filter_children_do_not_repeat_filtered_target_reference() -> No
     assert all("<EXISTING_TARGET_EN>" not in call.prompt for call in models.calls[1:])
 
 
+def test_protected_only_chunk_bypasses_model() -> None:
+    source = b"```text\nopaque technical content\n```\n"
+    document = document_for(source)
+    models = ScriptedModels([])
+
+    _accepted, translated = content_with(models)._translate_document(
+        document,
+        operator_context="Continue the saved translation.",
+    )
+
+    assert translated.translated_markdown.encode() == source
+    assert models.calls == []
+
+
 def test_content_filter_in_child_recursively_splits_and_preserves_document() -> None:
     source = content_filter_witness()
     document = document_for(source)
