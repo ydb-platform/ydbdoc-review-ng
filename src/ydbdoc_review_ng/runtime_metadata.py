@@ -18,6 +18,16 @@ from ydbdoc_review_ng.publication import FileChange
 from ydbdoc_review_ng.runtime_github import RuntimeBoundaryError
 
 _REDIRECT = re.compile(rb"(?m)^ *- from: *([^\r\n]+)\r?\n *to: *([^\r\n]+)\r?$")
+_TOC_NAME = re.compile(r"^toc(?:_[A-Za-z0-9-]+)?\.ya?ml$")
+_ROOT_TOC_NAMES = (
+    "toc.yaml",
+    "toc.yml",
+    "toc_i.yaml",
+    "toc_p.yaml",
+    "toc_m.yaml",
+    "toc_x.yaml",
+    "toc_changelog.yaml",
+)
 _MAX_LOCAL_TOC_FILES = 100
 
 
@@ -54,6 +64,7 @@ def _toc(content: bytes, error: str) -> _Toc:
                 if node.tag != "tag:yaml.org,2002:map":
                     raise ValueError
                 keys: set[str] = set()
+                values: dict[str, Any] = {}
                 for key, value in node.value:
                     if (
                         not isinstance(key, yaml.ScalarNode)
@@ -62,16 +73,9 @@ def _toc(content: bytes, error: str) -> _Toc:
                     ):
                         raise ValueError
                     keys.add(key.value)
+                    values[key.value] = value
                     if key.value == "include_url":
                         raise ValueError
-                    if key.value == "include":
-                        if (
-                            not isinstance(value, yaml.ScalarNode)
-                            or value.tag != "tag:yaml.org,2002:str"
-                            or not value.value.strip()
-                        ):
-                            raise ValueError
-                        includes.append(value)
                     if key.value == "href":
                         if (
                             not isinstance(value, yaml.ScalarNode)
@@ -89,6 +93,38 @@ def _toc(content: bytes, error: str) -> _Toc:
                         if node is root:
                             items = value
                     stack.append(value)
+                include = values.get("include")
+                if include is not None:
+                    if (
+                        isinstance(include, yaml.ScalarNode)
+                        and include.tag == "tag:yaml.org,2002:str"
+                        and include.value.strip()
+                    ):
+                        includes.append(include)
+                    else:
+                        if isinstance(include, yaml.ScalarNode) and include.tag == (
+                            "tag:yaml.org,2002:null"
+                        ):
+                            path = values.get("path")
+                        elif isinstance(include, yaml.MappingNode):
+                            path = next(
+                                (
+                                    child
+                                    for child_key, child in include.value
+                                    if isinstance(child_key, yaml.ScalarNode)
+                                    and child_key.value == "path"
+                                ),
+                                None,
+                            )
+                        else:
+                            raise ValueError
+                        if (
+                            not isinstance(path, yaml.ScalarNode)
+                            or path.tag != "tag:yaml.org,2002:str"
+                            or not path.value.strip()
+                        ):
+                            raise ValueError
+                        includes.append(path)
                 if node is root and not {"items", "href"} & keys:
                     raise ValueError
             elif isinstance(node, yaml.SequenceNode):
@@ -182,6 +218,21 @@ class MetadataProducer:
             return self.pending[path.value]
         return self.reader.read_bytes(self.target, path)
 
+    def _nearest_target_toc(
+        self, target_root: str, target_toc: RepoPath
+    ) -> tuple[RepoPath, bytes, _Toc] | None:
+        name = posixpath.basename(target_toc.value)
+        directory = posixpath.dirname(target_toc.value)
+        while directory == target_root or directory.startswith(target_root + "/"):
+            candidate = RepoPath(posixpath.join(directory, name))
+            content = self._target_bytes(candidate)
+            if content is not None:
+                return candidate, content, _toc(content, "unsupported_target_toc")
+            if directory == target_root:
+                break
+            directory = posixpath.dirname(directory)
+        return None
+
     def _source_toc_paths(self, source_root: str, seeds: set[str]) -> tuple[str, ...]:
         paths: set[str] = set()
         inspected: set[str] = set()
@@ -211,7 +262,7 @@ class MetadataProducer:
                     relative.startswith("/")
                     or resolved == source_root
                     or not resolved.startswith(source_root + "/")
-                    or posixpath.basename(resolved) not in {"toc.yaml", "toc.yml"}
+                    or _TOC_NAME.fullmatch(posixpath.basename(resolved)) is None
                 ):
                     raise RuntimeBoundaryError("unsupported_source_toc")
                 visit(resolved, required=True)
@@ -237,11 +288,18 @@ class MetadataProducer:
             path.value
             for path in self.changed_paths
             if path.value.startswith(source_root + "/")
-            and path.value.rsplit("/", 1)[-1] in {"toc.yaml", "toc.yml"}
+            and _TOC_NAME.fullmatch(path.value.rsplit("/", 1)[-1]) is not None
         }
-        toc_paths.add(source_root + "/toc.yaml")
+        toc_paths.update({source_root + "/toc.yaml", source_root + "/toc.yml"})
+        source_tocs = set(self._source_toc_paths(source_root, toc_paths))
+        directory = posixpath.dirname(source_path.value)
+        while directory == source_root or directory.startswith(source_root + "/"):
+            source_tocs.update(posixpath.join(directory, name) for name in _ROOT_TOC_NAMES)
+            if directory == source_root:
+                break
+            directory = posixpath.dirname(directory)
         changes = []
-        for source_toc in self._source_toc_paths(source_root, toc_paths):
+        for source_toc in sorted(source_tocs):
             target_toc = RepoPath(target_root + source_toc[len(source_root) :])
             source_bytes = self.reader.read_bytes(self.source, RepoPath(source_toc))
             source_toc_view = (
@@ -327,7 +385,10 @@ class MetadataProducer:
                 if not matches:
                     continue
                 if target_toc_view is None:
-                    raise RuntimeBoundaryError("unsupported_target_toc")
+                    fallback = self._nearest_target_toc(target_root, target_toc)
+                    if fallback is None:
+                        raise RuntimeBoundaryError("unsupported_target_toc")
+                    target_toc, target_bytes, target_toc_view = fallback
                 relative = posixpath.relpath(target_path.value, posixpath.dirname(target_toc.value))
                 if any(node.value == relative for node in target_toc_view.hrefs):
                     continue

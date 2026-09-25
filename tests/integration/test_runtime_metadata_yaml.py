@@ -23,8 +23,9 @@ def producer(source_toc: bytes, target_toc: bytes = b"items:\n") -> MetadataProd
             assert snapshot in {SOURCE, TARGET}
             if path.value.endswith("redirects.yaml"):
                 return None
-            assert path.value.endswith("toc.yaml")
-            return source_toc if snapshot == SOURCE else target_toc
+            if path.value.endswith("/toc.yaml"):
+                return source_toc if snapshot == SOURCE else target_toc
+            return None
 
     return MetadataProducer(Reader(), SOURCE, TARGET, ())
 
@@ -70,6 +71,45 @@ def test_t017_f12_root_include_reaches_new_page_in_child_toc() -> None:
     assert changes[0].before == files[(TARGET, "ydb/docs/en/core/child/toc.yaml")]
     assert changes[0].after.count(b"href:") == 2
     assert b"href: new.md" in changes[0].after
+
+
+def test_ydb_toc_variant_adds_page_to_nearest_existing_target_toc() -> None:
+    files = {
+        (SOURCE, "ydb/docs/ru/core/toc_p.yaml"): (
+            b"title: YDB\nitems:\n- include:\n  mode: link\n  path: toc_i.yaml\n"
+        ),
+        (SOURCE, "ydb/docs/ru/core/toc_i.yaml"): (
+            b"items:\n- name: Development\n  href: dev/index.md\n  include:\n"
+            b"    mode: link\n    path: dev/toc_p.yaml\n"
+        ),
+        (SOURCE, "ydb/docs/ru/core/dev/toc_p.yaml"): (
+            b"items:\n- name: Optimization\n  href: optimization/index.md\n  include:\n"
+            b"    mode: link\n    path: optimization/toc_p.yaml\n"
+        ),
+        (SOURCE, "ydb/docs/ru/core/dev/optimization/toc_p.yaml"): (
+            b"items:\n- name: Optimizer hints\n  href: hints.md\n"
+        ),
+        (TARGET, "ydb/docs/en/core/dev/toc_p.yaml"): (
+            b"items:\n- name: Query execution optimization\n"
+            b"  href: query-execution-optimization/index.md\n"
+        ),
+    }
+
+    class Reader:
+        def read_bytes(self, snapshot, path):
+            return files.get((snapshot, path.value))
+
+    changes = MetadataProducer(Reader(), SOURCE, TARGET, ()).changes(
+        RepoPath("ydb/docs/ru/core/dev/optimization/hints.md"),
+        RepoPath("ydb/docs/en/core/dev/optimization/hints.md"),
+        new=True,
+    )
+
+    assert len(changes) == 1
+    assert changes[0].path == RepoPath("ydb/docs/en/core/dev/toc_p.yaml")
+    assert changes[0].before == files[(TARGET, "ydb/docs/en/core/dev/toc_p.yaml")]
+    assert b"href: optimization/hints.md" in changes[0].after
+    assert b"href: query-execution-optimization/index.md" in changes[0].after
 
 
 def test_t017_b4_local_toc_include_cycle_is_rejected() -> None:
