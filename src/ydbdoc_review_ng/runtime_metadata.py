@@ -322,6 +322,8 @@ class MetadataProducer:
                         == source_path.value
                     ]
                 )
+                if source_matches:
+                    self._source_toc_paths(source_root, {source_toc})
                 if target_toc_view is None:
                     if source_matches:
                         raise RuntimeBoundaryError("unsupported_target_toc")
@@ -384,6 +386,7 @@ class MetadataProducer:
                 )
                 if not matches:
                     continue
+                self._source_toc_paths(source_root, {source_toc})
                 if target_toc_view is None:
                     fallback = self._nearest_target_toc(target_root, target_toc)
                     if fallback is None:

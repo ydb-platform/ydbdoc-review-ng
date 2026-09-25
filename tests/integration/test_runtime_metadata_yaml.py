@@ -112,6 +112,36 @@ def test_ydb_toc_variant_adds_page_to_nearest_existing_target_toc() -> None:
     assert b"href: query-execution-optimization/index.md" in changes[0].after
 
 
+@pytest.mark.parametrize(
+    "include",
+    [
+        "../../../outside/toc_p.yaml",
+        "https://example.com/toc_p.yaml",
+        "missing/toc_p.yaml",
+        "toc_p.yaml",
+    ],
+)
+def test_direct_ydb_toc_variant_rejects_unresolved_or_unsafe_include(include: str) -> None:
+    files = {
+        (SOURCE, "ydb/docs/ru/core/dev/optimization/toc_p.yaml"): (
+            "items:\n- name: Optimizer hints\n  href: hints.md\n"
+            f"- include: {include}\n"
+        ).encode(),
+        (TARGET, "ydb/docs/en/core/dev/toc_p.yaml"): b"items:\n",
+    }
+
+    class Reader:
+        def read_bytes(self, snapshot, path):
+            return files.get((snapshot, path.value))
+
+    with pytest.raises(RuntimeBoundaryError, match="^unsupported_source_toc$"):
+        MetadataProducer(Reader(), SOURCE, TARGET, ()).changes(
+            RepoPath("ydb/docs/ru/core/dev/optimization/hints.md"),
+            RepoPath("ydb/docs/en/core/dev/optimization/hints.md"),
+            new=True,
+        )
+
+
 def test_t017_b4_local_toc_include_cycle_is_rejected() -> None:
     files = {
         (SOURCE, "ydb/docs/ru/core/toc.yaml"): b"items: [{include: child/toc.yaml}]\n",
