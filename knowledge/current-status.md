@@ -102,19 +102,33 @@ singular/plural-коррекцию. Focused scope/integration suite после �
 - `dc3c8c4` (`Bound missing-anchor scope to glossary`).
 
 Старый translation PR `ydb-platform/ydb#54159` закрыт, его ветка
-`translation/pr-50858` удалена. Второй clean restart идёт в workflow
-`36152234777`, запущенном 2026-09-25 15:09 UTC. Шаг подготовки scope прошёл;
-workflow находится внутри `Documentation translation review`.
+`translation/pr-50858` удалена. Второй clean restart, workflow `36152234777`,
+завершился ошибкой за 1m48s на prepare, до model calls. Точный failure code:
+`scope_limit_exceeded`, `inventory_files=3`.
+
+Три исходных файла PR: `changelog-enterprise.md`, `changelog-server.md` и
+`maintenance/manual/dynamic-config.md`. Лог показывает десятки чтений парных
+страниц после сканирования этих документов. Ограничение missing-anchor до
+`glossary.md` сработало, но общий closure всё ещё разрастается по
+`TARGET_MISSING_SOURCE_EXISTS`: исторические ссылки больших changelog
+трактуются так же, как новые зависимости текущего PR. Это подтверждённая
+граница дефекта; конкретный fix ещё не выбран. Нельзя просто поднять лимит или
+отключить зависимости без проверки смысла требования о переводе отсутствующей
+парной статьи.
 
 Дальше:
 
-1. Дождаться результата workflow `36152234777`; при падении сохранить точный
-   failure code и исправлять только доказанную причину.
-2. Если создан новый translation PR, независимо проверить перевод, особенно
+1. Добавить диагностический regression test для changelog с историческими
+   ссылками и определить минимальное правило, которое отличает зависимость,
+   внесённую текущим PR, от унаследованной ссылки полного документа.
+2. Реализовать правило с TDD, не повышая вслепую лимит scope; затем повторить
+   полный suite, code review, commit, push и передвинуть `v1.0.1`.
+3. Запустить чистый `doc_translate` повторно.
+4. Если создан новый translation PR, независимо проверить перевод, особенно
    `row-oriented tables`, JOIN, dynamic-configuration anchors, glossary anchors
    `operator`/`cardinality`, table singular/plural anchors и симметрию ссылок.
-3. Запустить `doc_verify` на новом translation PR.
-4. Дождаться зелёных `doc_verify` и `Build documentation` на одном head SHA.
+5. Запустить `doc_verify` на новом translation PR.
+6. Дождаться зелёных `doc_verify` и `Build documentation` на одном head SHA.
 
 Команды полного pytest описаны в `knowledge/testing.md`. Для mutations в
 `ydb-platform/ydb` использовать `GH_TOKEN="$YDB_GH_TOKEN"` при unset
