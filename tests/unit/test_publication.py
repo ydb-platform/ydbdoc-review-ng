@@ -408,6 +408,29 @@ def test_t017_f11_pat_authored_verify_reports_update_one_marker_comment() -> Non
     assert comments[0]["body"].startswith("🟢 GREEN")
 
 
+def test_current_doc_verify_is_reported_as_success_before_github_finishes_the_check():
+    backend, snapshot, candidate, publisher, _ = setup_publication()
+    publisher.validate_candidate(snapshot, candidate)
+    publisher.publish(snapshot, candidate)
+    qa = QAReporter(
+        backend,
+        publisher,
+        lambda: ReportContext(SOURCE, TARGET, Decimal("1.25")),
+        lambda: (CheckResult("build-docs", COMMIT, "success"),),
+    )
+
+    qa.update_current_pr(
+        mode=Mode.DOC_VERIFY,
+        pr_number=123,
+        branch=snapshot.branch,
+        commit_sha=COMMIT,
+        review=review(),
+    )
+
+    assert backend.comments[7].body.startswith("🟢 GREEN")
+    assert "doc_verify: не запускалась" not in backend.comments[7].body
+
+
 def test_red_report_is_short_russian_and_actionable_without_internal_details():
     finding = Finding(
         True, "Meaning reversed", "Preserve negation", "does not delete", PATH.value, 19

@@ -226,7 +226,14 @@ class QAReporter:
         ):
             raise PublicationError("report_context_mismatch")
         try:
-            body = render_report(review, commit_sha, self._report_context(), self._checks())
+            checks = self._checks()
+            if mode is Mode.DOC_VERIFY:
+                checks = tuple(
+                    check
+                    for check in checks
+                    if check.name != "doc_verify" or check.head_sha != commit_sha
+                ) + (CheckResult("doc_verify", commit_sha, "success"),)
+            body = render_report(review, commit_sha, self._report_context(), checks)
             body += "\n" + QA_MARKER
             if self._publisher.context is not None and not self._publisher.noop:
                 if self._current_head is not None and self._current_head() != commit_sha:
