@@ -451,6 +451,32 @@ def test_missing_blank_before_fence_is_restored_before_publication() -> None:
     assert candidate == source
 
 
+def test_four_backtick_container_does_not_expose_inner_fence_to_normalizer() -> None:
+    source = (
+        b"Before.\n\n```sql\nSELECT 1;\n```\n\n"
+        b"````markdown\nExample:\n```sql\nSELECT 2;\n```\n````\n"
+    )
+    plan, request = prepared(source)
+    response = request.chunks[0].text.replace("\n\n````markdown", "\n````markdown")
+
+    candidate = restore_document(source, plan, request, (response,))
+
+    assert candidate == source
+
+
+def test_missing_blank_before_second_fence_is_restored_before_publication() -> None:
+    source = (
+        b"First.\n\n```sql\nSELECT 1;\n```\n\n"
+        b"Before.\n\n```sql\nSELECT 2;\n```\n"
+    )
+    plan, request = prepared(source)
+    response = request.chunks[0].text.replace("Before.\n\n```sql", "Before.\n```sql")
+
+    candidate = restore_document(source, plan, request, (response,))
+
+    assert candidate == source
+
+
 def test_missing_blank_after_heading_is_restored_across_adaptive_chunks() -> None:
     source = b"## Heading\n\nRelease date: July 27, 2026.\n"
     plan = build_markdown_plan(SNAPSHOT, PATH, source)

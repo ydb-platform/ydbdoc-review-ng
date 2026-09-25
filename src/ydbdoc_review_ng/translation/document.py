@@ -31,6 +31,7 @@ _PLACEHOLDER_RESIDUE = re.compile(
 _EMPTY_LINK = re.compile(r"\]\(\s*\)")
 _ATX_HEADING = re.compile(r"^ {0,3}#{1,6}(?:\s|$)")
 _TOP_LEVEL_LIST_ITEM = re.compile(r"^(?:[*+-]|[0-9]+[.)])\s+")
+_FENCE_LINE = re.compile(r"^ {0,3}(?P<marker>`{3,}|~{3,})(?P<rest>.*)$")
 _OUTER_PROVIDER_FENCE = re.compile(
     r"\A```(?:markdown)?[ \t]*\r?\n(?P<body>.*?)(?:\r\n|\n)```[ \t]*(?:\r?\n)?\Z",
     re.IGNORECASE | re.DOTALL,
@@ -77,19 +78,21 @@ def _markdown_style_problems(value: bytes, /) -> tuple[tuple[str, int | None], .
         problems.append(("empty_link", text[: match.start()].count("\n") + 1))
 
     lines = text.splitlines()
-    fence: str | None = None
+    fence: tuple[str, int] | None = None
     outside_fence: list[bool] = []
     fence_starts: list[bool] = []
     for line in lines:
-        stripped = line.lstrip()
-        marker = stripped[:3]
+        fence_match = _FENCE_LINE.match(line)
         outside_fence.append(fence is None)
         starts = False
-        if marker in {"```", "~~~"}:
+        if fence_match is not None:
+            marker = fence_match.group("marker")
+            rest = fence_match.group("rest")
             if fence is None:
-                fence = marker
-                starts = True
-            elif marker == fence:
+                if marker[0] != "`" or "`" not in rest:
+                    fence = (marker[0], len(marker))
+                    starts = True
+            elif marker[0] == fence[0] and len(marker) >= fence[1] and not rest.strip():
                 fence = None
         fence_starts.append(starts)
 
@@ -1041,6 +1044,8 @@ def validate_chunk_response(
     from ydbdoc_review_ng.translation.assembly import ProtectedMismatch
 
     try:
+        candidate_chunk = _normalize_publishable_markdown(source_chunk, candidate_chunk)
+        target_plan_value = build_markdown_plan(chunk_snapshot, chunk_path, candidate_chunk)
         localized_links = _has_localizable_link_regions(source_plan_value) and not any(
             by_placeholder[token].kind in _LOCALIZABLE_LINK_KINDS
             for token in chunk.placeholders
