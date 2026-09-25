@@ -336,6 +336,8 @@ class MetadataProducer:
                     )
                     == old.value
                 ]
+                if matches and source_toc_view is not None and not source_matches:
+                    self._source_toc_paths(source_root, {source_toc})
                 if not matches:
                     if not source_matches:
                         continue
