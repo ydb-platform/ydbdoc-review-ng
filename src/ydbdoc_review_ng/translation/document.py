@@ -31,6 +31,15 @@ _PLACEHOLDER_RESIDUE = re.compile(
 _EMPTY_LINK = re.compile(r"\]\(\s*\)")
 _ATX_HEADING = re.compile(r"^ {0,3}#{1,6}(?:\s|$)")
 _TOP_LEVEL_LIST_ITEM = re.compile(r"^(?:[*+-]|[0-9]+[.)])\s+")
+_OUTER_PROVIDER_FENCE = re.compile(
+    r"\A```(?:markdown)?[ \t]*\r?\n(?P<body>.*?)(?:\r\n|\n)```[ \t]*(?:\r?\n)?\Z",
+    re.IGNORECASE | re.DOTALL,
+)
+_OUTER_AUTHORITATIVE_SOURCE = re.compile(
+    r"\A<AUTHORITATIVE_SOURCE_(?P<locale>[A-Z][A-Z0-9_-]*)>\r?\n"
+    r"(?P<body>.*)</AUTHORITATIVE_SOURCE_(?P=locale)>[ \t]*(?:\r?\n)?\Z",
+    re.DOTALL,
+)
 RAW_MARKDOWN_RESPONSE_MAX_CHARACTERS = 16_000
 CORRECTION_SOURCE_EXCERPT_MAX_CHARACTERS = 160
 
@@ -51,6 +60,14 @@ def _response_tokens(value: str) -> tuple[str, ...]:
     if placeholder_like != tokens or value.count("[[YDBDOC_PROTECTED_") != len(tokens):
         raise DocumentTranslationError("document_response:placeholder_mismatch")
     return tokens
+
+
+def _normalize_provider_wrapping(value: str, /) -> str:
+    """Remove a complete provider-added envelope without touching Markdown content."""
+    fence = _OUTER_PROVIDER_FENCE.fullmatch(value)
+    normalized = fence.group("body") if fence is not None else value
+    wrapper = _OUTER_AUTHORITATIVE_SOURCE.fullmatch(normalized)
+    return wrapper.group("body") if wrapper is not None else normalized
 
 
 def _markdown_style_problems(value: bytes, /) -> tuple[tuple[str, int | None], ...]:
@@ -971,6 +988,7 @@ def validate_chunk_response(
         legacy_map = None
     if type(legacy_map) is dict:
         raise DocumentTranslationError("document_response:structure_mismatch")
+    response = _normalize_provider_wrapping(response)
     response = _restore_chunk_final_lf(chunk, response)
     response_tokens = _response_tokens(response)
     if Counter(response_tokens) != Counter(chunk.placeholders):
@@ -1049,7 +1067,9 @@ def restore_document(
     normalized_inputs = tuple(
         _normalize_publishable_markdown(
             chunk.text.encode("utf-8"),
-            _restore_chunk_final_lf(chunk, response).encode("utf-8"),
+            _restore_chunk_final_lf(
+                chunk, _normalize_provider_wrapping(response)
+            ).encode("utf-8"),
         ).decode("utf-8")
         for chunk, response in zip(request.chunks, responses, strict=True)
     )

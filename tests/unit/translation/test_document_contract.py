@@ -127,6 +127,32 @@ def test_link_destination_is_hidden_inside_markdown_syntax_and_restored_from_res
     )
 
 
+def test_whole_document_response_accepts_provider_wrapping_around_markdown() -> None:
+    source = "См. [руководство](guide.md).\n".encode()
+    plan, request = prepared(source)
+    translated = request.chunks[0].text.replace("См.", "See").replace(
+        "руководство", "guide"
+    )
+    wrapped = (
+        "```\n"
+        "<AUTHORITATIVE_SOURCE_EN>\n"
+        + translated
+        + "</AUTHORITATIVE_SOURCE_EN>\n"
+        "```\n"
+    )
+
+    assert restore_document(source, plan, request, (wrapped,)) == b"See [guide](guide.md).\n"
+
+
+def test_whole_document_response_removes_crlf_fence_without_leaking_carriage_return() -> None:
+    source = b"Visible text"
+    plan, request = prepared(source)
+
+    assert restore_document(
+        source, plan, request, ("```\r\nVisible text\r\n```\r\n",)
+    ) == b"Visible text"
+
+
 def test_link_boundaries_prevent_model_from_merging_two_links() -> None:
     source = (
         "* [Оптимизировано](release.md) потребление CPU репликами "
