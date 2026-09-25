@@ -851,6 +851,7 @@ def _build_direction(
                 if target_content is not None:
                     missing_anchor = (
                         link.fragment is not None
+                        and terminal_source.value.rsplit("/", 1)[-1] == "glossary.md"
                         and link.fragment in markdown_anchors(dep_source_content)
                         and link.fragment not in markdown_anchors(target_content)
                         and closest_target_anchor(

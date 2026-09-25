@@ -81,6 +81,16 @@ target-страницы, а continuation и publication validation не обхо
 Последний полный suite после всех review-fixes: 1857 passed, 2 deselected за
 133.05 s; Ruff, mypy и `git diff --check` зелёные.
 
+Первый clean restart после commit `aaf982e` запустил workflow `36151290783`, но
+он остановился на prepare за 2m37s с `scope_limit_exceeded`, до model calls.
+Причина: missing-anchor closure рекурсивно включал множество legacy-linked
+статей из changelog и превысил лимит 20 dependency files. Исправление сужает
+автоматическую синхронизацию отсутствующего раздела до парного `glossary.md`;
+отсутствующие target-файлы по-прежнему добавляются для любых внутренних ссылок,
+а обычные anchors используют валидный старый target-fragment или однозначную
+singular/plural-коррекцию. Focused scope/integration suite после исправления:
+58 passed; Ruff, mypy и diff-check зелёные.
+
 Дальше:
 
 1. Получить результат независимого code review текущего diff и исправить только

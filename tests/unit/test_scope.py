@@ -849,3 +849,38 @@ def test_unique_plural_target_anchor_does_not_expand_dependency_scope() -> None:
     )
 
     assert potential.scopes[0].measurement.dependency_file_count == 0
+
+
+def test_missing_non_glossary_anchor_does_not_expand_dependency_scope() -> None:
+    key = PairKey(RepoPath("article.md"))
+    parent = _inventory(
+        "article.md",
+        b"See [section](guide.md#source-section).",
+        b"See guide.",
+        (_change(Locale.RU, ChangedFileKind.MODIFIED, key),),
+    )
+    source_path = RepoPath("ydb/docs/ru/guide.md")
+    target_path = RepoPath("ydb/docs/en/guide.md")
+    potential = scope.build_potential_scopes(
+        _Reader(
+            {
+                source_path: b"## Source {#source-section}\n",
+                target_path: b"## Target {#different-section}\n",
+            }
+        ),
+        _Scanner(
+            {
+                parent.ru.path: (
+                    dependencies.DependencyLink(
+                        parent.ru.path, source_path, "source-section"
+                    ),
+                )
+            }
+        ),
+        _Preflight(),
+        _snapshots(),
+        (parent,),
+        dependencies.RedirectCatalog(_snapshot(), _roots(), ()),
+    )
+
+    assert potential.scopes[0].measurement.dependency_file_count == 0
