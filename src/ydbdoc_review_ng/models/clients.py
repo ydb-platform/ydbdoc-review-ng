@@ -233,6 +233,8 @@ def _provider_status(document: Mapping[str, object] | None) -> str | None:
         return None
     for key in ("code", "status"):
         value = _string(document.get(key))
+        if value is None and type(document.get(key)) is int:
+            value = str(document[key])
         if value is not None:
             return value
     error = _mapping(document.get("error"))
@@ -240,6 +242,8 @@ def _provider_status(document: Mapping[str, object] | None) -> str | None:
         return None
     for key in ("code", "status"):
         value = _string(error.get(key))
+        if value is None and type(error.get(key)) is int:
+            value = str(error[key])
         if value is not None:
             return value
     return None

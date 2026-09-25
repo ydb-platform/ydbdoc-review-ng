@@ -547,6 +547,13 @@ def test_http_error_preserves_nested_provider_status_without_response_text() -> 
     assert result.attempts[0].response_status == "INVALID_ARGUMENT"
 
 
+def test_http_error_preserves_numeric_provider_status() -> None:
+    transport = FakeTransport(HttpResponse(400, b'{"code":3}'))
+    result = native_client(transport, []).invoke(request())
+
+    assert result.attempts[0].response_status == "3"
+
+
 def test_recorder_failure_stops_before_retry_and_is_not_hidden() -> None:
     transport = FakeTransport(HttpResponse(503, b"busy"), native_response())
 
