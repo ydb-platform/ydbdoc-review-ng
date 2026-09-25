@@ -228,6 +228,23 @@ def _document(body: bytes) -> Mapping[str, object] | None:
     return _mapping(decoded)
 
 
+def _provider_status(document: Mapping[str, object] | None) -> str | None:
+    if document is None:
+        return None
+    for key in ("code", "status"):
+        value = _string(document.get(key))
+        if value is not None:
+            return value
+    error = _mapping(document.get("error"))
+    if error is None:
+        return None
+    for key in ("code", "status"):
+        value = _string(error.get(key))
+        if value is not None:
+            return value
+    return None
+
+
 def _provider_cost(document: Mapping[str, object] | None) -> Decimal | None:
     if document is None:
         return None
@@ -340,9 +357,7 @@ class _BaseYandexClient:
             response_status = (
                 parsed.status
                 if parsed.status is not None
-                else None
-                if document is None
-                else _string(document.get("code"))
+                else _provider_status(document)
             )
             cost = response.billable_cost_rub
             if cost is None:

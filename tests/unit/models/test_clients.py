@@ -539,6 +539,14 @@ def test_nonretryable_and_exhausted_failures_have_bounded_attempt_counts() -> No
     assert exhausted.failure is AttemptError.HTTP_STATUS
 
 
+def test_http_error_preserves_nested_provider_status_without_response_text() -> None:
+    transport = FakeTransport(HttpResponse(400, b'{"error":{"code":"INVALID_ARGUMENT"}}'))
+    result = native_client(transport, []).invoke(request())
+
+    assert result.failure is AttemptError.HTTP_STATUS
+    assert result.attempts[0].response_status == "INVALID_ARGUMENT"
+
+
 def test_recorder_failure_stops_before_retry_and_is_not_hidden() -> None:
     transport = FakeTransport(HttpResponse(503, b"busy"), native_response())
 
