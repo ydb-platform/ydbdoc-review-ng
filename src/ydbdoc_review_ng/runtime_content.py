@@ -93,6 +93,7 @@ from ydbdoc_review_ng.translation import (
     build_document_correction_note,
     build_document_prompt,
     build_translation_request,
+    document_operator_guidance,
     parse_translation_response,
     prepare_document,
     restore_document,
@@ -1026,7 +1027,7 @@ class RuntimeContent:
                         existing_target=existing_target,
                     )
                 if operator_context is not None:
-                    prompt += "\n\nOperator context:\n" + operator_context
+                    prompt += document_operator_guidance(operator_context)
                 if len(prompt) > limit:
                     raise DocumentTranslationError("document_chunk:correction_prompt_exceeds_limit")
                 result = self.models.invoke(

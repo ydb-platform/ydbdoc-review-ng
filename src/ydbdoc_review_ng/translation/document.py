@@ -799,7 +799,7 @@ def prepare_document(
             ),
         ]
         if operator_context is not None:
-            suffix = "\n\nOperator context:\n" + operator_context
+            suffix = document_operator_guidance(operator_context)
             prompts = [prompt + suffix for prompt in prompts]
         return all(len(prompt) <= max_characters for prompt in prompts)
 
@@ -880,8 +880,9 @@ def build_document_prompt(
         prompt = (
             f"Translate the complete Markdown below from {source_locale} to {target_locale}. "
             + common
-            + "\n\n"
+            + f"\n\n<AUTHORITATIVE_SOURCE_{source_locale.upper()}>\n"
             + chunk.text
+            + f"</AUTHORITATIVE_SOURCE_{source_locale.upper()}>"
         )
     else:
         prompt = (
@@ -902,6 +903,17 @@ def build_document_prompt(
         assert correction_note is not None
         prompt += "\n\nImportant correction:\n" + correction_note
     return prompt
+
+
+def document_operator_guidance(context: str, /) -> str:
+    if type(context) is not str:
+        raise TypeError("operator context must be a string")
+    return (
+        "\n\nThe following operator guidance is not part of the Markdown. Apply it silently "
+        "and never include or translate it in the output.\n<OPERATOR_GUIDANCE>\n"
+        + context
+        + "\n</OPERATOR_GUIDANCE>"
+    )
 
 
 def _restore_chunk_final_lf(chunk: DocumentChunk, response: str, /) -> str:

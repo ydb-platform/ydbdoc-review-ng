@@ -890,6 +890,55 @@ def test_exhausted_content_filter_splits_aligned_repair_and_runs_final_critic() 
     ]
 
 
+def test_content_filter_in_repair_child_splits_again() -> None:
+    lengths = [157] * 49 + [177] + [130] * 60 + [131]
+    source = "".join(
+        f"## Block {number:03d} " + "x" * (length - len(f"## Block {number:03d} ") - 1) + "\n"
+        for number, length in enumerate(lengths)
+    ).encode()
+    plan = build_markdown_plan(SNAPSHOT, SOURCE_PATH, source)
+    request = build_translation_request(source, plan)
+
+    class NestedContentFilterExecutor:
+        def __init__(self) -> None:
+            self.calls: list[ModelRequest] = []
+            self.editor_calls = 0
+
+        def invoke(self, model_request: ModelRequest, /) -> ModelCallResult:
+            self.calls.append(model_request)
+            if "Act as a critic-editor" in model_request.prompt:
+                self.editor_calls += 1
+                if self.editor_calls <= 2:
+                    return ModelCallResult(None, AttemptError.CONTENT_FILTER, ())
+                return ModelCallResult(
+                    critic_editor_json("GREEN", [], current_editor_target(model_request)),
+                    None,
+                    (),
+                )
+            return ModelCallResult(critic_json("GREEN", []), None, ())
+
+    executor = NestedContentFilterExecutor()
+    result = review_translation(
+        executor,
+        model="model",
+        source=source,
+        source_plan=plan,
+        translation_request=request,
+        target=source,
+        target_path=PATH,
+        source_locale=Locale.EN,
+        target_locale=Locale.RU,
+        max_request_characters=250_000,
+    )
+
+    repair_calls = tuple(
+        call for call in executor.calls if "Act as a critic-editor" in call.prompt
+    )
+    assert result.final_candidate == source
+    assert len(repair_calls) == 5
+    assert all(call.role.value == "critic" for call in repair_calls)
+
+
 def test_repair_content_filter_uses_only_boundary_with_uneven_children() -> None:
     parts = []
     for number, length in ((1, 9_000), (2, 1_000)):

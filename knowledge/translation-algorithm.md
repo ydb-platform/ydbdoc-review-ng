@@ -105,6 +105,8 @@ Scanner различает маркеры и те же символы внутр
 После первой валидной публикации critic-editor сравнивает protected authoritative
 source и protected final target целиком или крупными осмысленными блоками. При превышении provider limit
 source и target сразу делятся на соответствующие упорядоченные excerpt-пары.
+Явный content-filter на critic-editor excerpt вызывает такое же рекурсивное
+деление по top-level block boundary; успешные соседние excerpts не повторяются.
 Полный большой target не повторяется в каждом prompt, чтобы critic не терял
 соответствующий фрагмент среди нерелевантных разделов. RED любого excerpt делает
 общий verdict RED, findings
@@ -119,3 +121,6 @@ build, публикацию и независимый read-only final critic. Д
 
 Технический transport retry может быть bounded, но не превращается в
 сохраняемую state machine или механизм продолжения.
+
+Operator context обрамляется отдельно от authoritative Markdown, применяется
+как инструкция и не может становиться частью перевода или candidate.

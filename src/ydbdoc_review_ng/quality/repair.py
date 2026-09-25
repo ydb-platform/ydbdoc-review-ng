@@ -577,33 +577,32 @@ def review_translation(
         effective_chunks.append(chunk)
         responses.append(correction)
 
-    for chunk, editor_request in zip(document_request.chunks, editor_requests, strict=True):
-        editor_response = invoke_editor(editor_request)
-        if not editor_response.success or editor_response.text is None:
+    def process_editor_chunk(chunk: DocumentChunk, request: ModelRequest) -> bool:
+        response = invoke_editor(request)
+        if not response.success or response.text is None:
             children = (
                 split_content_filter_chunk(
                     chunk,
                     source_blocks,
                     aligned_block_texts=target_blocks,
                 )
-                if editor_response.failure is AttemptError.CONTENT_FILTER
+                if response.failure is AttemptError.CONTENT_FILTER
                 else None
             )
             if children is None:
                 raise QualityExecutionError("critic")
-            for child in children:
-                child_response = invoke_editor(child_editor_request(child))
-                try:
-                    accept_editor_response(child, child_response)
-                except DocumentTranslationError:
-                    repair_error = RepairErrorReason.INVALID_RESPONSE
-                    break
-            if repair_error is not None:
-                break
-            continue
+            return all(
+                process_editor_chunk(child, child_editor_request(child))
+                for child in children
+            )
         try:
-            accept_editor_response(chunk, editor_response)
+            accept_editor_response(chunk, response)
         except DocumentTranslationError:
+            return False
+        return True
+
+    for chunk, editor_request in zip(document_request.chunks, editor_requests, strict=True):
+        if not process_editor_chunk(chunk, editor_request):
             repair_error = RepairErrorReason.INVALID_RESPONSE
             break
 

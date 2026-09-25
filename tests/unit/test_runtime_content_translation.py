@@ -40,6 +40,7 @@ from ydbdoc_review_ng.translation import (
     assemble_candidate,
     build_document_prompt,
     build_translation_request,
+    document_operator_guidance,
     prepare_document,
 )
 
@@ -696,6 +697,22 @@ def test_protected_only_chunk_bypasses_model() -> None:
     assert models.calls == []
 
 
+def test_operator_context_is_not_part_of_authoritative_markdown() -> None:
+    source = b"# Source heading\n\nSource paragraph.\n"
+    document = document_for(source, target=None)
+    models = EchoChunkModels()
+
+    _accepted, translated = content_with(models)._translate_document(
+        document,
+        operator_context="Keep every link pair separate.",
+    )
+
+    assert translated.translated_markdown.encode() == source
+    assert "<AUTHORITATIVE_SOURCE_RU>" in models.calls[0].prompt
+    assert "<OPERATOR_GUIDANCE>" in models.calls[0].prompt
+    assert "never include or translate it in the output" in models.calls[0].prompt
+
+
 def test_content_filter_in_child_recursively_splits_and_preserves_document() -> None:
     source = content_filter_witness()
     document = document_for(source)
@@ -1036,8 +1053,7 @@ def test_near_limit_correction_reservation_fails_before_model_call() -> None:
     operator_context = "Reviewer context"
     initial_prompt = (
         build_document_prompt(prepared.chunks[0], "ru", "en")
-        + "\n\nOperator context:\n"
-        + operator_context
+        + document_operator_guidance(operator_context)
     )
     limit = len(initial_prompt)
 
@@ -1078,12 +1094,12 @@ def test_multiblock_unit_accepts_cosmetic_blank_line_change_without_retry() -> N
     models = ScriptedModels([invalid])
     operator_context = "Reviewer context"
 
-    content_with(models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "900"}).translate_document(
+    content_with(models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "1100"}).translate_document(
         document, operator_context=operator_context
     )
 
     assert len(models.calls) == 1
-    assert all(len(call.prompt) <= 900 for call in models.calls)
+    assert all(len(call.prompt) <= 1_100 for call in models.calls)
 
 
 def test_nested_yfm_fence_code_mutation_gets_one_technical_correction() -> None:

@@ -11,6 +11,7 @@ from ydbdoc_review_ng.translation.document import (
     DocumentTranslationRequest,
     build_document_correction_note,
     build_document_prompt,
+    document_operator_guidance,
     prepare_document,
     restore_document,
     split_content_filter_chunk,
@@ -589,14 +590,15 @@ def test_configured_limit_applies_to_each_complete_prompt_with_minimum_chunks() 
     request = prepare_document(
         source,
         plan,
-        max_characters=900,
+        max_characters=1_100,
         source_locale="ru",
         target_locale="en",
         operator_context=operator_context,
     )
     prompts = tuple(
         (
-            build_document_prompt(chunk, "ru", "en") + "\n\nOperator context:\n" + operator_context,
+            build_document_prompt(chunk, "ru", "en")
+            + document_operator_guidance(operator_context),
             build_document_prompt(
                 chunk,
                 "ru",
@@ -609,14 +611,13 @@ def test_configured_limit_applies_to_each_complete_prompt_with_minimum_chunks() 
                     chunk.placeholders,
                 ),
             )
-            + "\n\nOperator context:\n"
-            + operator_context,
+            + document_operator_guidance(operator_context),
         )
         for chunk in request.chunks
     )
 
     assert len(request.chunks) == 2
-    assert all(len(prompt) <= 900 for pair in prompts for prompt in pair)
+    assert all(len(prompt) <= 1_100 for pair in prompts for prompt in pair)
     assert "".join(chunk.text for chunk in request.chunks).encode() == source
     assert all(
         left.block_end == right.block_start
