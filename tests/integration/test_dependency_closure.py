@@ -435,7 +435,7 @@ def test_empty_existing_target_suppresses_dependency_entry() -> None:
 
 
 def test_existing_target_expands_scope_for_missing_symmetric_linked_article() -> None:
-    existing = _inventory("changelog.md", b"source", b"localized target")
+    existing = _inventory("article.md", b"source", b"localized target")
     source_dependency = RepoPath("ydb/docs/ru/dev/optimization/hints.md")
     scanner = _Scanner(
         {
@@ -467,6 +467,34 @@ def test_existing_target_expands_scope_for_missing_symmetric_linked_article() ->
         existing.ru.path,
         source_dependency,
     )
+
+
+def test_changelog_missing_symmetric_link_does_not_expand_historical_scope() -> None:
+    existing = _inventory("changelog-server.md", b"source", b"localized target")
+    source_dependency = RepoPath("ydb/docs/ru/legacy/old-article.md")
+    scanner = _Scanner(
+        {
+            existing.ru.path: (
+                dependencies.DependencyLink(existing.ru.path, source_dependency),
+            )
+        }
+    )
+
+    result = build_potential_scopes(
+        _Reader({source_dependency: b"source dependency"}),
+        scanner,
+        _Preflight(),
+        _snapshots(),
+        (existing,),
+        dependencies.RedirectCatalog(_snapshot(), _roots(), ()),
+    )
+
+    directional = result.scopes[0]
+    assert directional.measurement.dependency_file_count == 0
+    assert directional.dependencies[0].state is (
+        dependencies.DependencyResolutionState.TARGET_MISSING_SOURCE_EXISTS
+    )
+    assert tuple(call[1] for call in scanner.calls) == (existing.ru.path,)
 
 
 def test_source_tombstone_wins_before_missing_source_and_does_not_scan() -> None:

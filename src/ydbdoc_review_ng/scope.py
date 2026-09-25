@@ -522,6 +522,13 @@ def _pair_for(direction: Direction, source_path: RepoPath, target_path: RepoPath
     return FilePair(source_locale, target_locale, source_path, target_path)
 
 
+def _is_historical_changelog(path: RepoPath) -> bool:
+    return path.value.rsplit("/", 1)[-1] in {
+        "changelog-enterprise.md",
+        "changelog-server.md",
+    }
+
+
 def _target_metadata_state(
     inventory: LocalePairInventory,
     target_locale: Locale,
@@ -877,10 +884,11 @@ def _build_direction(
                 else:
                     dependency_state = DependencyResolutionState.TARGET_MISSING_SOURCE_EXISTS
                     missing_edges.add((current, terminal_source))
-                    source_bytes[terminal_source] = dep_source_content
-                    queue.add(terminal_source)
-                    if terminal_source not in initial_by_source:
-                        dependency_paths.add(terminal_source)
+                    if not _is_historical_changelog(current):
+                        source_bytes[terminal_source] = dep_source_content
+                        queue.add(terminal_source)
+                        if terminal_source not in initial_by_source:
+                            dependency_paths.add(terminal_source)
             resolved.add(
                 ResolvedDependency(link, terminal_source, terminal_target, dependency_state)
             )
