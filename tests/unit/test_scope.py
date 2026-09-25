@@ -766,6 +766,38 @@ def test_existing_target_adds_missing_symmetric_linked_article_to_scope() -> Non
     assert selected.manifest.dependency_file_count == 1
 
 
+def test_historical_changelog_linked_article_is_added_to_scope() -> None:
+    key = PairKey(RepoPath("changelog-server.md"))
+    parent = _inventory(
+        "changelog-server.md",
+        b"See [hints](dev/optimization/hints.md).",
+        b"See [hints](dev/optimization/hints.md).",
+        (_change(Locale.RU, ChangedFileKind.MODIFIED, key),),
+    )
+    dependency_path = RepoPath("ydb/docs/ru/dev/optimization/hints.md")
+    dependency_target = RepoPath("ydb/docs/en/dev/optimization/hints.md")
+    potential = scope.build_potential_scopes(
+        _Reader({dependency_path: b"# Hints\n", dependency_target: None}),
+        _Scanner(
+            {
+                parent.ru.path: (
+                    dependencies.DependencyLink(parent.ru.path, dependency_path),
+                ),
+                dependency_path: (),
+            }
+        ),
+        _Preflight(),
+        _snapshots(),
+        (parent,),
+        dependencies.RedirectCatalog(_snapshot(), _roots(), ()),
+    )
+
+    assert potential.scopes[0].measurement.dependency_file_count == 1
+    dependency = potential.scopes[0].entries[1]
+    assert dependency.pair.source_path == dependency_path
+    assert dependency.pair.target_path == dependency_target
+
+
 def test_existing_target_missing_linked_anchor_adds_article_to_scope() -> None:
     key = PairKey(RepoPath("article.md"))
     parent = _inventory(

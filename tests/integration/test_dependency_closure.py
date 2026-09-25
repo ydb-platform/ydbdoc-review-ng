@@ -469,7 +469,7 @@ def test_existing_target_expands_scope_for_missing_symmetric_linked_article() ->
     )
 
 
-def test_changelog_missing_symmetric_link_does_not_expand_historical_scope() -> None:
+def test_changelog_missing_symmetric_link_expands_scope() -> None:
     existing = _inventory("changelog-server.md", b"source", b"localized target")
     source_dependency = RepoPath("ydb/docs/ru/legacy/old-article.md")
     scanner = _Scanner(
@@ -490,11 +490,11 @@ def test_changelog_missing_symmetric_link_does_not_expand_historical_scope() -> 
     )
 
     directional = result.scopes[0]
-    assert directional.measurement.dependency_file_count == 0
+    assert directional.measurement.dependency_file_count == 1
     assert directional.dependencies[0].state is (
         dependencies.DependencyResolutionState.TARGET_MISSING_SOURCE_EXISTS
     )
-    assert tuple(call[1] for call in scanner.calls) == (existing.ru.path,)
+    assert tuple(call[1] for call in scanner.calls) == (existing.ru.path, source_dependency)
 
 
 def test_source_tombstone_wins_before_missing_source_and_does_not_scan() -> None:
