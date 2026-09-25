@@ -1,8 +1,10 @@
 # Текущий handoff
 
-Обновлено: 2026-09-25. Рабочая ветка: `main`, базовый commit до текущих
-незакоммиченных изменений `3c7c8bd80d56d30c161051ab9cb6f199974373e1`.
-Перед началом выполнен `git pull --ff-only`, remote был актуален. Каталог
+Обновлено: 2026-09-25. Рабочая ветка: `main`, актуальный commit
+`dc3c8c4` (`Bound missing-anchor scope to glossary`). Он опубликован в
+`ydb-platform/ydbdoc-review-ng`; публичный тег `v1.0.1` передвинут на этот
+commit. Перед обновлением handoff выполнен `git pull --ff-only`, remote был
+актуален. Каталог
 `.worktrees/` является пользовательским untracked-содержимым и не должен
 попасть в commit.
 
@@ -41,23 +43,25 @@
 4. Для внутренней ссылки path/query защищены. Fragment обязан существовать в
    target page. Разрешено сохранить валидный target-local fragment старого
    target для той же страницы и исправить только однозначный singular/plural.
-5. Если source anchor существует, а target anchor отсутствует, linked article
-   добавляется в dependency scope и синхронизируется целиком.
+5. Если отсутствует сам target-файл, linked article добавляется в dependency
+   scope и синхронизируется целиком. Если отсутствует target-anchor, scope
+   расширяется только для парного `glossary.md`; это позволяет синхронизировать
+   определения `operator`/`cardinality`, не затягивая весь legacy-граф ссылок.
 6. Внешние URL неизменны, кроме уже реализованного Wikipedia `langlinks`.
 7. Critic-editor делает не более одного исправления полного candidate, после
    чего идут validators, final critic и официальный docs build.
 
 Канонический полный текст находится в `REQUIREMENTS_RU.md`.
 
-## Реализовано, пока не закоммичено
+## Реализовано и опубликовано
 
 - `terminology.py`: выбирает релевантные парные glossary-секции по терминам.
 - glossary context передаётся в translation prompt, critic-editor и final critic.
 - `anchors.py`: извлекает explicit и безопасные implicit EN anchors.
 - `DependencyLink.fragment` и состояние
   `TARGET_MISSING_ANCHOR_SOURCE_EXISTS`.
-- Missing target anchor расширяет dependency scope даже при существующем
-  target-файле.
+- Missing target anchor расширяет dependency scope при существующем
+  target-файле только для парного `glossary.md`.
 - Существующий target-local anchor используется только для того же внутреннего
   path/query и только если реально существует.
 - Однозначный singular/plural anchor исправляется детерминированно.
@@ -89,19 +93,28 @@ target-страницы, а continuation и publication validation не обхо
 отсутствующие target-файлы по-прежнему добавляются для любых внутренних ссылок,
 а обычные anchors используют валидный старый target-fragment или однозначную
 singular/plural-коррекцию. Focused scope/integration suite после исправления:
-58 passed; Ruff, mypy и diff-check зелёные.
+58 passed; Ruff, mypy и diff-check зелёные. Итоговый полный suite после этого
+исправления: 1858 passed, 2 deselected за 134.04 s.
+
+Изменения опубликованы двумя commits:
+
+- `aaf982e` (`Improve translation terminology and link anchors`);
+- `dc3c8c4` (`Bound missing-anchor scope to glossary`).
+
+Старый translation PR `ydb-platform/ydb#54159` закрыт, его ветка
+`translation/pr-50858` удалена. Второй clean restart идёт в workflow
+`36152234777`, запущенном 2026-09-25 15:09 UTC. Шаг подготовки scope прошёл;
+workflow находится внутри `Documentation translation review`.
 
 Дальше:
 
-1. Получить результат независимого code review текущего diff и исправить только
-   доказанные дефекты.
-2. Commit в `main`, push, force-move `v1.0.1` на commit и push tag.
-3. Закрыть старый translation PR/удалить старую translation branch только в
-   рамках ранее подтверждённого clean restart.
-4. Запустить новый `doc_translate` для `ydb-platform/ydb#50858`.
-5. Проверить новый перевод независимо; при конкретных дефектах исправить
-   pipeline или применить один critic-editor pass.
-6. Запустить `doc_verify`, дождаться зелёного `Build documentation` на том же SHA.
+1. Дождаться результата workflow `36152234777`; при падении сохранить точный
+   failure code и исправлять только доказанную причину.
+2. Если создан новый translation PR, независимо проверить перевод, особенно
+   `row-oriented tables`, JOIN, dynamic-configuration anchors, glossary anchors
+   `operator`/`cardinality`, table singular/plural anchors и симметрию ссылок.
+3. Запустить `doc_verify` на новом translation PR.
+4. Дождаться зелёных `doc_verify` и `Build documentation` на одном head SHA.
 
 Команды полного pytest описаны в `knowledge/testing.md`. Для mutations в
 `ydb-platform/ydb` использовать `GH_TOKEN="$YDB_GH_TOKEN"` при unset
