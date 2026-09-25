@@ -441,6 +441,16 @@ def test_missing_blank_after_heading_is_restored_before_publication() -> None:
     assert candidate == b"## Translated heading\n\nRelease date: July 27, 2026.\n"
 
 
+def test_missing_blank_before_fence_is_restored_before_publication() -> None:
+    source = b"Before.\n\n```sql\nSELECT 1;\n```\n\nAfter.\n"
+    plan, request = prepared(source)
+    response = request.chunks[0].text.replace("Before.\n\n```sql", "Before.\n```sql")
+
+    candidate = restore_document(source, plan, request, (response,))
+
+    assert candidate == source
+
+
 def test_missing_blank_after_heading_is_restored_across_adaptive_chunks() -> None:
     source = b"## Heading\n\nRelease date: July 27, 2026.\n"
     plan = build_markdown_plan(SNAPSHOT, PATH, source)

@@ -79,17 +79,23 @@ def _markdown_style_problems(value: bytes, /) -> tuple[tuple[str, int | None], .
     lines = text.splitlines()
     fence: str | None = None
     outside_fence: list[bool] = []
+    fence_starts: list[bool] = []
     for line in lines:
         stripped = line.lstrip()
         marker = stripped[:3]
         outside_fence.append(fence is None)
+        starts = False
         if marker in {"```", "~~~"}:
             if fence is None:
                 fence = marker
+                starts = True
             elif marker == fence:
                 fence = None
+        fence_starts.append(starts)
 
     for index, line in enumerate(lines):
+        if fence_starts[index] and index and lines[index - 1].strip():
+            problems.append(("blank_before_fence", index + 1))
         if not outside_fence[index]:
             continue
         if _ATX_HEADING.match(line):
@@ -135,7 +141,7 @@ def _normalize_publishable_markdown(source: bytes, target: bytes, /) -> bytes:
         seen[problem] += 1
         if line_number is None or seen[problem] <= allowed[problem]:
             continue
-        if problem in {"blank_before_heading", "blank_before_list"}:
+        if problem in {"blank_before_fence", "blank_before_heading", "blank_before_list"}:
             before.add(line_number)
         elif problem == "blank_after_heading":
             after.add(line_number)
