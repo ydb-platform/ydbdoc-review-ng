@@ -167,6 +167,37 @@ def test_sanitized_workflow_failure_exposes_fixed_boundary_diagnostic(capsys) ->
 
 
 @pytest.mark.parametrize(
+    ("diagnostic", "expected"),
+    [
+        (
+            "dependency_file_limit_exceeded",
+            "Перевод остановлен: число файлов зависимостей превышает установленный лимит. "
+            "Уменьшите scope перевода или увеличьте лимит.\n",
+        ),
+        (
+            "source_character_limit_exceeded",
+            "Перевод остановлен: объём исходного текста превышает установленный лимит. "
+            "Разделите перевод на части или увеличьте лимит.\n",
+        ),
+    ],
+)
+def test_scope_limit_failures_are_explicitly_reported_to_the_user(
+    diagnostic, expected, capsys
+) -> None:
+    class FailedDispatcher(Dispatcher):
+        def doc_translate(self, request):
+            super().doc_translate(request)
+            raise WorkflowError(
+                Mode.DOC_TRANSLATE,
+                WorkflowStage.PREPARE,
+                SafeDiagnosticError(diagnostic),
+            )
+
+    assert main(VALID_ARGUMENTS["translate"], dispatcher=FailedDispatcher()) == 1
+    assert capsys.readouterr().err == expected
+
+
+@pytest.mark.parametrize(
     ("outcome", "expected_status", "expected_error"),
     [
         ("success", 0, ""),

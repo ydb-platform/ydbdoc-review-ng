@@ -23,6 +23,25 @@ class Dispatcher(Protocol):
     def doc_continue(self, request: ContinueWorkflowInput, /) -> object: ...
 
 
+_BOUNDARY_MESSAGES = {
+    "dependency_file_limit_exceeded": (
+        "Перевод остановлен: число файлов зависимостей превышает установленный лимит. "
+        "Уменьшите scope перевода или увеличьте лимит."
+    ),
+    "source_character_limit_exceeded": (
+        "Перевод остановлен: объём исходного текста превышает установленный лимит. "
+        "Разделите перевод на части или увеличьте лимит."
+    ),
+}
+
+
+def _workflow_error_message(error: object) -> str:
+    diagnostic = getattr(error, "diagnostic", None)
+    if type(diagnostic) is str and diagnostic in _BOUNDARY_MESSAGES:
+        return _BOUNDARY_MESSAGES[diagnostic]
+    return f"{error}; inspect the job audit"
+
+
 def _runtime_factory() -> Dispatcher:
     """Load the explicitly selected trusted deployment composition."""
     module, name = os.environ["YDBDOC_RUNTIME_FACTORY"].split(":", 1)
@@ -103,7 +122,7 @@ def main(
         print(DailyBudgetExceeded.user_message, file=sys.stderr)
         return 1
     except WorkflowError as error:
-        print(f"{error}; inspect the job audit", file=sys.stderr)
+        print(_workflow_error_message(error), file=sys.stderr)
         return 1
     except Exception:  # noqa: BLE001 - workflow/transport diagnostics stay in audit.
         print("Workflow failed; inspect the job audit", file=sys.stderr)

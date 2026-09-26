@@ -138,6 +138,18 @@ changelog block оказался больше лимита (run `36155088682`). 
 3. Запустить чистый `doc_translate` повторно.
 4. Если создан новый translation PR, независимо проверить перевод, особенно
    `row-oriented tables`, JOIN, dynamic-configuration anchors, glossary anchors
+
+## Проверка лимитной диагностики
+
+Последний запуск `doc_translate` для PR #50858: run `36225170617`. Он завершился
+на `prepare` до model calls: фактический scope содержит 8 dependency-файлов и
+332142 исходных символа. Значит превышен именно лимит символов 250000, а не
+лимит файлов 20. Раньше оба случая ошибочно сообщались как
+`scope_limit_exceeded`; отдельного пользовательского комментария при раннем
+падении не было, только stderr и job audit.
+
+Добавлены отдельные диагностики `dependency_file_limit_exceeded` и
+`source_character_limit_exceeded`, явные русские сообщения CLI и regression tests.
    `operator`/`cardinality`, table singular/plural anchors и симметрию ссылок.
 5. Запустить `doc_verify` на новом translation PR.
 6. Дождаться зелёных `doc_verify` и `Build documentation` на одном head SHA.

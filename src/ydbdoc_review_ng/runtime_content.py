@@ -482,11 +482,11 @@ class Limits:
         self.characters = int(environment.get("YDBDOC_MAX_SOURCE_CHARACTERS") or "200000")
 
     def check(self, request: ScopePreflightRequest, /) -> None:
-        if any(
-            item.dependency_file_count > self.files or item.source_character_count > self.characters
-            for item in request.measurements
-        ):
-            raise RuntimeBoundaryError("scope_limit_exceeded")
+        for item in request.measurements:
+            if item.dependency_file_count > self.files:
+                raise RuntimeBoundaryError("dependency_file_limit_exceeded")
+            if item.source_character_count > self.characters:
+                raise RuntimeBoundaryError("source_character_limit_exceeded")
 
 
 class DirectionClient:
