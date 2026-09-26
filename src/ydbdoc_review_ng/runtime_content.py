@@ -59,7 +59,7 @@ from ydbdoc_review_ng.locales import (
     discover_changed_pairs,
     paired_markdown_path,
 )
-from ydbdoc_review_ng.models import AttemptError, ModelRequest
+from ydbdoc_review_ng.models import AttemptError, ModelCallResult, ModelRequest
 from ydbdoc_review_ng.models.types import FrozenJson, mutable_json
 from ydbdoc_review_ng.parser.markdown import build_markdown_plan
 from ydbdoc_review_ng.plan import ProtectedKind, SourcePlan, fields_of
@@ -554,7 +554,8 @@ class RuntimeContent:
         self, source: RuntimeSource, models: RecordedModels, environment: Mapping[str, str]
     ) -> None:
         self.source, self.models, self.environment = source, models, environment
-        self.model = environment.get("YDBDOC_MODEL") or "yandexgpt-5.1"
+        self.model = environment.get("YDBDOC_MODEL") or "deepseek-v4-flash"
+        self.fallback_model = environment.get("YDBDOC_MODEL_FALLBACK") or "yandexgpt-5.1"
         self.wikipedia = WikipediaLanglinks()
         self.roots = LocaleRoots(RepoPath("ydb/docs/ru/core"), RepoPath("ydb/docs/en/core"))
         self.documents: tuple[Document, ...] = ()
@@ -1150,6 +1151,31 @@ class RuntimeContent:
         ) -> tuple[str | None, AttemptError | None, bool]:
             note: str | None = None
 
+            def invoke_model(prompt: str, /) -> ModelCallResult:
+                result = self.models.invoke(
+                    ModelRequest(
+                        ModelRole.TRANSLATE,
+                        self.model,
+                        prompt,
+                        None,
+                        8000,
+                        entry.pair.target_path,
+                    )
+                )
+                if result.success or self.fallback_model == self.model:
+                    return result
+                fallback = self.models.invoke(
+                    ModelRequest(
+                        ModelRole.TRANSLATE,
+                        self.fallback_model,
+                        prompt,
+                        None,
+                        8000,
+                        entry.pair.target_path,
+                    )
+                )
+                return fallback
+
             for attempt in (1, 2):
                 existing_target = (
                     target_references[chunk_index - 1] if use_target_reference else None
@@ -1179,16 +1205,7 @@ class RuntimeContent:
                     prompt += document_operator_guidance(operator_context)
                 if len(prompt) > limit:
                     raise DocumentTranslationError("document_chunk:correction_prompt_exceeds_limit")
-                result = self.models.invoke(
-                    ModelRequest(
-                        ModelRole.TRANSLATE,
-                        self.model,
-                        prompt,
-                        None,
-                        8000,
-                        entry.pair.target_path,
-                    )
-                )
+                result = invoke_model(prompt)
                 if not result.success or result.text is None:
                     should_split = (
                         result.failure is AttemptError.CONTENT_FILTER
@@ -1286,6 +1303,18 @@ class RuntimeContent:
                     is_adaptive_child=False,
                     use_target_reference=True,
                 )
+        def assembly_failure(stage: str, error: Exception) -> None:
+            write_trace(
+                "translation",
+                "document_assembly",
+                "fail",
+                article=entry.pair.target_path.value,
+                stage=stage,
+                code=str(error),
+                error_type=type(error).__name__,
+            )
+            raise InvalidTranslationResponse("translation_response_invalid") from None
+
         try:
             effective_request = DocumentTranslationRequest(
                 tuple(effective_chunks), prepared.placeholders
@@ -1293,9 +1322,15 @@ class RuntimeContent:
             candidate = restore_document(
                 document.source, document.plan, effective_request, tuple(responses)
             )
+        except (DocumentTranslationError, ValueError, TypeError, UnicodeError) as error:
+            assembly_failure("restore_document", error)
+        try:
             candidate_plan = build_markdown_plan(
                 document.plan.source_snapshot, entry.pair.target_path, candidate
             )
+        except (DocumentTranslationError, ValueError, TypeError, UnicodeError) as error:
+            assembly_failure("build_markdown_plan", error)
+        try:
             verify_document_candidate_with_links(
                 document.source,
                 document.plan,
@@ -1303,20 +1338,26 @@ class RuntimeContent:
                 candidate_plan,
                 self._link_resolver(document, candidate),
             )
-            try:
-                values = _derive_target_translations(
-                    document.source,
-                    document.plan,
-                    document.request,
-                    candidate,
-                    entry.pair.target_path,
-                )
-            except QualityInputError:
-                values = {}
-        except (DocumentTranslationError, ValueError, TypeError, UnicodeError):
-            raise InvalidTranslationResponse("translation_response_invalid") from None
+        except (DocumentTranslationError, ValueError, TypeError, UnicodeError) as error:
+            assembly_failure("verify_document_candidate", error)
+        try:
+            values = _derive_target_translations(
+                document.source,
+                document.plan,
+                document.request,
+                candidate,
+                entry.pair.target_path,
+            )
+        except QualityInputError:
+            values = {}
+        except (DocumentTranslationError, ValueError, TypeError, UnicodeError) as error:
+            assembly_failure("derive_target_translations", error)
+        try:
+            candidate_text = candidate.decode("utf-8")
+        except UnicodeError as error:
+            assembly_failure("candidate_utf8", error)
         accepted = AcceptedMap(entry.pair.target_path, tuple(sorted(values.items())))
-        return accepted, AcceptedDocument(entry.pair.target_path, candidate.decode("utf-8"))
+        return accepted, AcceptedDocument(entry.pair.target_path, candidate_text)
 
     @staticmethod
     def _document_from_map(document: Document, accepted: AcceptedMap) -> AcceptedDocument:

@@ -33,14 +33,14 @@
 JSON Schema. В интеграционном прогоне PR 51079 все 361 принятых ответа сообщили
 `reasoningTokens = 0`. Канонический текущий model URI:
 `gpt://<folder>/yandexgpt-5.1`; суффикс `/latest` не используется в default,
-но явный `YDBDOC_MODEL` сохраняет возможность выбрать другой URI. Это основная
-подтверждённая модель перевода.
+но явный `YDBDOC_MODEL` сохраняет возможность выбрать другой URI. В runtime это
+fallback-модель для перевода.
 
 ### DeepSeek V4 Flash
 
 OpenAI-compatible endpoint принимает `reasoning_effort = none`, temperature 0 и
-JSON Schema. Модель пригодна как ограниченный fallback, но на одном сложном поле
-завершила ответ по лимиту, поэтому не считается гарантией успешного перевода.
+JSON Schema. В runtime модель используется как основная модель перевода; при
+ошибке провайдера или content filter запрос повторяется через YandexGPT.
 
 ### gpt-oss-120b
 

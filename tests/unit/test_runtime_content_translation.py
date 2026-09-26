@@ -180,6 +180,52 @@ def content_with(models: object, environment: dict[str, str] | None = None) -> R
     )
 
 
+def test_translation_uses_deepseek_primary_and_yandex_fallback() -> None:
+    document = document_for(b"# Use `CPUTime` now.\n")
+    prepared = prepare_document(document.source, document.plan, max_characters=100_000)
+    valid = prepared.chunks[0].text
+    models = ScriptedModels(
+        [ModelCallResult(None, AttemptError.CONTENT_FILTER, ()), valid]
+    )
+
+    accepted = content_with(models).translate_document(document)
+
+    assert accepted.as_dict()
+    assert [call.model for call in models.calls] == [
+        "deepseek-v4-flash",
+        "yandexgpt-5.1",
+    ]
+
+
+def test_document_assembly_trace_contains_failing_stage_and_reason(monkeypatch) -> None:
+    document = document_for(b"# Complete document.\n")
+    events: list[tuple[str, str, str, dict[str, object]]] = []
+
+    def record(component: str, operation: str, status: str, /, **details: object) -> None:
+        events.append((component, operation, status, details))
+
+    def fail_restore(*args, **kwargs):
+        raise DocumentTranslationError("document_response:placeholder_mismatch")
+
+    monkeypatch.setattr(runtime_content, "write_trace", record)
+    monkeypatch.setattr(runtime_content, "restore_document", fail_restore)
+
+    with pytest.raises(InvalidTranslationResponse, match="translation_response_invalid"):
+        content_with(EchoChunkModels()).translate_document(document)
+
+    assert (
+        "translation",
+        "document_assembly",
+        "fail",
+        {
+            "article": TARGET_PATH.value,
+            "stage": "restore_document",
+            "code": "document_response:placeholder_mismatch",
+            "error_type": "DocumentTranslationError",
+        },
+    ) in events
+
+
 def test_probable_duplicate_pairs_missing_symmetric_link_with_existing_target_link() -> None:
     source = b"See [query hints](optimization/hints.md).\n"
     target = b"See [query hints](query-execution-optimization/query-hints.md).\n"

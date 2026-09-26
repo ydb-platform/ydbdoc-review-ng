@@ -37,6 +37,7 @@ from ydbdoc_review_ng.models import (
     PerModelPricing,
     UrllibTransport,
     YandexCredentials,
+    YandexOpenAIClient,
 )
 from ydbdoc_review_ng.persistence import ContinuationCheckpoint, YdbExecutor, YdbPersistence
 from ydbdoc_review_ng.publication import (
@@ -104,7 +105,12 @@ class RecordedModels:
     def invoke(self, request: ModelRequest, /) -> ModelCallResult:
         if self.job_id is None:
             raise RuntimeBoundaryError("model_job_missing")
-        client = NativeYandexClient(
+        client_type = (
+            YandexOpenAIClient
+            if "deepseek" in request.model.lower()
+            else NativeYandexClient
+        )
+        client = client_type(
             YandexCredentials(
                 self.environment.get("YANDEX_API_KEY", ""),
                 self.environment.get("YANDEX_FOLDER_ID", ""),
