@@ -330,6 +330,8 @@ class PublicationPort(Protocol):
 
 
 class VerdictPort(Protocol):
+    def report_failure(self, source_pr_number: int, diagnostic: str, /) -> None: ...
+
     def update_current_pr(
         self,
         *,
@@ -354,6 +356,9 @@ class LinearWorkflows:
         "_reviewer",
         "_source",
     )
+
+    def report_failure(self, request: TranslateWorkflowInput, diagnostic: str, /) -> None:
+        self._reporter.report_failure(request.pr_number, diagnostic)
 
     def __init__(
         self,

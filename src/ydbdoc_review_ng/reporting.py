@@ -11,8 +11,18 @@ from ydbdoc_review_ng.quality import Finding, QualityReviewResult, Verdict
 
 QA_MARKER = "<!-- ydbdoc-current-qa -->"
 TRANSLATION_LINK_MARKER = "<!-- ydbdoc-translation-pr -->"
+SCOPE_FAILURE_MARKER = "<!-- ydbdoc-scope-failure -->"
 _MAX_REPORTED_FILES = 10
 _STATUS_ICONS = {"GREEN": "🟢", "YELLOW": "🟡", "RED": "🔴"}
+
+_SCOPE_FAILURE_MESSAGES = {
+    "dependency_file_limit_exceeded": (
+        "число файлов зависимостей превышает лимит", "файлов"
+    ),
+    "source_character_limit_exceeded": (
+        "объём исходного текста превышает лимит", "символов"
+    ),
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -208,6 +218,33 @@ class QAReporter:
         self._checks = checks
         self._verification_context = verification_context
         self._current_head = current_head
+
+    def report_failure(self, source_pr_number: int, diagnostic: str, /) -> None:
+        failure = _SCOPE_FAILURE_MESSAGES.get(diagnostic)
+        if failure is None:
+            return
+        reason, unit = failure
+        limit = "20" if diagnostic == "dependency_file_limit_exceeded" else "250 000"
+        body = (
+            "🔴 Перевод PR не запущен\n\n"
+            f"Причина: {reason}.\n"
+            f"Лимит: {limit} {unit}.\n\n"
+            "Что сделать: уменьшить scope PR или увеличить настройку лимита, "
+            "затем повторно добавить метку `doc_translate`.\n"
+            f"{SCOPE_FAILURE_MARKER}"
+        )
+        existing = next(
+            (
+                comment
+                for comment in self._backend.list_comments(source_pr_number)
+                if comment.authored_by_publisher and SCOPE_FAILURE_MARKER in comment.body
+            ),
+            None,
+        )
+        if existing is None:
+            self._backend.create_comment(source_pr_number, body)
+        else:
+            self._backend.update_comment(source_pr_number, existing.id, body)
 
     def update_current_pr(
         self,

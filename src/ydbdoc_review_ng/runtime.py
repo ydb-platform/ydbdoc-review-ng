@@ -332,6 +332,18 @@ class RuntimeReporter:
     ) -> None:
         self.source, self.publisher, self.models = source, publisher, models
 
+    def report_failure(self, source_pr_number: int, diagnostic: str, /) -> None:
+        QAReporter(
+            self.source.github,
+            self.publisher,
+            lambda: ReportContext(
+                self.source.snapshots.source_snapshot.commit_sha,
+                self.source.snapshots.source_snapshot.commit_sha,
+                self.models.cost,
+            ),
+            lambda: (),
+        ).report_failure(source_pr_number, diagnostic)
+
     def update_current_pr(
         self,
         *,
@@ -394,6 +406,9 @@ class Runtime:
 
     def doc_continue(self, request: ContinueWorkflowInput, /) -> WorkflowResult:
         return self._workflows.doc_continue(request)
+
+    def report_failure(self, request: TranslateWorkflowInput, diagnostic: str, /) -> None:
+        self._workflows.report_failure(request, diagnostic)
 
     def shutdown(self) -> None:
         if self._shutdown_complete:

@@ -150,6 +150,14 @@ changelog block оказался больше лимита (run `36155088682`). 
 
 Добавлены отдельные диагностики `dependency_file_limit_exceeded` и
 `source_character_limit_exceeded`, явные русские сообщения CLI и regression tests.
+
+После публикации commit `1eef9a2` и передвижения `v1.0.1` повторный запуск
+`doc_translate` получил run `36226050242`. Он также завершился на `prepare` без
+model calls, но теперь корректно сообщил в CI: «Перевод остановлен: объём
+исходного текста превышает установленный лимит. Разделите перевод на части или
+увеличьте лимит». Translation PR не создавался. В текущей интеграции это явное
+сообщение есть в логе workflow; отдельный комментарий в исходный PR при раннем
+отказе пока не публикуется.
    `operator`/`cardinality`, table singular/plural anchors и симметрию ссылок.
 5. Запустить `doc_verify` на новом translation PR.
 6. Дождаться зелёных `doc_verify` и `Build documentation` на одном head SHA.

@@ -122,6 +122,10 @@ def main(
         print(DailyBudgetExceeded.user_message, file=sys.stderr)
         return 1
     except WorkflowError as error:
+        report_failure = getattr(runtime, "report_failure", None)
+        if callable(report_failure) and error.diagnostic is not None:
+            with suppress(Exception):
+                report_failure(request, error.diagnostic)
         print(_workflow_error_message(error), file=sys.stderr)
         return 1
     except Exception:  # noqa: BLE001 - workflow/transport diagnostics stay in audit.

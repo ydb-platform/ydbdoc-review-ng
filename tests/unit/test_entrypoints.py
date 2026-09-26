@@ -171,13 +171,17 @@ def test_sanitized_workflow_failure_exposes_fixed_boundary_diagnostic(capsys) ->
     [
         (
             "dependency_file_limit_exceeded",
-            "Перевод остановлен: число файлов зависимостей превышает установленный лимит. "
-            "Уменьшите scope перевода или увеличьте лимит.\n",
+            (
+                "Перевод остановлен: число файлов зависимостей превышает установленный лимит. "
+                "Уменьшите scope перевода или увеличьте лимит.\n"
+            ),
         ),
         (
             "source_character_limit_exceeded",
-            "Перевод остановлен: объём исходного текста превышает установленный лимит. "
-            "Разделите перевод на части или увеличьте лимит.\n",
+            (
+                "Перевод остановлен: объём исходного текста превышает установленный лимит. "
+                "Разделите перевод на части или увеличьте лимит.\n"
+            ),
         ),
     ],
 )
@@ -195,6 +199,28 @@ def test_scope_limit_failures_are_explicitly_reported_to_the_user(
 
     assert main(VALID_ARGUMENTS["translate"], dispatcher=FailedDispatcher()) == 1
     assert capsys.readouterr().err == expected
+
+
+def test_scope_limit_failure_requests_source_pr_comment() -> None:
+    class FailedDispatcher(Dispatcher):
+        def __init__(self):
+            super().__init__()
+            self.failures = []
+
+        def doc_translate(self, request):
+            super().doc_translate(request)
+            raise WorkflowError(
+                Mode.DOC_TRANSLATE,
+                WorkflowStage.PREPARE,
+                SafeDiagnosticError("source_character_limit_exceeded"),
+            )
+
+        def report_failure(self, request, diagnostic):
+            self.failures.append((request.pr_number, diagnostic))
+
+    dispatcher = FailedDispatcher()
+    assert main(VALID_ARGUMENTS["translate"], dispatcher=dispatcher) == 1
+    assert dispatcher.failures == [(42, "source_character_limit_exceeded")]
 
 
 @pytest.mark.parametrize(
