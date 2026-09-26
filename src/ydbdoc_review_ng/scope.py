@@ -26,7 +26,6 @@ from ydbdoc_review_ng.direction import (
 )
 from ydbdoc_review_ng.domain import FilePair, Locale, RepoPath, SnapshotRef
 from ydbdoc_review_ng.errors import InvariantViolation
-from ydbdoc_review_ng.links import closest_target_anchor
 from ydbdoc_review_ng.locales import (
     ChangedFileKind,
     ChangedMarkdownFile,
@@ -854,10 +853,6 @@ def _build_direction(
                         and terminal_source.value.rsplit("/", 1)[-1] == "glossary.md"
                         and link.fragment in markdown_anchors(dep_source_content)
                         and link.fragment not in markdown_anchors(target_content)
-                        and closest_target_anchor(
-                            link.fragment, markdown_anchors(target_content)
-                        )
-                        is None
                     )
                     if missing_anchor:
                         dependency_state = (

@@ -848,6 +848,44 @@ def test_existing_target_missing_linked_anchor_adds_article_to_scope() -> None:
     assert selected.manifest.dependency_file_count == 1
 
 
+def test_glossary_requires_the_exact_linked_anchor() -> None:
+    key = PairKey(RepoPath("article.md"))
+    parent = _inventory(
+        "article.md",
+        b"See [operator](glossary.md#operator).",
+        b"See glossary.",
+        (_change(Locale.RU, ChangedFileKind.MODIFIED, key),),
+    )
+    source_path = RepoPath("ydb/docs/ru/glossary.md")
+    target_path = RepoPath("ydb/docs/en/glossary.md")
+    potential = scope.build_potential_scopes(
+        _Reader(
+            {
+                source_path: b"## Operator {#operator}\n",
+                target_path: b"## Operators {#operators}\n",
+            }
+        ),
+        _Scanner(
+            {
+                parent.ru.path: (
+                    dependencies.DependencyLink(
+                        parent.ru.path, source_path, "operator"
+                    ),
+                )
+            }
+        ),
+        _Preflight(),
+        _snapshots(),
+        (parent,),
+        dependencies.RedirectCatalog(_snapshot(), _roots(), ()),
+    )
+
+    assert potential.scopes[0].measurement.dependency_file_count == 1
+    dependency = potential.scopes[0].entries[1]
+    assert dependency.pair.source_path == source_path
+    assert dependency.pair.target_path == target_path
+
+
 def test_unique_plural_target_anchor_does_not_expand_dependency_scope() -> None:
     key = PairKey(RepoPath("article.md"))
     parent = _inventory(

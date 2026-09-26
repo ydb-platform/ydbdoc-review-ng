@@ -201,6 +201,54 @@ def test_pr51079_fixture_bytes_are_exact(name: str, size: int, digest: str) -> N
     assert hashlib.sha256(payload).hexdigest() == digest
 
 
+def test_pr50858_fixture_expands_only_missing_files_and_exact_glossary_anchors() -> None:
+    fixture_root = Path(__file__).parents[1] / "fixtures" / "scope" / "pr50858"
+    parent = _inventory(
+        "core/changelog-enterprise.md",
+        (fixture_root / "changelog-enterprise.md").read_bytes(),
+        b"# Enterprise changelog\n",
+    )
+    hints_source = RepoPath("ydb/docs/ru/core/dev/optimization/hints.md")
+    glossary_source = RepoPath("ydb/docs/ru/core/concepts/glossary.md")
+    potential = build_potential_scopes(
+        _Reader(
+            {
+                hints_source: (fixture_root / "hints-ru.md").read_bytes(),
+                glossary_source: (fixture_root / "glossary-ru.md").read_bytes(),
+                RepoPath("ydb/docs/en/core/concepts/glossary.md"): (
+                    fixture_root / "glossary-en.md"
+                ).read_bytes(),
+            }
+        ),
+        _Scanner(
+            {
+                parent.ru.path: (
+                    dependencies.DependencyLink(parent.ru.path, hints_source),
+                    dependencies.DependencyLink(parent.ru.path, glossary_source, "operator"),
+                ),
+                hints_source: (
+                    dependencies.DependencyLink(hints_source, glossary_source, "operator"),
+                ),
+                glossary_source: (),
+            }
+        ),
+        _Preflight(),
+        _snapshots(),
+        (parent,),
+        dependencies.RedirectCatalog(_snapshot(), _roots(), ()),
+    )
+
+    assert potential.scopes[0].measurement.dependency_file_count == 2
+    assert tuple(
+        entry.pair.source_path.value
+        for entry in potential.scopes[0].entries
+        if entry.origin is ScopeOrigin.DEPENDENCY
+    ) == (
+        "ydb/docs/ru/core/concepts/glossary.md",
+        "ydb/docs/ru/core/dev/optimization/hints.md",
+    )
+
+
 def _inventory(key_value: str, ru: bytes | None, en: bytes | None) -> LocalePairInventory:
     roots = _roots()
     snapshot = _snapshot()
