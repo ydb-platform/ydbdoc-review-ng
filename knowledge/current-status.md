@@ -165,3 +165,19 @@ model calls, но теперь корректно сообщил в CI: «Пер
 Команды полного pytest описаны в `knowledge/testing.md`. Для mutations в
 `ydb-platform/ydb` использовать `GH_TOKEN="$YDB_GH_TOKEN"` при unset
 `GITHUB_TOKEN`; значения токенов не печатать и не сохранять.
+
+## Локальная доработка source-only перевода
+
+27 сентября 2026 добавлена локальная, ещё не опубликованная доработка
+упрощённого алгоритма. `build_document_prompt` теперь всегда отправляет модели
+только полный authoritative source Markdown с защищёнными ссылками, кодом и
+YFM-фрагментами. Старый target больше не попадает в translation prompt и
+остаётся только для scope/link-проверок. В `doc_translate` и `doc_verify`
+рабочий лимит запроса по умолчанию задан workflow-переменной `6000` символов,
+при этом unit default сохранён для обратной совместимости тестов.
+
+Live glossary probe на DeepSeek через Yandex Cloud успешно обработал 15 из 15
+чанков и восстановил 570 из 570 защищённых фрагментов. Локальные проверки:
+runtime focused `105 passed, 10 deselected`, document contract `56 passed`,
+probe `5 passed, 1 skipped`, YAML/Python syntax и `git diff --check` зелёные.
+Изменения пока не закоммичены и не запушены.

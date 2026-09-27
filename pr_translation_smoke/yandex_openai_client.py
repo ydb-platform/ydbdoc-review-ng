@@ -91,3 +91,51 @@ def complete(
     except urllib.error.URLError as error:
         raise RuntimeError(f"Yandex OpenAI API request failed: {error.reason}") from error
     return extract_response_text(decoded), decoded
+
+
+def complete_markdown(
+    *,
+    api_key: str,
+    folder_id: str,
+    model_uri: str,
+    prompt: str,
+    max_tokens: int = 12_000,
+    timeout_seconds: int = 180,
+) -> tuple[str, dict[str, Any]]:
+    """Call the OpenAI-compatible endpoint without forcing a JSON response."""
+    payload = {
+        "model": normalize_model_uri(model_uri, folder_id),
+        "stream": False,
+        "temperature": 0,
+        "max_tokens": max_tokens,
+        "reasoning_effort": "none",
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "Translate YDB technical documentation. Return only the complete "
+                    "translated Markdown document."
+                ),
+            },
+            {"role": "user", "content": prompt},
+        ],
+    }
+    request = urllib.request.Request(
+        ENDPOINT,
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Authorization": f"Api-Key {api_key}",
+            "Content-Type": "application/json",
+            "OpenAI-Project": folder_id,
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            decoded = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        body = error.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Yandex OpenAI API HTTP {error.code}: {body}") from error
+    except urllib.error.URLError as error:
+        raise RuntimeError(f"Yandex OpenAI API request failed: {error.reason}") from error
+    return extract_response_text(decoded), decoded

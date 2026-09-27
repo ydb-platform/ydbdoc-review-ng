@@ -16,6 +16,24 @@
 stdlib, Yandex transport, YDB query executor и реальные workflow stages.
 Offline tests и installed smoke не вызывают внешние сервисы. Cutover не выполнен.
 
+## Быстрый probe перевода glossary
+
+Это отдельный исследовательский тест, не часть CI-конвейера. Он получает русский
+`glossary.md` из PR #50858, оставляет Markdown-разметку видимой модели, защищает
+только ссылки, код и YFM-вставки, переводит документ чанками и сохраняет полный
+prompt, ответы и собранный Markdown в `artifacts/glossary-probe/`:
+
+```bash
+export YDBDOC_LIVE=1
+export YC_API_KEY=...
+export YC_FOLDER_ID=...
+export YDBDOC_MODEL_TRANSLATE=deepseek-v4-flash/latest
+python3 scripts/run_glossary_probe.py
+```
+
+Обычные unit-тесты probe запускаются без сети:
+`pytest -q -o addopts='' tests/unit/test_glossary_probe.py`.
+
 ## Установка
 
 Из корня репозитория, с доступом к индексу пакетов для build/dev dependencies:

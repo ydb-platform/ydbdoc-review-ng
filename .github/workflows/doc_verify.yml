@@ -33,6 +33,7 @@ jobs:
       YDB_SA_KEY: ${{ secrets.YDB_SA_KEY }}
       YDBDOC_MAX_DEPENDENCY_FILES_PER_ARTICLE: ${{ vars.YDBDOC_MAX_DEPENDENCY_FILES_PER_ARTICLE }}
       YDBDOC_MAX_SOURCE_CHARACTERS: ${{ vars.YDBDOC_MAX_SOURCE_CHARACTERS }}
+      YDBDOC_MAX_MODEL_REQUEST_CHARACTERS: ${{ vars.YDBDOC_MAX_MODEL_REQUEST_CHARACTERS || '6000' }}
     steps:
       # The dispatch ref is input data, never executable runtime code. This
       # protected repository variable must contain a reviewed 40-hex commit.

@@ -50,29 +50,18 @@ def test_complete_markdown_prompt_uses_selected_direction(
     assert "translatable frontmatter value" in prompt
 
 
-def test_existing_target_prompt_synchronizes_against_authoritative_source() -> None:
+def test_translation_prompt_uses_authoritative_source_only() -> None:
     source = "# Новый заголовок\n\nНовый текст.\n"
     chunk = prepare_document(
         source.encode(),
         build_markdown_plan(SNAPSHOT, PATH, source.encode()),
         max_characters=100_000,
     ).chunks[0]
-    existing_target = "# Existing heading\n\nExisting text with old wording.\n"
+    prompt = build_document_prompt(chunk, "ru", "en")
 
-    prompt = build_document_prompt(
-        chunk,
-        "ru",
-        "en",
-        existing_target=existing_target,
-    )
-
-    assert "Synchronize the existing en Markdown" in prompt
-    assert "authoritative ru Markdown" in prompt
-    assert "Preserve correct existing target wording" in prompt
-    assert "Existing target is reference context only" in prompt
-    assert "Preserve correct target-local Markdown link destinations" in prompt
+    assert "Translate the complete Markdown below from ru to en" in prompt
     assert "<AUTHORITATIVE_SOURCE_RU>\n" + source in prompt
-    assert "<EXISTING_TARGET_EN>\n" + existing_target in prompt
+    assert "<EXISTING_TARGET_EN>" not in prompt
     assert "Return Markdown only" in prompt
 
 

@@ -143,18 +143,6 @@ def unpack(content: bytes) -> dict[str, bytes | None]:
     }
 
 
-def _partition_target_reference(value: str | None, count: int, /) -> tuple[str | None, ...]:
-    if value is None:
-        return (None,) * count
-    if count == 1:
-        return (value,)
-    lines = value.splitlines(keepends=True)
-    return tuple(
-        "".join(lines[index * len(lines) // count : (index + 1) * len(lines) // count])
-        for index in range(count)
-    )
-
-
 @dataclass(frozen=True)
 class Document:
     entry: ScopeEntry
@@ -1129,25 +1117,15 @@ class RuntimeContent:
             terminology_context=terminology_context,
         )
         block_texts = _document_block_texts(document.source, document.plan, prepared.placeholders)
-        try:
-            target_reference = (
-                None
-                if target_reference_bytes is None
-                else target_reference_bytes.decode("utf-8")
-            )
-        except UnicodeDecodeError:
-            raise RuntimeBoundaryError("translation_target_utf8_invalid") from None
-        target_references = _partition_target_reference(
-            target_reference, len(prepared.chunks)
-        )
+        # The existing target remains available for link/scope analysis, but it is
+        # deliberately not sent to the translation model. Translation must be
+        # reconstructed from the authoritative source and the accepted response.
         effective_chunks: list[DocumentChunk] = []
         responses: list[str] = []
 
         def invoke_chunk(
             chunk: DocumentChunk,
             chunk_index: int,
-            *,
-            use_target_reference: bool = True,
         ) -> tuple[str | None, AttemptError | None, bool]:
             note: str | None = None
 
@@ -1177,30 +1155,14 @@ class RuntimeContent:
                 return fallback
 
             for attempt in (1, 2):
-                existing_target = (
-                    target_references[chunk_index - 1] if use_target_reference else None
-                )
                 prompt = build_document_prompt(
                     chunk,
                     entry.pair.source_locale.value,
                     entry.pair.target_locale.value,
                     correction=attempt == 2,
                     correction_note=note,
-                    existing_target=existing_target,
                     terminology_context=terminology_context,
                 )
-                if existing_target is not None and len(prompt) > limit:
-                    overflow = len(prompt) - limit
-                    existing_target = existing_target[: max(0, len(existing_target) - overflow)]
-                    prompt = build_document_prompt(
-                        chunk,
-                        entry.pair.source_locale.value,
-                        entry.pair.target_locale.value,
-                        correction=attempt == 2,
-                        correction_note=note,
-                        existing_target=existing_target,
-                        terminology_context=terminology_context,
-                    )
                 if operator_context is not None:
                     prompt += document_operator_guidance(operator_context)
                 if len(prompt) > limit:
@@ -1249,7 +1211,6 @@ class RuntimeContent:
             chunk_index: int,
             *,
             is_adaptive_child: bool,
-            use_target_reference: bool,
         ) -> None:
             if not any(
                 block.fields
@@ -1261,7 +1222,6 @@ class RuntimeContent:
             accepted_response, failure, should_split = invoke_chunk(
                 chunk,
                 chunk_index,
-                use_target_reference=use_target_reference,
             )
             if accepted_response is not None:
                 effective_chunks.append(chunk)
@@ -1286,7 +1246,6 @@ class RuntimeContent:
                     child,
                     chunk_index,
                     is_adaptive_child=True,
-                    use_target_reference=False,
                 )
 
         for chunk_index, chunk in enumerate(prepared.chunks, 1):
@@ -1301,7 +1260,6 @@ class RuntimeContent:
                     chunk,
                     chunk_index,
                     is_adaptive_child=False,
-                    use_target_reference=True,
                 )
         def assembly_failure(stage: str, error: Exception) -> None:
             write_trace(

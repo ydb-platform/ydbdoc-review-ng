@@ -301,7 +301,7 @@ def test_dependency_article_is_added_to_symmetric_target_toc() -> None:
 
 @pytest.mark.parametrize(
     ("source_locale", "direction"),
-    [(Locale.RU, "authoritative ru Markdown"), (Locale.EN, "authoritative en Markdown")],
+    [(Locale.RU, "ru to en"), (Locale.EN, "en to ru")],
 )
 def test_translate_document_uses_complete_markdown_and_selected_direction(
     source_locale: Locale, direction: str
@@ -321,8 +321,11 @@ def test_translate_document_uses_complete_markdown_and_selected_direction(
 
     assert len(models.calls) == 1
     call = models.calls[0]
-    assert direction in call.prompt
-    assert "Synchronize the existing" in call.prompt
+    assert (
+        f"from {source_locale.value} to "
+        f"{(Locale.EN if source_locale is Locale.RU else Locale.RU).value}"
+        in call.prompt
+    )
     assert "# Исходный заголовок" in call.prompt
     assert "- Один\n- Два" in call.prompt
     assert "guide.md" not in call.prompt
@@ -331,7 +334,7 @@ def test_translate_document_uses_complete_markdown_and_selected_direction(
         "[[YDBDOC_PROTECTED_LINK_0001_CLOSE]]"
         in call.prompt
     )
-    assert "# Old target" in call.prompt
+    assert "# Old target" not in call.prompt
     assert "JSON" not in call.prompt
     assert (
         assemble_candidate(document.source, document.plan, document.request, accepted.as_dict())
@@ -347,6 +350,17 @@ def test_translate_without_existing_target_uses_full_translation_prompt() -> Non
 
     assert "Translate the complete Markdown below from ru to en" in models.calls[0].prompt
     assert "<EXISTING_TARGET_EN>" not in models.calls[0].prompt
+
+
+def test_translate_does_not_send_existing_target_as_translation_context() -> None:
+    models = EchoChunkModels()
+    content = content_with(models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "250000"})
+
+    content.translate_document(document_for(b"# Source heading\n", target=b"# Old target wording\n"))
+
+    assert models.calls
+    assert all("<EXISTING_TARGET_EN>" not in call.prompt for call in models.calls)
+    assert all("Old target wording" not in call.prompt for call in models.calls)
 
 
 def test_existing_target_cannot_override_symmetric_source_link_destination() -> None:
@@ -371,7 +385,8 @@ def test_existing_target_cannot_override_symmetric_source_link_destination() -> 
         "[[YDBDOC_PROTECTED_LINK_0001_CLOSE]]"
         in models.calls[0].prompt
     )
-    assert "(./dev/query-execution-optimization/query-hints.md)" in models.calls[0].prompt
+    assert "(./dev/query-execution-optimization/query-hints.md)" not in models.calls[0].prompt
+    assert "(./dev/optimization/hints.md)" in accepted_document.translated_markdown
     assert accepted_document.translated_markdown == (
         "See [query hints](./dev/optimization/hints.md).\n"
     )
@@ -406,7 +421,7 @@ def test_chunked_sync_uses_ordered_non_overlapping_target_excerpts() -> None:
     assert len(models.calls) == 3
     for index, label in enumerate(("Target one", "Target two", "Target three")):
         prompt = models.calls[index].prompt
-        assert label in prompt
+        assert label not in prompt
         assert all(
             other not in prompt
             for other in ("Target one", "Target two", "Target three")
@@ -725,8 +740,8 @@ def test_content_filter_children_do_not_repeat_filtered_target_reference() -> No
 
     content_with(models).translate_document(document)
 
-    assert "<EXISTING_TARGET_EN>" in models.calls[0].prompt
-    assert all("<EXISTING_TARGET_EN>" not in call.prompt for call in models.calls[1:])
+    assert all("<EXISTING_TARGET_EN>" not in call.prompt for call in models.calls)
+    assert all("# Existing target reference" not in call.prompt for call in models.calls)
 
 
 def test_protected_only_chunk_bypasses_model() -> None:
