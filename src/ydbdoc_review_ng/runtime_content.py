@@ -125,6 +125,7 @@ _DIAGNOSTIC_PLACEHOLDER = re.compile(
 )
 _PLACEHOLDER_PREFIXES = ("[[YDBDOC_PROTECTED_", "[[YDBDOC_URL_")
 _INVALID_RESPONSE_SPLIT_MIN_CHARACTERS = 4_000
+_ATX_HEADING_LINE = re.compile(r"(?m)^ {0,3}#{1,6}[ \t]+")
 
 
 def pack(files: Mapping[str, bytes | None]) -> bytes:
@@ -1190,7 +1191,31 @@ class RuntimeContent:
             except DocumentTranslationError as error:
                 diagnostic: str | None = str(error)
             else:
-                return draft, None, False
+                try:
+                    source_chunk_plan = build_markdown_plan(
+                        document.plan.source_snapshot,
+                        entry.pair.target_path,
+                        chunk.text.encode("utf-8"),
+                    )
+                    draft_chunk_plan = build_markdown_plan(
+                        document.plan.source_snapshot,
+                        entry.pair.target_path,
+                        draft.encode("utf-8"),
+                    )
+                except (DocumentTranslationError, ValueError, TypeError, UnicodeError):
+                    source_chunk_plan = draft_chunk_plan = None
+                if (
+                    source_chunk_plan is None
+                    or draft_chunk_plan is None
+                    or len(source_chunk_plan.blocks) == len(draft_chunk_plan.blocks)
+                    or len(_ATX_HEADING_LINE.findall(chunk.text))
+                    == len(_ATX_HEADING_LINE.findall(draft))
+                ):
+                    return draft, None, False
+                diagnostic = (
+                    "document_response:structure_mismatch:top_level_block_count; "
+                    "remove added blocks and restore omitted source blocks"
+                )
             for critic_attempt in (1, 2):
                 critic_prompt = build_document_critic_prompt(
                     chunk,

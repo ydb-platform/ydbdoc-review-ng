@@ -370,7 +370,7 @@ def test_translator_draft_is_repaired_by_full_markdown_critic() -> None:
         target=None,
     )
     draft = (
-        "# Translated heading\n\nText with [link](invented.md).\n\n"
+        "# Translated heading\n\nText with [link]([[YDBDOC_URL_0001]]).\n\n"
         "### Jitter\nExtra glossary text\n"
     )
     corrected = "# Translated heading\n\nText with [link]([[YDBDOC_URL_0001]]).\n"
