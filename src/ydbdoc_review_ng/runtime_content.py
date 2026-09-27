@@ -120,9 +120,9 @@ if TYPE_CHECKING:
     from ydbdoc_review_ng.runtime_continue import ContinueReplay
 
 _DIAGNOSTIC_PLACEHOLDER = re.compile(
-    r"\[\[YDBDOC_PROTECTED_(?:[0-9]+|LINK_[0-9]+_(?:OPEN|CLOSE))\]\]"
+    r"\[\[(?:YDBDOC_PROTECTED_(?:[0-9]+|LINK_[0-9]+_(?:OPEN|CLOSE))|YDBDOC_URL_[0-9]+)\]\]"
 )
-_PLACEHOLDER_PREFIX = "[[YDBDOC_PROTECTED_"
+_PLACEHOLDER_PREFIXES = ("[[YDBDOC_PROTECTED_", "[[YDBDOC_URL_")
 _INVALID_RESPONSE_SPLIT_MIN_CHARACTERS = 4_000
 
 
@@ -199,8 +199,8 @@ def _placeholder_differences(
             required_counts[token] -= 1
         else:
             unexpected.append(token)
-    if rejected_value.count(_PLACEHOLDER_PREFIX) != len(returned):
-        unexpected.append(_PLACEHOLDER_PREFIX)
+    if sum(rejected_value.count(prefix) for prefix in _PLACEHOLDER_PREFIXES) != len(returned):
+        unexpected.extend(_PLACEHOLDER_PREFIXES)
     return tuple(missing), tuple(unexpected)
 
 

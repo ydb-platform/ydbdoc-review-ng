@@ -315,8 +315,7 @@ def test_translate_document_uses_complete_markdown_and_selected_direction(
     )
     response = (
         "# Translated heading\n\nText with "
-        "[[YDBDOC_PROTECTED_LINK_0001_OPEN]]guide"
-        "[[YDBDOC_PROTECTED_LINK_0001_CLOSE]].\n\n- One\n- Two\n"
+        "[guide]([[YDBDOC_URL_0001]]).\n\n- One\n- Two\n"
     )
     models = ScriptedModels([response])
 
@@ -333,8 +332,7 @@ def test_translate_document_uses_complete_markdown_and_selected_direction(
     assert "- Один\n- Два" in call.prompt
     assert "guide.md" not in call.prompt
     assert (
-        "[[YDBDOC_PROTECTED_LINK_0001_OPEN]]руководством"
-        "[[YDBDOC_PROTECTED_LINK_0001_CLOSE]]"
+        "[руководством]([[YDBDOC_URL_0001]])"
         in call.prompt
     )
     assert "# Old target" not in call.prompt
@@ -392,7 +390,7 @@ def test_large_source_only_document_assembles_after_all_small_chunks() -> None:
 
     _accepted, translated = content._translate_document(document_for(source, target=None))
 
-    assert len(models.calls) >= 8
+    assert len(models.calls) >= 6
     assert all(len(call.prompt) <= 6000 for call in models.calls)
     assert translated.translated_markdown.encode() == source
 
@@ -405,8 +403,7 @@ def test_existing_target_cannot_override_symmetric_source_link_destination() -> 
     models = ScriptedModels(
         [
             (
-                "See [[YDBDOC_PROTECTED_LINK_0001_OPEN]]query hints"
-                "[[YDBDOC_PROTECTED_LINK_0001_CLOSE]].\n"
+                "See [query hints]([[YDBDOC_URL_0001]]).\n"
             )
         ]
     )
@@ -415,8 +412,7 @@ def test_existing_target_cannot_override_symmetric_source_link_destination() -> 
 
     assert "(./dev/optimization/hints.md)" not in models.calls[0].prompt
     assert (
-        "[[YDBDOC_PROTECTED_LINK_0001_OPEN]]query hints"
-        "[[YDBDOC_PROTECTED_LINK_0001_CLOSE]]"
+        "[query hints]([[YDBDOC_URL_0001]])"
         in models.calls[0].prompt
     )
     assert "(./dev/query-execution-optimization/query-hints.md)" not in models.calls[0].prompt
