@@ -1133,6 +1133,7 @@ class RuntimeContent:
             chunk_index: int,
         ) -> tuple[str | None, AttemptError | None, bool]:
             note: str | None = None
+            previous_response: str | None = None
 
             def invoke_model(prompt: str, /) -> ModelCallResult:
                 result = self.models.invoke(
@@ -1166,6 +1167,7 @@ class RuntimeContent:
                     entry.pair.target_locale.value,
                     correction=attempt == 2,
                     correction_note=note,
+                    previous_response=previous_response,
                     terminology_context=terminology_context,
                 )
                 if operator_context is not None:
@@ -1207,6 +1209,7 @@ class RuntimeContent:
                         missing,
                         validation_problem=str(error),
                     )
+                    previous_response = result.text
                 else:
                     return result.text, None, False
             raise AssertionError("translation semantic attempt bound exhausted")

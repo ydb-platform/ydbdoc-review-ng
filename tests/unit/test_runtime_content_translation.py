@@ -912,9 +912,11 @@ def test_complete_markdown_response_gets_exactly_one_technical_correction() -> N
 
     assert len(models.calls) == 2
     assert "Important correction" not in models.calls[0].prompt
+    assert "<PREVIOUS_RESPONSE>" not in models.calls[0].prompt
     correction = models.calls[1].prompt
     assert "Important correction" in correction
     assert prepared.chunks[0].text in correction
+    assert f"<PREVIOUS_RESPONSE>\n{invalid}\n</PREVIOUS_RESPONSE>" in correction
     assert "Rejected translation:" not in correction
     assert placeholder.token in correction
     assert "`CPUTime`" in correction

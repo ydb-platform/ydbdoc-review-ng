@@ -956,6 +956,7 @@ def build_document_prompt(
     *,
     correction: bool = False,
     correction_note: str | None = None,
+    previous_response: str | None = None,
     terminology_context: str | None = None,
 ) -> str:
     """Build a raw-Markdown provider request for one whole document unit."""
@@ -967,6 +968,8 @@ def build_document_prompt(
         raise TypeError("chunk and locales must have exact public contract types")
     if correction and (type(correction_note) is not str or not correction_note.strip()):
         raise ValueError("correction requires a non-empty safe correction note")
+    if previous_response is not None and type(previous_response) is not str:
+        raise TypeError("previous_response must be a string or None")
     if terminology_context is not None and type(terminology_context) is not str:
         raise TypeError("terminology_context must be a string or None")
     common = (
@@ -988,6 +991,8 @@ def build_document_prompt(
     )
     if correction:
         assert correction_note is not None
+        if previous_response is not None:
+            prompt += "\n\n<PREVIOUS_RESPONSE>\n" + previous_response + "\n</PREVIOUS_RESPONSE>"
         prompt += "\n\nImportant correction:\n" + correction_note
     if terminology_context:
         prompt += (
