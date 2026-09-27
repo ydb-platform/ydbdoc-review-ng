@@ -55,6 +55,13 @@ def raw_repair_context(prompt, tag):
     return prompt.split(f"<{tag}>\n", 1)[1].split(f"</{tag}>", 1)[0]
 
 
+def raw_translation_draft(prompt):
+    marker = "<TRANSLATION_DRAFT_"
+    start = prompt.index(">\n", prompt.index(marker)) + 2
+    end = prompt.index("</TRANSLATION_DRAFT_", start)
+    return prompt[start:end]
+
+
 def rewrite_markdown(source, word="Translated", *, preserve_suffix=False):
     def heading(match):
         text = match.group(2)
@@ -231,6 +238,9 @@ class RuntimeServices:
             if prompt.startswith("Repair"):
                 self.events.append(("REPAIR", "markdown"))
                 text = rewrite_markdown(raw_repair_context(prompt, "current-target"), "Corrected")
+            elif "<TRANSLATION_DRAFT_" in prompt:
+                self.events.append(("CRITIC", ("raw_markdown",)))
+                text = raw_translation_draft(prompt)
             else:
                 self.events.append(("MODEL", ("raw_markdown",)))
                 text = translated_markdown(prompt)

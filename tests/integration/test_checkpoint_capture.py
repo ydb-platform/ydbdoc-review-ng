@@ -12,6 +12,7 @@ import pytest
 from _runtime_services import (
     RuntimeServices,
     raw_repair_context,
+    raw_translation_draft,
     request_prompt,
     request_schema,
     rewrite_markdown,
@@ -191,6 +192,10 @@ class CaptureServices(RuntimeServices):
             if prompt.startswith("Repair"):
                 role = "repair"
                 text = rewrite_markdown(raw_repair_context(prompt, "current-target"), "Corrected")
+            elif "<TRANSLATION_DRAFT_" in prompt:
+                role = "critic"
+                self.critics += 1
+                text = raw_translation_draft(prompt)
             else:
                 role = "translate"
                 self.translations += 1
@@ -243,7 +248,7 @@ class CaptureServices(RuntimeServices):
         self.roles.append(role)
         if self.failure == role or self.failure == "final_critic" and self.critics == 2:
             raise TimeoutError("transport failed")
-        if role not in {"translate", "repair"}:
+        if role not in {"translate", "repair"} and schema_wrapper is not None:
             text = json.dumps(values)
         if "model" in body:
             payload = {
@@ -318,10 +323,10 @@ def test_two_invalid_current_field_responses_preserve_first_map_and_pending_orde
     assert checkpoint.scope_target_paths == tuple(
         RepoPath(f"ydb/docs/en/core/{n}.md") for n in ("a", "b", "c", "z")
     )
-    assert services.roles == ["translate", "translate", "translate"]
+    assert services.roles == ["translate", "translate", "critic", "critic"]
     attempts = [row for row in services.audit if "attempt_id" in row]
-    assert len(attempts) == 3
-    assert sum(row["cost_rub"] for row in attempts) == Decimal("0.03")
+    assert len(attempts) == 4
+    assert sum(row["cost_rub"] for row in attempts) == Decimal("0.04")
     assert services.commits == 0 and services.audit[-1]["status"] == "failed"
 
 
@@ -336,8 +341,8 @@ def test_twice_lost_known_placeholder_stops_before_publication() -> None:
     with pytest.raises(WorkflowError):
         services.translate()
 
-    assert services.roles == ["translate", "translate"]
-    assert services.critics == 0
+    assert services.roles == ["translate", "critic", "critic"]
+    assert services.critics == 2
     assert services.commits == 0
     assert services.files[target_path] == b"# Old\n"
     checkpoint = services.checkpoint()
@@ -594,7 +599,7 @@ def test_lost_terminal_ack_and_failed_close_cannot_be_resumed():
     services = LostTerminalAck(stop="translation")
     with pytest.raises((WorkflowError, PersistenceError)):
         services.translate()
-    assert services.roles == ["translate", "translate", "translate"]
+    assert services.roles == ["translate", "translate", "critic", "critic"]
     assert services.rows  # The real checkpoint write reached storage.
     with pytest.raises(PersistenceError):
         services.checkpoint()

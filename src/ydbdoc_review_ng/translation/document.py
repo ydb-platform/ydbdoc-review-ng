@@ -1007,6 +1007,60 @@ def build_document_prompt(
     return prompt
 
 
+def build_document_critic_prompt(
+    chunk: DocumentChunk,
+    draft: str,
+    source_locale: str,
+    target_locale: str,
+    /,
+    *,
+    diagnostic: str | None = None,
+    terminology_context: str | None = None,
+) -> str:
+    """Build a whole-Markdown editing request for a translated chunk."""
+    if type(chunk) is not DocumentChunk or type(draft) is not str:
+        raise TypeError("chunk and draft must have exact public contract types")
+    if type(source_locale) is not str or type(target_locale) is not str:
+        raise TypeError("locales must be strings")
+    if diagnostic is not None and type(diagnostic) is not str:
+        raise TypeError("diagnostic must be a string or None")
+    prompt = (
+        "You are the final YDB technical-documentation translation critic-editor. "
+        f"Compare the authoritative {source_locale} Markdown with the {target_locale} draft. "
+        "Return the complete corrected Markdown only, with no JSON, explanation, or code fence. "
+        "Remove every sentence, heading, list item, glossary entry, or other content absent from "
+        "the authoritative source. Restore every omitted source part and correct inaccurate or "
+        "untranslated user-facing prose using YDB terminology. Preserve the Markdown structure. "
+        "Protected placeholders are opaque source fragments: copy every one exactly once, "
+        "unchanged, in the same top-level source block and order. Never invent, delete, rename, "
+        "duplicate, split, or reorder placeholders. Keep leading and trailing newline counts "
+        "exactly as stated. The authoritative source is the only content authority.\n\n"
+        f"Boundary contract: source starts with exactly "
+        f"{len(chunk.text) - len(chunk.text.lstrip(chr(10)))} newline(s) and ends with exactly "
+        f"{len(chunk.text) - len(chunk.text.rstrip(chr(10)))} newline(s).\n"
+        f"<AUTHORITATIVE_SOURCE_{source_locale.upper()}>\n{chunk.text}"
+        f"</AUTHORITATIVE_SOURCE_{source_locale.upper()}>\n"
+        f"<TRANSLATION_DRAFT_{target_locale.upper()}>\n{draft}"
+        f"</TRANSLATION_DRAFT_{target_locale.upper()}>\n"
+        "<PREVIOUS_RESPONSE>\n"
+        + draft
+        + "\n</PREVIOUS_RESPONSE>"
+    )
+    if diagnostic:
+        prompt += (
+            "\n\nImportant correction: the previous critic response failed local validation. "
+            "Fix this exact problem:\n" + diagnostic
+        )
+    if terminology_context:
+        prompt += (
+            "\n\nGlossary reference only. Use target terms consistently, but never output the glossary "
+            "itself.\n<PROJECT_GLOSSARY>\n"
+            + terminology_context
+            + "\n</PROJECT_GLOSSARY>"
+        )
+    return prompt
+
+
 def document_operator_guidance(context: str, /) -> str:
     if type(context) is not str:
         raise TypeError("operator context must be a string")
