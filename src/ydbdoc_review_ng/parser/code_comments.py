@@ -8,7 +8,20 @@ from ydbdoc_review_ng.plan import ByteSpan
 
 __all__ = ()
 
-_SLASH = frozenset((b"cpp", b"c++", b"cc", b"cxx", b"java", b"javascript", b"js"))
+_SLASH = frozenset(
+    (
+        b"cpp",
+        b"c++",
+        b"cc",
+        b"cxx",
+        b"java",
+        b"javascript",
+        b"js",
+        b"csharp",
+        b"cs",
+        b"dotnet",
+    )
+)
 _PYTHON = frozenset((b"python", b"py"))
 _BASH = frozenset((b"bash", b"sh", b"shell"))
 _HASH = frozenset((b"yaml", b"yml"))

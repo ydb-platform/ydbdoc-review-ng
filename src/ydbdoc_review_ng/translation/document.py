@@ -116,6 +116,44 @@ def _markdown_style_problems(value: bytes, /) -> tuple[tuple[str, int | None], .
     return tuple(problems)
 
 
+def _table_row_columns(line: bytes, /) -> int:
+    """Count Markdown table cells without treating escaped/code pipes as separators."""
+    body = line.strip()
+    if body.startswith(b"|"):
+        body = body[1:]
+    if body.endswith(b"|") and not body.endswith(b"\\|"):
+        body = body[:-1]
+    separators = 0
+    in_code = False
+    cursor = 0
+    while cursor < len(body):
+        current = body[cursor]
+        if current == 92:
+            cursor += 2
+            continue
+        if current == 96:
+            in_code = not in_code
+        elif current == 124 and not in_code:
+            separators += 1
+        cursor += 1
+    return separators + 1
+
+
+def _table_shapes(source: bytes, plan: SourcePlan, /) -> tuple[tuple[int, ...], ...]:
+    """Return row/column shape for every Markdown table in document order."""
+    shapes: list[tuple[int, ...]] = []
+    for block in plan.blocks:
+        if block.kind is not BlockKind.TABLE:
+            continue
+        rows = tuple(
+            _table_row_columns(line)
+            for line in source[block.span.start : block.span.end].splitlines()
+            if line.strip()
+        )
+        shapes.append(rows)
+    return tuple(shapes)
+
+
 def _validate_publishable_markdown(source: bytes, target: bytes, /) -> None:
     """Reject deterministic Markdown defects introduced by translation."""
     target_text = target.decode("utf-8")
@@ -519,6 +557,8 @@ def verify_document_candidate(
 
     if target_plan.diagnostics:
         raise DocumentTranslationError("document_response:structure_mismatch")
+    if _table_shapes(source, source_plan) != _table_shapes(target, target_plan):
+        raise DocumentTranslationError("document_response:structure_mismatch")
     _validate_publishable_markdown(source, target)
     verify_protected_fragments(
         source,
@@ -725,6 +765,8 @@ def prepare_document(
     for field in fields_of(plan):
         for region in field.protected_regions:
             start, end, kind = region.span.start, region.span.end, region.kind
+            if kind is ProtectedKind.MARKDOWN_SYNTAX:
+                continue
             replacement = source[start:end]
             if link_resolver is not None and kind in {
                 ProtectedKind.LINK_CLOSE,
@@ -1060,6 +1102,10 @@ def validate_chunk_response(
     ):
         raise DocumentTranslationError("document_response:placeholder_mismatch")
     if target_plan_value.diagnostics:
+        raise DocumentTranslationError("document_response:structure_mismatch")
+    if _table_shapes(source_chunk, source_plan_value) != _table_shapes(
+        candidate_chunk, target_plan_value
+    ):
         raise DocumentTranslationError("document_response:structure_mismatch")
     from ydbdoc_review_ng.translation.assembly import ProtectedMismatch
 

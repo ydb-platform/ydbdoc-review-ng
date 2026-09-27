@@ -106,6 +106,8 @@ def _protected_signature(data: bytes, plan: SourcePlan, position: int) -> tuple[
     movable_singles: list[tuple[str, bytes]] = []
     groups: dict[int, list[tuple[str, bytes]]] = {}
     for region in field.protected_regions:
+        if region.kind is ProtectedKind.MARKDOWN_SYNTAX:
+            continue
         entry = (region.kind.value, data[region.span.start : region.span.end])
         if region.group is None:
             if region.kind in {ProtectedKind.INLINE_CODE, ProtectedKind.TEMPLATE}:
@@ -130,6 +132,8 @@ def _block_protected_signature(data: bytes, block: Block) -> _ProtectedBlockSign
         key=lambda region: region.span.start,
     )
     for region in regions:
+        if region.kind is ProtectedKind.MARKDOWN_SYNTAX:
+            continue
         entry = (region.kind.value, data[region.span.start : region.span.end])
         if region.group is None:
             if region.kind in {ProtectedKind.INLINE_CODE, ProtectedKind.TEMPLATE}:

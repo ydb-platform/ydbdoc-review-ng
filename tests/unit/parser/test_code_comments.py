@@ -20,7 +20,21 @@ def values(source: bytes) -> list[bytes]:
     return [source[field.span.start : field.span.end] for field in fields_of(build(source))]
 
 
-@pytest.mark.parametrize("language", [b"cpp", b"c++", b"cc", b"cxx", b"java", b"javascript", b"js"])
+@pytest.mark.parametrize(
+    "language",
+    [
+        b"cpp",
+        b"c++",
+        b"cc",
+        b"cxx",
+        b"java",
+        b"javascript",
+        b"js",
+        b"csharp",
+        b"cs",
+        b"dotnet",
+    ],
+)
 def test_slash_comment_language_aliases_extract_real_comment_only(language: bytes) -> None:
     source = (
         b"```" + language + b'\nconst char *url = "https://host/path"; // Translate this\n```\n'

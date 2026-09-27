@@ -108,6 +108,10 @@ def build_translation_request(source: bytes, plan: SourcePlan, /) -> Translation
         used_tokens: set[bytes] = set()
         next_token = 1
         for region in field.protected_regions:
+            # Markdown emphasis/strike syntax must remain visible to the model.
+            # Only source-owned technical fragments are placeholderized.
+            if region.kind is ProtectedKind.MARKDOWN_SYNTAX:
+                continue
             while True:
                 token = f"[[{region.kind.value.upper()}_{next_token:04d}]]"
                 next_token += 1

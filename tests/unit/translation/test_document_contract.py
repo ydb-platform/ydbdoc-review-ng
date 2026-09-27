@@ -15,6 +15,7 @@ from ydbdoc_review_ng.translation.document import (
     prepare_document,
     restore_document,
     split_content_filter_chunk,
+    validate_chunk_response,
 )
 
 SNAPSHOT = SnapshotRef(RepositoryId("ydb-platform/ydb"), GitSha("a" * 40))
@@ -95,6 +96,33 @@ def test_markdown_link_destination_is_always_protected_from_the_model() -> None:
         ProtectedKind.LINK_OPEN,
         ProtectedKind.LINK_CLOSE,
     )
+
+
+def test_markdown_emphasis_is_visible_to_model_and_not_placeholderized() -> None:
+    source = "**Представление** и обычный текст.\n".encode()
+
+    _plan, request = prepared(source)
+
+    assert request.chunks[0].text == source.decode()
+    assert all(item.kind is not ProtectedKind.MARKDOWN_SYNTAX for item in request.placeholders)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda value: value.replace("| A | B |", "| A | B | C |"),
+        lambda value: value.replace("| A | B |\n", "| A | B |\n| C | D |\n"),
+    ],
+    ids=["columns", "rows"],
+)
+def test_table_response_with_changed_shape_is_rejected(mutation) -> None:
+    source = "| Колонка | Значение |\n| --- | --- |\n| A | B |\n".encode()
+    _plan, request = prepared(source)
+    chunk = request.chunks[0]
+    response = mutation(chunk.text)
+
+    with pytest.raises(DocumentTranslationError, match="structure_mismatch"):
+        validate_chunk_response(chunk, request.placeholders, response)
 
 
 def test_link_destination_is_hidden_inside_markdown_syntax_and_restored_from_resolver() -> None:
