@@ -76,6 +76,29 @@ def test_translation_prompt_forbids_creating_or_reusing_links() -> None:
     assert "Keep the source link count unchanged" in prompt
 
 
+def test_translation_prompt_preserves_chunk_boundary_whitespace() -> None:
+    source = b"\n![Image](image.svg){inline=false}\n\nText.\n\n"
+    _plan, request = prepared(source)
+
+    prompt = build_document_prompt(request.chunks[0], "ru", "en")
+
+    assert "preserve every leading and trailing newline" in prompt.lower()
+    assert "Do not remove or add blank lines at chunk boundaries" in prompt
+    assert "starts with exactly 1 newline" in prompt
+    assert "ends with exactly 2 newline" in prompt
+    assert "These boundary newlines are structural, not cosmetic" in prompt
+
+
+def test_chunk_validation_restores_trimmed_boundary_newlines() -> None:
+    source = b"\n![Image](image.svg){inline=false}\n\nText.\n\n"
+    _plan, request = prepared(source)
+    chunk = request.chunks[0]
+    response = chunk.text.strip("\n") + "\n"
+
+    validate_chunk_response(chunk, request.placeholders, response)
+    assert restore_document(source, _plan, request, (response,)) == source
+
+
 def test_markdown_link_destination_is_always_protected_from_the_model() -> None:
     source = b"See [query hints](./dev/optimization/hints.md).\n"
     plan = build_markdown_plan(SNAPSHOT, PATH, source)
@@ -695,7 +718,7 @@ def test_configured_limit_applies_to_each_complete_prompt_with_minimum_chunks() 
     request = prepare_document(
         source,
         plan,
-        max_characters=1_700,
+        max_characters=2_200,
         source_locale="ru",
         target_locale="en",
         operator_context=operator_context,
@@ -725,8 +748,8 @@ def test_configured_limit_applies_to_each_complete_prompt_with_minimum_chunks() 
         for chunk in request.chunks
     )
 
-    assert len(request.chunks) == 1
-    assert all(len(pair[0]) <= 1_700 for pair in prompts)
+    assert len(request.chunks) == 2
+    assert all(len(pair[0]) <= 2_200 for pair in prompts)
     assert "".join(chunk.text for chunk in request.chunks).encode() == source
     assert all(
         left.block_end == right.block_start

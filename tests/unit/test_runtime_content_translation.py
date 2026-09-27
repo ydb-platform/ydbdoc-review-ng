@@ -1204,7 +1204,7 @@ def test_long_protected_fragment_does_not_inflate_model_prompt() -> None:
     prepared = prepare_document(document.source, document.plan, max_characters=100_000)
     models = ScriptedModels([prepared.chunks[0].text])
 
-    content_with(models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "900"}).translate_document(
+    content_with(models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "2500"}).translate_document(
         document
     )
 
