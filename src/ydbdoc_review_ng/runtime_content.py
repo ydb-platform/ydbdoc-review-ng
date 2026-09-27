@@ -555,7 +555,9 @@ class RuntimeContent:
         self.review_operator_context: str | None = None
         self.publisher: GitPublicationAdapter
 
-    def _terminology_context(self, document: Document, /) -> str | None:
+    def _terminology_context(
+        self, document: Document, /, *, max_characters: int = 8_000
+    ) -> str | None:
         plans = self.plans
         if plans is None:
             return None
@@ -582,7 +584,10 @@ class RuntimeContent:
             RepoPath(f"{target_root.value}/concepts/glossary.md"),
         )
         return bilingual_glossary_context(
-            document.source.decode("utf-8"), source_glossary, target_glossary
+            document.source.decode("utf-8"),
+            source_glossary,
+            target_glossary,
+            max_characters=max(1, min(8_000, max_characters // 6)),
         )
 
     def _link_resolver(
@@ -1104,7 +1109,7 @@ class RuntimeContent:
             if entry.target_content is not None
             else entry.rename_from_target_content
         )
-        terminology_context = self._terminology_context(document)
+        terminology_context = self._terminology_context(document, max_characters=limit)
         link_resolver = self._link_resolver(document, target_reference_bytes)
         prepared = prepare_document(
             document.source,
@@ -1569,7 +1574,13 @@ class RuntimeContent:
                 accepted_map=restored_map,
                 full_repair=selective and restored_map is None,
                 operator_context=self.review_operator_context,
-                terminology_context=self._terminology_context(document),
+                terminology_context=self._terminology_context(
+                    document,
+                    max_characters=int(
+                        self.environment.get("YDBDOC_MAX_MODEL_REQUEST_CHARACTERS")
+                        or "6000"
+                    ),
+                ),
                 before_model_call=check_head if selective else None,
                 before_repaired_map=publish_map if selective else None,
                 link_resolver=self._link_resolver(

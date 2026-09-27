@@ -29,8 +29,12 @@ def bilingual_glossary_context(
     source_glossary: bytes | None,
     target_glossary: bytes | None,
     /,
+    *,
+    max_characters: int = _MAX_CHARACTERS,
 ) -> str | None:
     """Select paired glossary sections whose declared terms occur in source prose."""
+    if type(max_characters) is not int or max_characters < 1:
+        raise ValueError("max_characters must be a positive integer")
     if source_glossary is None or target_glossary is None:
         return None
     try:
@@ -64,7 +68,7 @@ def bilingual_glossary_context(
         if len(selected) >= _MAX_ENTRIES:
             break
         extra = len(entry) if not selected else len(entry) + 2
-        if used + extra > _MAX_CHARACTERS:
+        if used + extra > max_characters:
             continue
         selected.append((anchor, entry))
         used += extra

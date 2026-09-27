@@ -55,3 +55,20 @@ def test_glossary_context_is_bounded_and_prefers_more_relevant_entries() -> None
     assert len(context) <= 8_000
     assert 'anchor="term-19"' in context
     assert context.count("<glossary-entry") <= 8
+
+
+def test_glossary_context_can_be_bounded_for_small_model_requests() -> None:
+    from ydbdoc_review_ng.terminology import bilingual_glossary_context
+
+    source = "\n\n".join(
+        f"#### Term {index} {{#term-{index}}}\n\n**common term {index}**."
+        for index in range(20)
+    ).encode()
+    target = source.replace(b"common term", b"common target")
+
+    context = bilingual_glossary_context(
+        "common term", source, target, max_characters=1_200
+    )
+
+    assert context is not None
+    assert len(context) <= 1_200
