@@ -531,6 +531,24 @@ def test_whole_document_response_rejects_invented_link() -> None:
         restore_document(source, plan, request, ("Translated [evil](evil.md).\n",))
 
 
+def test_whole_document_structure_failure_reports_validation_stage() -> None:
+    source = b"Plain source.\n"
+    plan, request = prepared(source)
+
+    with pytest.raises(
+        DocumentTranslationError,
+        match="document_response:structure_mismatch:protected_fragments:field=1:chunk_candidate",
+    ):
+        restore_document(source, plan, request, ("Translated [evil](evil.md).\n",))
+
+
+def test_source_owned_yfm_conditionals_survive_full_document_validation() -> None:
+    source = b"# Heading\n\n{% if feature_flag %}\n\nText.\n\n{% endif %}\n"
+    plan, request = prepared(source)
+
+    assert restore_document(source, plan, request, tuple(chunk.text for chunk in request.chunks)) == source
+
+
 def test_whole_document_response_rejects_link_move_between_preserved_blocks() -> None:
     source = b"[Guide](guide.md) first.\n\nSecond paragraph.\n"
     plan, request = prepared(source)

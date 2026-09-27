@@ -173,10 +173,13 @@ def document_for(
 
 
 def content_with(models: object, environment: dict[str, str] | None = None) -> RuntimeContent:
+    test_environment = {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "200000"}
+    if environment is not None:
+        test_environment.update(environment)
     return RuntimeContent(
         cast(RuntimeSource, object()),
         cast(RecordedModels, models),
-        environment or {},
+        test_environment,
     )
 
 
@@ -361,6 +364,37 @@ def test_translate_does_not_send_existing_target_as_translation_context() -> Non
     assert models.calls
     assert all("<EXISTING_TARGET_EN>" not in call.prompt for call in models.calls)
     assert all("Old target wording" not in call.prompt for call in models.calls)
+
+
+def test_translation_uses_small_default_model_requests_without_workflow_override() -> None:
+    source = ("## First\n\n" + ("first " * 700) + "\n\n" + "## Second\n\n" + ("second " * 700) + "\n").encode()
+    models = EchoChunkModels()
+
+    RuntimeContent(
+        cast(RuntimeSource, object()),
+        cast(RecordedModels, models),
+        {},
+    ).translate_document(document_for(source, target=None))
+
+    assert len(models.calls) == 2
+    assert all(len(call.prompt) <= 6000 for call in models.calls)
+
+
+def test_large_source_only_document_assembles_after_all_small_chunks() -> None:
+    source = "".join(
+        f"## Entry {index}\n\nDefinition {index} with [a link](guide-{index}.md).\n\n"
+        + ("Details. " * 90)
+        + "\n"
+        for index in range(1, 31)
+    ).encode()
+    models = EchoChunkModels()
+    content = RuntimeContent(cast(RuntimeSource, object()), cast(RecordedModels, models), {})
+
+    _accepted, translated = content._translate_document(document_for(source, target=None))
+
+    assert len(models.calls) >= 8
+    assert all(len(call.prompt) <= 6000 for call in models.calls)
+    assert translated.translated_markdown.encode() == source
 
 
 def test_existing_target_cannot_override_symmetric_source_link_destination() -> None:

@@ -181,3 +181,14 @@ Live glossary probe на DeepSeek через Yandex Cloud успешно обр�
 runtime focused `105 passed, 10 deselected`, document contract `56 passed`,
 probe `5 passed, 1 skipped`, YAML/Python syntax и `git diff --check` зелёные.
 Изменения пока не закоммичены и не запушены.
+
+После run `36309411331` установлен root cause его `structure_mismatch`: workflow
+использовал runtime default `200000`, потому что вызывающий workflow в
+`ydb-platform/ydb` не передавал `YDBDOC_MAX_MODEL_REQUEST_CHARACTERS`. Поэтому
+glossary отправлялся восемью большими чанками. Дополнительно локальный parser
+помечает валидные source-owned Diplodoc YFM-условия как diagnostics. В итоге
+каждый ответ модели мог пройти chunk-level проверку, но финальный assembled
+документ отвергался. Runtime default теперь `6000`, а одинаковые source-owned
+YFM diagnostic bytes разрешены; новые или изменённые diagnostics по-прежнему
+отклоняются. Добавлены regression tests для большого source-only документа,
+полной склейки малых чанков и YFM-условий.

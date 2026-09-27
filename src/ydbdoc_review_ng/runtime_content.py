@@ -1097,7 +1097,7 @@ class RuntimeContent:
         entry = document.entry
         limit = int(
             self.environment.get("YDBDOC_MAX_MODEL_REQUEST_CHARACTERS")
-            or "200000"
+            or "6000"
         )
         target_reference_bytes = (
             entry.target_content
@@ -1580,7 +1580,7 @@ class RuntimeContent:
                 ),
                 max_request_characters=int(
                     self.environment.get("YDBDOC_MAX_MODEL_REQUEST_CHARACTERS")
-                    or "200000"
+                    or "6000"
                 ),
             )
             if (

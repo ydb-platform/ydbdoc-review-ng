@@ -553,20 +553,27 @@ def verify_document_candidate(
     /,
 ) -> None:
     """Validate a whole-document candidate without projecting source formatting."""
-    from ydbdoc_review_ng.translation.assembly import verify_protected_fragments
+    from ydbdoc_review_ng.translation.assembly import ProtectedMismatch, verify_protected_fragments
 
-    if target_plan.diagnostics:
-        raise DocumentTranslationError("document_response:structure_mismatch")
+    if _diagnostic_fragments(source, source_plan) != _diagnostic_fragments(target, target_plan):
+        raise DocumentTranslationError(
+            "document_response:structure_mismatch:target_plan_diagnostics"
+        )
     if _table_shapes(source, source_plan) != _table_shapes(target, target_plan):
-        raise DocumentTranslationError("document_response:structure_mismatch")
+        raise DocumentTranslationError("document_response:structure_mismatch:table_shape")
     _validate_publishable_markdown(source, target)
-    verify_protected_fragments(
-        source,
-        source_plan,
-        target,
-        target_plan,
-        exact_non_field_slices=False,
-    )
+    try:
+        verify_protected_fragments(
+            source,
+            source_plan,
+            target,
+            target_plan,
+            exact_non_field_slices=False,
+        )
+    except ProtectedMismatch as error:
+        raise DocumentTranslationError(
+            f"document_response:structure_mismatch:protected_fragments:field={error.field_position}"
+        ) from None
     source_owned = tuple(
         source[start:end] for start, end in _source_owned_spans(source, source_plan)
     )
@@ -574,7 +581,9 @@ def verify_document_candidate(
         target[start:end] for start, end in _source_owned_spans(target, target_plan)
     )
     if source_owned != target_owned:
-        raise DocumentTranslationError("document_response:structure_mismatch")
+        raise DocumentTranslationError(
+            "document_response:structure_mismatch:source_owned_fragments"
+        )
 
 
 _LOCALIZABLE_LINK_KINDS = {
@@ -591,6 +600,11 @@ def _has_localizable_link_regions(plan: SourcePlan) -> bool:
         for field in fields_of(plan)
         for region in field.protected_regions
     )
+
+
+def _diagnostic_fragments(data: bytes, plan: SourcePlan, /) -> tuple[bytes, ...]:
+    """Return parser-diagnostic bytes so source-owned YFM can remain opaque."""
+    return tuple(data[item.span.start : item.span.end] for item in plan.diagnostics)
 
 
 def _normalize_localized_link_regions(
@@ -1082,12 +1096,14 @@ def validate_chunk_response(
         source_spans, source_plan_value, candidate_spans, target_plan_value
     ):
         raise DocumentTranslationError("document_response:placeholder_mismatch")
-    if target_plan_value.diagnostics:
-        raise DocumentTranslationError("document_response:structure_mismatch")
+    if _diagnostic_fragments(source_chunk, source_plan_value) != _diagnostic_fragments(
+        candidate_chunk, target_plan_value
+    ):
+        raise DocumentTranslationError("document_response:structure_mismatch:chunk_candidate")
     if _table_shapes(source_chunk, source_plan_value) != _table_shapes(
         candidate_chunk, target_plan_value
     ):
-        raise DocumentTranslationError("document_response:structure_mismatch")
+        raise DocumentTranslationError("document_response:structure_mismatch:chunk_candidate")
     from ydbdoc_review_ng.translation.assembly import ProtectedMismatch
 
     try:
@@ -1104,10 +1120,12 @@ def validate_chunk_response(
             target_plan_value,
             localized_links=localized_links,
         )
-    except DocumentTranslationError:
-        raise
+    except DocumentTranslationError as error:
+        raise DocumentTranslationError(f"{error}:chunk_candidate") from None
     except (ProtectedMismatch, TypeError, ValueError, yaml.YAMLError):
-        raise DocumentTranslationError("document_response:structure_mismatch") from None
+        raise DocumentTranslationError(
+            "document_response:structure_mismatch:chunk_candidate"
+        ) from None
 
 
 def restore_document(
@@ -1166,6 +1184,10 @@ def restore_document(
             target_plan,
             localized_links=localized_links,
         )
+    except DocumentTranslationError as error:
+        raise DocumentTranslationError(f"{error}:final_candidate") from None
     except (UnicodeError, ValueError, TypeError):
-        raise DocumentTranslationError("document_response:structure_mismatch") from None
+        raise DocumentTranslationError(
+            "document_response:structure_mismatch:final_candidate"
+        ) from None
     return candidate
