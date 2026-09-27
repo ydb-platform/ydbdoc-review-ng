@@ -1172,8 +1172,6 @@ class RuntimeContent:
                 )
                 if operator_context is not None:
                     prompt += document_operator_guidance(operator_context)
-                if len(prompt) > limit:
-                    raise DocumentTranslationError("document_chunk:correction_prompt_exceeds_limit")
                 result = invoke_model(prompt)
                 if not result.success or result.text is None:
                     should_split = (

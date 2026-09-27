@@ -1182,37 +1182,33 @@ def test_response_cap_rejects_one_oversized_top_level_block_before_model_call() 
     assert models.calls == []
 
 
-def test_near_limit_correction_reservation_fails_before_model_call() -> None:
+def test_correction_dialog_is_not_rejected_by_request_length_guard() -> None:
     document = document_for(b"# See [guide](guide.md).\n")
     prepared = prepare_document(document.source, document.plan, max_characters=100_000)
-    invalid = prepared.chunks[0].text.replace(prepared.placeholders[0].token, "", 1)
-    models = ScriptedModels([invalid])
+    invalid = prepared.chunks[0].text.replace(prepared.placeholders[0].token, "", 1) + "x" * 10_000
+    models = ScriptedModels([invalid, prepared.chunks[0].text])
     operator_context = "Reviewer context"
-    initial_prompt = (
-        build_document_prompt(prepared.chunks[0], "ru", "en")
-        + document_operator_guidance(operator_context)
-    )
-    limit = len(initial_prompt)
 
-    with pytest.raises(DocumentTranslationError, match="top_level_block_exceeds_limit"):
-        content_with(
-            models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": str(limit)}
-        ).translate_document(document, operator_context=operator_context)
+    accepted = content_with(
+        models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "6000"}
+    ).translate_document(document, operator_context=operator_context)
 
-    assert models.calls == []
+    assert accepted
+    assert len(models.calls) == 2
+    assert "<PREVIOUS_RESPONSE>" in models.calls[1].prompt
 
 
-def test_long_protected_fragment_correction_is_reserved_before_model_call() -> None:
+def test_long_protected_fragment_does_not_inflate_model_prompt() -> None:
     source = b"```text\n" + b"x" * 5_000 + b"\n```\n\nVisible prose.\n"
     document = document_for(source, target=None)
-    models = ScriptedModels([])
+    prepared = prepare_document(document.source, document.plan, max_characters=100_000)
+    models = ScriptedModels([prepared.chunks[0].text])
 
-    with pytest.raises(DocumentTranslationError, match="top_level_block_exceeds_limit"):
-        content_with(models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "900"}).translate_document(
-            document
-        )
+    content_with(models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "900"}).translate_document(
+        document
+    )
 
-    assert models.calls == []
+    assert len(models.calls) == 1
 
 
 def test_multiblock_unit_accepts_cosmetic_blank_line_change_without_retry() -> None:

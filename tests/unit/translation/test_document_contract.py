@@ -725,8 +725,8 @@ def test_configured_limit_applies_to_each_complete_prompt_with_minimum_chunks() 
         for chunk in request.chunks
     )
 
-    assert len(request.chunks) == 2
-    assert all(len(prompt) <= 1_700 for pair in prompts for prompt in pair)
+    assert len(request.chunks) == 1
+    assert all(len(pair[0]) <= 1_700 for pair in prompts)
     assert "".join(chunk.text for chunk in request.chunks).encode() == source
     assert all(
         left.block_end == right.block_start

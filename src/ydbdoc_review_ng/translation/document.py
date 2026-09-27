@@ -878,32 +878,15 @@ def prepare_document(
         if len(text) > RAW_MARKDOWN_RESPONSE_MAX_CHARACTERS:
             return False
         chunk = DocumentChunk(text, block_start, block_end, tuple(_TOKEN.findall(text)))
-        correction_note = build_document_correction_note(
-            source,
+        prompt = build_document_prompt(
             chunk,
-            tuple(placeholders),
-            chunk.placeholders,
+            source_locale,
+            target_locale,
+            terminology_context=terminology_context,
         )
-        prompts = [
-            build_document_prompt(
-                chunk,
-                source_locale,
-                target_locale,
-                terminology_context=terminology_context,
-            ),
-            build_document_prompt(
-                chunk,
-                source_locale,
-                target_locale,
-                correction=True,
-                correction_note=correction_note,
-                terminology_context=terminology_context,
-            ),
-        ]
         if operator_context is not None:
-            suffix = document_operator_guidance(operator_context)
-            prompts = [prompt + suffix for prompt in prompts]
-        return all(len(prompt) <= max_characters for prompt in prompts)
+            prompt += document_operator_guidance(operator_context)
+        return len(prompt) <= max_characters
 
     if not plan.blocks:
         if not fits("", 0, 0):
