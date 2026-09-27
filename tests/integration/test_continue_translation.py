@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
-from _runtime_services import raw_translation_source
+from _runtime_services import raw_translation_source, replace_response_text, request_prompt
 from test_checkpoint_capture import CaptureServices
 
 from ydbdoc_review_ng import application
@@ -81,7 +81,7 @@ class ContinueServices(CaptureServices):
 
     def model(self, request):
         body = json.loads(request.body)
-        prompt = body["messages"][-1]["text"]
+        prompt = request_prompt(body)
         response = super().model(request)
         self.prompts.append((self.roles[-1], prompt))
         values = None
@@ -92,13 +92,13 @@ class ContinueServices(CaptureServices):
             raw = source.replace("Source", "Resumed")
             if self.invalid_pending and self.invalid_pending in source:
                 raw = "[[YDBDOC_PROTECTED_9999]]"
-            data = json.loads(response.body)
-            data["result"]["alternatives"][0]["message"]["text"] = raw
-            return HttpResponse(200, json.dumps(data).encode(), Decimal("0.01"))
+            return HttpResponse(200, replace_response_text(response.body, raw), Decimal("0.01"))
         if values is not None:
-            data = json.loads(response.body)
-            data["result"]["alternatives"][0]["message"]["text"] = json.dumps(values)
-            response = HttpResponse(200, json.dumps(data).encode(), Decimal("0.01"))
+            response = HttpResponse(
+                200,
+                replace_response_text(response.body, json.dumps(values)),
+                Decimal("0.01"),
+            )
         return response
 
     def stop_and_continue(self):

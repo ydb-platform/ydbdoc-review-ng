@@ -76,6 +76,29 @@ def test_translation_prompt_forbids_creating_or_reusing_links() -> None:
     assert "Keep the source link count unchanged" in prompt
 
 
+def test_translation_prompt_sets_ydb_role_and_explicit_glossary_contract() -> None:
+    source = "Таблица использует защищённую ссылку [оператор](glossary.md#operator).\n".encode()
+    _plan, request = prepared(source)
+
+    prompt = build_document_prompt(
+        request.chunks[0],
+        "ru",
+        "en",
+        terminology_context=(
+            "SOURCE: строковые таблицы\nTARGET: row-oriented tables\n"
+            "SOURCE: оператор\nTARGET: operator"
+        ),
+    )
+
+    assert "You are the YDB technical-documentation chunk translator" in prompt
+    assert "Protected placeholders are opaque source fragments" in prompt
+    assert "exactly once" in prompt
+    assert "same top-level source block" in prompt
+    assert "never output or translate the glossary" in prompt
+    assert "SOURCE: строковые таблицы" in prompt
+    assert "TARGET: row-oriented tables" in prompt
+
+
 def test_translation_prompt_preserves_chunk_boundary_whitespace() -> None:
     source = b"\n![Image](image.svg){inline=false}\n\nText.\n\n"
     _plan, request = prepared(source)
@@ -718,7 +741,7 @@ def test_configured_limit_applies_to_each_complete_prompt_with_minimum_chunks() 
     request = prepare_document(
         source,
         plan,
-        max_characters=2_200,
+        max_characters=2_450,
         source_locale="ru",
         target_locale="en",
         operator_context=operator_context,
@@ -749,7 +772,7 @@ def test_configured_limit_applies_to_each_complete_prompt_with_minimum_chunks() 
     )
 
     assert len(request.chunks) == 2
-    assert all(len(pair[0]) <= 2_200 for pair in prompts)
+    assert all(len(pair[0]) <= 2_450 for pair in prompts)
     assert "".join(chunk.text for chunk in request.chunks).encode() == source
     assert all(
         left.block_end == right.block_start

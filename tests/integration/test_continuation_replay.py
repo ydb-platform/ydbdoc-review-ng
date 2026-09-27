@@ -10,7 +10,7 @@ from decimal import Decimal
 from urllib.parse import parse_qs, unquote, urlsplit
 
 import pytest
-from _runtime_services import RuntimeServices
+from _runtime_services import RuntimeServices, request_schema
 
 from ydbdoc_review_ng.application import TranslateWorkflowInput
 from ydbdoc_review_ng.continuation import (
@@ -144,7 +144,7 @@ class ReplayServices(RuntimeServices):
         from ydbdoc_review_ng.models import HttpResponse
 
         body = json.loads(request.body)
-        properties = body["jsonSchema"]["schema"]["properties"]
+        properties = request_schema(body)["schema"]["properties"]
         self.events.append(("MODEL", tuple(properties)))
         if "enum" in next(iter(properties.values())):
             values = {key: self.direction_values[key] for key in properties}

@@ -18,6 +18,39 @@ def raw_translation_source(prompt):
     return source
 
 
+def request_prompt(body):
+    """Read either native Yandex or OpenAI-compatible message payloads."""
+    message = body["messages"][-1]
+    return message.get("text", message.get("content", ""))
+
+
+def request_schema(body):
+    """Read structured-output schemas from native and OpenAI payloads."""
+    if body.get("jsonSchema") is not None:
+        return body["jsonSchema"]
+    response_format = body.get("response_format")
+    if response_format is None:
+        return None
+    return {"schema": response_format["json_schema"]["schema"]}
+
+
+def replace_response_text(response_body, text):
+    """Replace assistant text in either provider response envelope."""
+    data = json.loads(response_body)
+    if "choices" in data:
+        data["choices"][0]["message"]["content"] = text
+    else:
+        data["result"]["alternatives"][0]["message"]["text"] = text
+    return json.dumps(data).encode()
+
+
+def response_text(response_body):
+    data = json.loads(response_body)
+    if "choices" in data:
+        return data["choices"][0]["message"]["content"]
+    return data["result"]["alternatives"][0]["message"]["text"]
+
+
 def raw_repair_context(prompt, tag):
     return prompt.split(f"<{tag}>\n", 1)[1].split(f"</{tag}>", 1)[0]
 
@@ -192,9 +225,9 @@ class RuntimeServices:
         from ydbdoc_review_ng.models import HttpResponse
 
         body = json.loads(request.body)
-        schema = body.get("jsonSchema")
+        schema = request_schema(body)
         if schema is None:
-            prompt = body["messages"][-1]["text"]
+            prompt = request_prompt(body)
             if prompt.startswith("Repair"):
                 self.events.append(("REPAIR", "markdown"))
                 text = rewrite_markdown(raw_repair_context(prompt, "current-target"), "Corrected")
@@ -207,30 +240,37 @@ class RuntimeServices:
             if "verdict" in properties:
                 values = {"verdict": "GREEN", "findings": []}
                 if "corrected_markdown" in properties:
-                    prompt = body["messages"][-1]["text"]
+                    prompt = request_prompt(body)
                     values["corrected_markdown"] = raw_repair_context(
                         prompt, "final-target"
                     )
             else:
                 values = {key: "Translated" for key in properties}
             text = json.dumps(values)
-        return HttpResponse(
-            200,
-            json.dumps(
-                {
-                    "result": {
-                        "alternatives": [
-                            {
-                                "status": "ALTERNATIVE_STATUS_FINAL",
-                                "message": {"role": "assistant", "text": text},
-                            }
-                        ],
-                        "usage": {"inputTextTokens": "10", "completionTokens": "5"},
+        if "model" in body:
+            payload = {
+                "model": "test-model",
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": text},
                     }
+                ],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+            }
+        else:
+            payload = {
+                "result": {
+                    "alternatives": [
+                        {
+                            "status": "ALTERNATIVE_STATUS_FINAL",
+                            "message": {"role": "assistant", "text": text},
+                        }
+                    ],
+                    "usage": {"inputTextTokens": "10", "completionTokens": "5"},
                 }
-            ).encode(),
-            Decimal("0.01"),
-        )
+            }
+        return HttpResponse(200, json.dumps(payload).encode(), Decimal("0.01"))
 
 
 class InstalledContinueServices(RuntimeServices):
@@ -315,7 +355,7 @@ class InstalledContinueServices(RuntimeServices):
         from ydbdoc_review_ng.models import HttpResponse
 
         response = super().model(request)
-        schema = json.loads(request.body).get("jsonSchema")
+        schema = request_schema(json.loads(request.body))
         if self.stop_review and schema is not None and "verdict" in schema["schema"]["properties"]:
             properties = schema["schema"]["properties"]
             values = {
@@ -332,9 +372,12 @@ class InstalledContinueServices(RuntimeServices):
                 ],
             }
             if "corrected_markdown" in properties:
-                prompt = json.loads(request.body)["messages"][-1]["text"]
+                prompt = request_prompt(json.loads(request.body))
                 values["corrected_markdown"] = raw_repair_context(prompt, "final-target")
             body = json.loads(response.body)
-            body["result"]["alternatives"][0]["message"]["text"] = json.dumps(values)
+            if "choices" in body:
+                body["choices"][0]["message"]["content"] = json.dumps(values)
+            else:
+                body["result"]["alternatives"][0]["message"]["text"] = json.dumps(values)
             return HttpResponse(200, json.dumps(body).encode(), Decimal("0.01"))
         return response

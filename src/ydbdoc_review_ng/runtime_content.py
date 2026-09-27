@@ -556,7 +556,12 @@ class RuntimeContent:
         self.publisher: GitPublicationAdapter
 
     def _terminology_context(
-        self, document: Document, /, *, max_characters: int = 8_000
+        self,
+        document: Document,
+        /,
+        *,
+        max_characters: int = 8_000,
+        source_text: str | None = None,
     ) -> str | None:
         plans = self.plans
         if plans is None:
@@ -584,7 +589,7 @@ class RuntimeContent:
             RepoPath(f"{target_root.value}/concepts/glossary.md"),
         )
         return bilingual_glossary_context(
-            document.source.decode("utf-8"),
+            document.source.decode("utf-8") if source_text is None else source_text,
             source_glossary,
             target_glossary,
             max_characters=max(1, min(8_000, max_characters // 6)),
@@ -1134,6 +1139,11 @@ class RuntimeContent:
         ) -> tuple[str | None, AttemptError | None, bool]:
             note: str | None = None
             previous_response: str | None = None
+            chunk_terminology_context = self._terminology_context(
+                document,
+                max_characters=limit,
+                source_text=chunk.text,
+            )
 
             def invoke_model(prompt: str, /) -> ModelCallResult:
                 result = self.models.invoke(
@@ -1168,7 +1178,7 @@ class RuntimeContent:
                     correction=attempt == 2,
                     correction_note=note,
                     previous_response=previous_response,
-                    terminology_context=terminology_context,
+                    terminology_context=chunk_terminology_context,
                 )
                 if operator_context is not None:
                     prompt += document_operator_guidance(operator_context)

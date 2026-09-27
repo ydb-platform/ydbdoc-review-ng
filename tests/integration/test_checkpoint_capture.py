@@ -12,6 +12,8 @@ import pytest
 from _runtime_services import (
     RuntimeServices,
     raw_repair_context,
+    request_prompt,
+    request_schema,
     rewrite_markdown,
     translated_markdown,
 )
@@ -183,8 +185,8 @@ class CaptureServices(RuntimeServices):
 
     def model(self, request):
         body = json.loads(request.body)
-        prompt = body["messages"][-1]["text"]
-        schema_wrapper = body.get("jsonSchema")
+        prompt = request_prompt(body)
+        schema_wrapper = request_schema(body)
         if schema_wrapper is None:
             if prompt.startswith("Repair"):
                 role = "repair"
@@ -234,6 +236,7 @@ class CaptureServices(RuntimeServices):
                     raise TimeoutError("transport failed")
         elif prompt.startswith("Compare"):
             role = "direction"
+            schema = schema_wrapper["schema"]
             values = dict.fromkeys(schema["properties"], "undetermined")
         else:
             raise AssertionError("unexpected structured model role")
@@ -242,26 +245,26 @@ class CaptureServices(RuntimeServices):
             raise TimeoutError("transport failed")
         if role not in {"translate", "repair"}:
             text = json.dumps(values)
-        return HttpResponse(
-            200,
-            json.dumps(
-                {
-                    "result": {
-                        "alternatives": [
-                            {
-                                "status": "ALTERNATIVE_STATUS_FINAL",
-                                "message": {
-                                    "role": "assistant",
-                                    "text": text,
-                                },
-                            }
-                        ],
-                        "usage": {"inputTextTokens": "10", "completionTokens": "5"},
-                    }
+        if "model" in body:
+            payload = {
+                "model": "test-model",
+                "choices": [{
+                    "finish_reason": "stop",
+                    "message": {"role": "assistant", "content": text},
+                }],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+            }
+        else:
+            payload = {
+                "result": {
+                    "alternatives": [{
+                        "status": "ALTERNATIVE_STATUS_FINAL",
+                        "message": {"role": "assistant", "text": text},
+                    }],
+                    "usage": {"inputTextTokens": "10", "completionTokens": "5"},
                 }
-            ).encode(),
-            Decimal("0.01"),
-        )
+            }
+        return HttpResponse(200, json.dumps(payload).encode(), Decimal("0.01"))
 
     def runtime(self):
         return create_runtime(
@@ -382,7 +385,10 @@ def test_provider_non_final_translation_is_rejected_before_publication():
         def model(self, request):
             response = super().model(request)
             payload = json.loads(response.body)
-            payload["result"]["alternatives"][0]["status"] = "ALTERNATIVE_STATUS_TRUNCATED_FINAL"
+            if "choices" in payload:
+                payload["choices"][0]["finish_reason"] = "length"
+            else:
+                payload["result"]["alternatives"][0]["status"] = "ALTERNATIVE_STATUS_TRUNCATED_FINAL"
             return HttpResponse(200, json.dumps(payload).encode(), Decimal("0.01"))
 
     services = NonFinalServices(names=("a",))
@@ -391,8 +397,8 @@ def test_provider_non_final_translation_is_rejected_before_publication():
         services.translate()
 
     attempts = [row for row in services.audit if "attempt_id" in row]
-    assert services.roles == ["translate"]
-    assert len(attempts) == 1 and attempts[0]["error"] == "non_final"
+    assert services.roles == ["translate", "translate"]
+    assert len(attempts) == 2 and all(row["error"] == "non_final" for row in attempts)
     assert services.commits == 0 and services.blobs == {} and services.tree == []
 
 

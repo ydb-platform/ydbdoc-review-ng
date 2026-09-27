@@ -8,7 +8,7 @@ import json
 from decimal import Decimal
 
 import pytest
-from _runtime_services import RuntimeServices
+from _runtime_services import RuntimeServices, request_prompt, request_schema
 
 
 def test_merged_source_uses_workflow_pinned_base_after_branch_advances() -> None:
@@ -164,7 +164,7 @@ def test_runtime_publishes_field_local_inline_code_grammar_order_once() -> None:
 
         def model(self, request):
             body = json.loads(request.body)
-            if body.get("jsonSchema") is not None:
+            if request_schema(body) is not None:
                 return super().model(request)
             self.raw_calls += 1
             self.events.append(("MODEL", ("raw_markdown",)))
@@ -240,7 +240,7 @@ def test_runtime_preserves_list_formatting_drift_through_critic() -> None:
 
         def model(self, request):
             body = json.loads(request.body)
-            schema_wrapper = body.get("jsonSchema")
+            schema_wrapper = request_schema(body)
             if schema_wrapper is not None:
                 self.critic_calls += 1
                 if self.critic_calls > 1:
@@ -273,7 +273,7 @@ def test_runtime_preserves_list_formatting_drift_through_critic() -> None:
                 text = json.dumps(values)
             else:
                 self.raw_calls += 1
-                prompt = body["messages"][-1]["text"]
+                prompt = request_prompt(body)
                 self.events.append(
                     ("REPAIR", "markdown")
                     if prompt.startswith("Repair")
@@ -356,16 +356,19 @@ class ContentFilterServices(RuntimeServices):
         from ydbdoc_review_ng.models import HttpResponse
 
         body = json.loads(request.body)
-        if body.get("jsonSchema") is None and not body["messages"][-1]["text"].startswith(
+        if request_schema(body) is None and not request_prompt(body).startswith(
             "Repair"
         ):
             self.raw_request_bodies.append(request.body)
             response = super().model(request)
             if len(self.raw_request_bodies) <= self.filtered_responses:
                 document = json.loads(response.body)
-                document["result"]["alternatives"][0][
-                    "status"
-                ] = "ALTERNATIVE_STATUS_CONTENT_FILTER"
+                if "choices" in document:
+                    document["choices"][0]["finish_reason"] = "content_filter"
+                else:
+                    document["result"]["alternatives"][0][
+                        "status"
+                    ] = "ALTERNATIVE_STATUS_CONTENT_FILTER"
                 return HttpResponse(
                     200,
                     json.dumps(document).encode(),
@@ -421,7 +424,7 @@ def test_runtime_two_content_filters_fail_without_publication_or_checkpoint() ->
     from ydbdoc_review_ng.cli import main
     from ydbdoc_review_ng.runtime import create_runtime
 
-    services = ContentFilterServices(filtered_responses=2)
+    services = ContentFilterServices(filtered_responses=4)
     runtime = create_runtime(
         environment={
             "GITHUB_ACTOR": "maintainer",
@@ -445,17 +448,11 @@ def test_runtime_two_content_filters_fail_without_publication_or_checkpoint() ->
         if "attempt_id" in row and row["role"] == "translate"
     ]
     assert exit_code == 1
-    assert len(services.raw_request_bodies) == 2
+    assert len(services.raw_request_bodies) == 4
     assert services.raw_request_bodies[0] == services.raw_request_bodies[1]
-    assert [row["status"] for row in translation_attempts] == ["failed", "failed"]
-    assert [row["error"] for row in translation_attempts] == [
-        "content_filter",
-        "content_filter",
-    ]
-    assert [row["cost_rub"] for row in translation_attempts] == [
-        Decimal("0.01"),
-        Decimal("0.01"),
-    ]
+    assert [row["status"] for row in translation_attempts] == ["failed"] * 4
+    assert [row["error"] for row in translation_attempts] == ["content_filter"] * 4
+    assert [row["cost_rub"] for row in translation_attempts] == [Decimal("0.01")] * 4
     assert not any(
         method in {"POST", "PATCH"} for method, _path in services.events
     )
@@ -478,7 +475,7 @@ def test_runtime_adaptive_split_audits_parent_and_children_then_publishes_once()
     from ydbdoc_review_ng.cli import main
     from ydbdoc_review_ng.runtime import create_runtime
 
-    services = AdaptiveContentFilterServices(filtered_responses=2)
+    services = AdaptiveContentFilterServices(filtered_responses=4)
     runtime = create_runtime(
         environment={
             "GITHUB_ACTOR": "maintainer",
@@ -502,21 +499,11 @@ def test_runtime_adaptive_split_audits_parent_and_children_then_publishes_once()
         if "attempt_id" in row and row["role"] == "translate"
     ]
     assert exit_code == 0
-    assert len(services.raw_request_bodies) == 4
+    assert len(services.raw_request_bodies) == 9
     assert services.raw_request_bodies[0] == services.raw_request_bodies[1]
-    assert [row["status"] for row in translation_attempts] == [
-        "failed",
-        "failed",
-        "succeeded",
-        "succeeded",
-    ]
-    assert [row["error"] for row in translation_attempts] == [
-        "content_filter",
-        "content_filter",
-        None,
-        None,
-    ]
-    assert [row["cost_rub"] for row in translation_attempts] == [Decimal("0.01")] * 4
+    assert [row["status"] for row in translation_attempts] == ["failed"] * 4 + ["succeeded"] * 5
+    assert [row["error"] for row in translation_attempts] == ["content_filter"] * 4 + [None] * 5
+    assert [row["cost_rub"] for row in translation_attempts] == [Decimal("0.01")] * 9
     assert sum(
         method in {"POST", "PATCH"} and "/git/refs" in path
         for method, path in services.events
@@ -551,16 +538,12 @@ def test_runtime_filtered_child_splits_again_and_publishes_once() -> None:
         if "attempt_id" in row and row["role"] == "translate"
     ]
     assert exit_code == 0
-    assert len(services.raw_request_bodies) == 7
+    assert len(services.raw_request_bodies) == 9
     assert services.raw_request_bodies[0] == services.raw_request_bodies[1]
     assert services.raw_request_bodies[2] == services.raw_request_bodies[3]
     assert services.raw_request_bodies[0] != services.raw_request_bodies[2]
-    assert [row["error"] for row in translation_attempts] == ["content_filter"] * 4 + [
-        None,
-        None,
-        None,
-    ]
-    assert [row["cost_rub"] for row in translation_attempts] == [Decimal("0.01")] * 7
+    assert [row["error"] for row in translation_attempts] == ["content_filter"] * 4 + [None] * 5
+    assert [row["cost_rub"] for row in translation_attempts] == [Decimal("0.01")] * 9
     assert sum(
         method in {"POST", "PATCH"} and "/git/refs" in path
         for method, path in services.events
@@ -834,7 +817,7 @@ class _T017R07Services(RuntimeServices):
         from ydbdoc_review_ng.models import HttpResponse
 
         body = json.loads(request.body)
-        schema_wrapper = body.get("jsonSchema")
+        schema_wrapper = request_schema(body)
         if schema_wrapper is None:
             return super().model(request)
         schema = schema_wrapper["schema"]
@@ -1154,7 +1137,7 @@ class _T017N04Services(RuntimeServices):
         from ydbdoc_review_ng.models import HttpResponse
 
         body = json.loads(request.body)
-        schema_wrapper = body.get("jsonSchema")
+        schema_wrapper = request_schema(body)
         if schema_wrapper is None:
             self.events.append(("MODEL", ("raw_markdown",)))
             text = _t017_n04_documents()[1].decode()
@@ -1183,7 +1166,7 @@ class _T017N04Services(RuntimeServices):
         elif "verdict" in properties:
             values = {"verdict": "GREEN", "findings": []}
             if "corrected_markdown" in properties:
-                prompt = body["messages"][-1]["text"]
+                prompt = request_prompt(body)
                 values["corrected_markdown"] = prompt.split(
                     "<final-target>\n", 1
                 )[1].split("</final-target>", 1)[0]
@@ -1347,12 +1330,12 @@ def test_t017_n05_truncated_http_response_is_audited_once_with_unknown_cost() ->
 
     attempts = [row for row in services.audit if "attempt_id" in row]
     assert result == 1
-    assert boundary.call_count == 1
-    assert len(attempts) == 1
-    assert attempts[0]["status"] == "failed"
-    assert attempts[0]["error"] == "transport"
-    assert attempts[0]["response"] == partial
-    assert attempts[0]["cost_rub"] is None
+    assert boundary.call_count == 2
+    assert len(attempts) == 2
+    assert all(attempt["status"] == "failed" for attempt in attempts)
+    assert all(attempt["error"] == "transport" for attempt in attempts)
+    assert all(attempt["response"] == partial for attempt in attempts)
+    assert all(attempt["cost_rub"] is None for attempt in attempts)
     assert services.audit[-1]["status"] == "failed"
     assert services.audit[-1]["error"] == "prepare_failed"
     assert not any(method in {"POST", "PATCH"} for method, _path in services.events)
@@ -1416,12 +1399,12 @@ def test_t017_q02_truncated_http_error_body_is_audited_once_with_unknown_cost() 
 
     attempts = [row for row in services.audit if "attempt_id" in row]
     assert result == 1
-    assert boundary.call_count == 1
-    assert len(attempts) == 1
-    assert attempts[0]["status"] == "failed"
-    assert attempts[0]["error"] == "transport"
-    assert attempts[0]["response"] == partial
-    assert attempts[0]["cost_rub"] is None
+    assert boundary.call_count == 2
+    assert len(attempts) == 2
+    assert all(attempt["status"] == "failed" for attempt in attempts)
+    assert all(attempt["error"] == "transport" for attempt in attempts)
+    assert all(attempt["response"] == partial for attempt in attempts)
+    assert all(attempt["cost_rub"] is None for attempt in attempts)
     assert services.audit[-1]["status"] == "failed"
     assert services.audit[-1]["error"] == "prepare_failed"
     assert not any(method in {"POST", "PATCH"} for method, _path in services.events)
@@ -1740,9 +1723,9 @@ def test_model_repair_is_published_before_final_critic_and_only_then_pr():
 
         def model(self, request):
             body = json.loads(request.body)
-            schema_wrapper = body.get("jsonSchema")
+            schema_wrapper = request_schema(body)
             if schema_wrapper is None:
-                prompt = body["messages"][-1]["text"]
+                prompt = request_prompt(body)
                 if prompt.startswith("Repair"):
                     self.events.append(("REPAIR", "markdown"))
                     current = prompt.split("<current-target>\n", 1)[1].split(
@@ -1793,7 +1776,7 @@ def test_model_repair_is_published_before_final_critic_and_only_then_pr():
                 ],
             }
             if "corrected_markdown" in schema["properties"]:
-                prompt = body["messages"][-1]["text"]
+                prompt = request_prompt(body)
                 current = prompt.split("<final-target>\n", 1)[1].split(
                     "</final-target>", 1
                 )[0]
@@ -1849,7 +1832,7 @@ def test_runtime_never_reports_green_after_branch_moves_during_critic():
     class Services(RuntimeServices):
         def model(self, request):
             response = super().model(request)
-            schema_wrapper = json.loads(request.body).get("jsonSchema")
+            schema_wrapper = request_schema(json.loads(request.body))
             if schema_wrapper and "verdict" in schema_wrapper["schema"]["properties"]:
                 self.branch_head = "f" * 40
             return response

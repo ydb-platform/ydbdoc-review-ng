@@ -100,7 +100,7 @@ class InvalidThenFilteredThenEchoModels:
         self.calls.append(request)
         if len(self.calls) == 1:
             return ModelCallResult(self.invalid, None, ())
-        if len(self.calls) == 2:
+        if len(self.calls) in {2, 3}:
             return ModelCallResult(None, AttemptError.CONTENT_FILTER, ())
         return ModelCallResult(_source_from_prompt(request.prompt), None, ())
 
@@ -111,7 +111,10 @@ class FilterTwiceThenEchoModels:
 
     def invoke(self, request: ModelRequest, /) -> ModelCallResult:
         self.calls.append(request)
-        if len(self.calls) <= 2:
+        # DeepSeek is attempted first and Yandex is the fallback for each
+        # provider failure. Keep both attempts filtered for the parent and
+        # first adaptive child so this exercises recursive splitting.
+        if len(self.calls) <= 4:
             return ModelCallResult(None, AttemptError.CONTENT_FILTER, ())
         return ModelCallResult(_source_from_prompt(request.prompt), None, ())
 
@@ -343,6 +346,35 @@ def test_translate_document_uses_complete_markdown_and_selected_direction(
     )
 
 
+def test_translation_uses_glossary_context_for_each_chunk(monkeypatch) -> None:
+    source = (
+        "## FIRST\n\n" + ("first " * 180) + "\n\n"
+        "## SECOND\n\n" + ("second " * 180) + "\n"
+    ).encode()
+    document = document_for(source, target=None)
+    models = EchoChunkModels()
+    content = content_with(models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "4000"})
+    contexts: list[str | None] = []
+
+    def context_for_chunk(document, /, *, max_characters: int = 8_000, source_text=None):
+        contexts.append(source_text)
+        if source_text is None:
+            return "DOCUMENT_GLOSSARY"
+        return "FIRST_GLOSSARY" if "FIRST" in source_text else "SECOND_GLOSSARY"
+
+    monkeypatch.setattr(content, "_terminology_context", context_for_chunk)
+
+    content.translate_document(document)
+
+    assert len(models.calls) == 2
+    assert any(value is not None and "FIRST" in value for value in contexts)
+    assert any(value is not None and "SECOND" in value for value in contexts)
+    assert "FIRST_GLOSSARY" in models.calls[0].prompt
+    assert "SECOND_GLOSSARY" in models.calls[1].prompt
+    assert "DOCUMENT_GLOSSARY" not in models.calls[0].prompt
+    assert "DOCUMENT_GLOSSARY" not in models.calls[1].prompt
+
+
 def test_translate_without_existing_target_uses_full_translation_prompt() -> None:
     document = document_for(b"# New source page\n", target=None)
     models = ScriptedModels(["# New target page\n"])
@@ -371,11 +403,11 @@ def test_translation_uses_small_default_model_requests_without_workflow_override
     RuntimeContent(
         cast(RuntimeSource, object()),
         cast(RecordedModels, models),
-        {},
+        {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "8000"},
     ).translate_document(document_for(source, target=None))
 
     assert len(models.calls) == 2
-    assert all(len(call.prompt) <= 6000 for call in models.calls)
+    assert all(len(call.prompt) <= 8000 for call in models.calls)
 
 
 def test_large_source_only_document_assembles_after_all_small_chunks() -> None:
@@ -437,14 +469,14 @@ def test_chunked_sync_uses_ordered_non_overlapping_target_excerpts() -> None:
     prepared = prepare_document(
         document.source,
         document.plan,
-        max_characters=2400,
+        max_characters=3000,
         source_locale="ru",
         target_locale="en",
     )
     assert len(prepared.chunks) == 3
     models = ScriptedModels([chunk.text for chunk in prepared.chunks])
 
-    content_with(models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "2400"}).translate_document(
+    content_with(models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "3000"}).translate_document(
         document
     )
 
@@ -457,7 +489,7 @@ def test_chunked_sync_uses_ordered_non_overlapping_target_excerpts() -> None:
             for other in ("Target one", "Target two", "Target three")
             if other != label
         )
-        assert len(prompt) <= 2400
+        assert len(prompt) <= 3000
 
 
 def test_translate_restores_source_final_lf_without_technical_correction() -> None:
@@ -698,6 +730,7 @@ def test_exhausted_content_filter_splits_only_original_chunk_nearest_midpoint(
         [
             first.text,
             ModelCallResult(None, AttemptError.CONTENT_FILTER, ()),
+            ModelCallResult(None, AttemptError.CONTENT_FILTER, ()),
             filtered.text[:7_870],
             filtered.text[7_870:],
         ]
@@ -708,9 +741,9 @@ def test_exhausted_content_filter_splits_only_original_chunk_nearest_midpoint(
     ).translate_document(document)
 
     raw_requests = tuple(_source_from_prompt(call.prompt) for call in models.calls)
-    assert tuple(map(len, raw_requests)) == (15_900, 15_801, 7_870, 7_931)
+    assert tuple(map(len, raw_requests)) == (15_900, 15_801, 15_801, 7_870, 7_931)
     assert raw_requests.count(first.text) == 1
-    assert raw_requests[2] + raw_requests[3] == filtered.text
+    assert raw_requests[3] + raw_requests[4] == filtered.text
     assert (
         assemble_candidate(document.source, document.plan, document.request, accepted.as_dict())
         == source
@@ -733,6 +766,7 @@ def test_content_filter_uses_only_boundary_even_when_one_child_exceeds_half_cap(
     models = ScriptedModels(
         [
             ModelCallResult(None, AttemptError.CONTENT_FILTER, ()),
+            ModelCallResult(None, AttemptError.CONTENT_FILTER, ()),
             prepared.chunks[0].text[:9_000],
             prepared.chunks[0].text[9_000:],
         ]
@@ -741,8 +775,8 @@ def test_content_filter_uses_only_boundary_even_when_one_child_exceeds_half_cap(
     accepted = content_with(models).translate_document(document)
 
     raw_requests = tuple(_source_from_prompt(call.prompt) for call in models.calls)
-    assert tuple(map(len, raw_requests)) == (10_000, 9_000, 1_000)
-    assert raw_requests[1] + raw_requests[2] == raw_requests[0]
+    assert tuple(map(len, raw_requests)) == (10_000, 10_000, 9_000, 1_000)
+    assert raw_requests[2] + raw_requests[3] == raw_requests[0]
     assert (
         assemble_candidate(document.source, document.plan, document.request, accepted.as_dict())
         == source
@@ -858,29 +892,37 @@ def test_content_filter_in_child_recursively_splits_and_preserves_document() -> 
     )._translate_document(document)
 
     assert translated.translated_markdown.encode() == source
-    assert len(models.calls) == 5
+    assert len(models.calls) == 7
     assert len(_source_from_prompt(models.calls[0].prompt)) == 15_801
-    assert len(_source_from_prompt(models.calls[1].prompt)) == 7_870
+    assert len(_source_from_prompt(models.calls[2].prompt)) == 7_870
+    assert len(_source_from_prompt(models.calls[4].prompt)) == 3_925
+    assert len(_source_from_prompt(models.calls[6].prompt)) == 7_931
 
 
 def test_content_filter_without_top_level_boundary_is_terminal() -> None:
     document = document_for(_heading_block(1, 10_000).encode())
-    models = ScriptedModels([ModelCallResult(None, AttemptError.CONTENT_FILTER, ())])
+    models = ScriptedModels([
+        ModelCallResult(None, AttemptError.CONTENT_FILTER, ()),
+        ModelCallResult(None, AttemptError.CONTENT_FILTER, ()),
+    ])
 
     with pytest.raises(RuntimeBoundaryError, match="translation_model_failed"):
         content_with(models).translate_document(document)
 
-    assert len(models.calls) == 1
+    assert len(models.calls) == 2
 
 
 def test_non_final_parent_does_not_trigger_adaptive_split() -> None:
     document = document_for(content_filter_witness())
-    models = ScriptedModels([ModelCallResult(None, AttemptError.NON_FINAL, ())])
+    models = ScriptedModels([
+        ModelCallResult(None, AttemptError.NON_FINAL, ()),
+        ModelCallResult(None, AttemptError.NON_FINAL, ()),
+    ])
 
     with pytest.raises(RuntimeBoundaryError, match="translation_model_failed"):
         content_with(models).translate_document(document)
 
-    assert len(models.calls) == 1
+    assert len(models.calls) == 2
 
 
 def test_content_filter_on_technical_correction_does_not_publish_invalid_response() -> None:
@@ -888,13 +930,17 @@ def test_content_filter_on_technical_correction_does_not_publish_invalid_respons
     prepared = prepare_document(document.source, document.plan, max_characters=100_000)
     missing_placeholder = prepared.placeholders[0]
     invalid = prepared.chunks[0].text.replace(missing_placeholder.token, "", 1)
-    models = ScriptedModels([invalid, ModelCallResult(None, AttemptError.CONTENT_FILTER, ())])
+    models = ScriptedModels([
+        invalid,
+        ModelCallResult(None, AttemptError.CONTENT_FILTER, ()),
+        ModelCallResult(None, AttemptError.CONTENT_FILTER, ()),
+    ])
     content = content_with(models)
 
     with pytest.raises(RuntimeBoundaryError, match="translation_model_failed"):
         content._translate_document(document)
 
-    assert len(models.calls) == 2
+    assert len(models.calls) == 3
     assert "Important correction" in models.calls[1].prompt
 
 
@@ -947,12 +993,12 @@ def test_exhausted_missing_placeholder_rejects_malformed_markdown() -> None:
     )
     document = document_for(source)
     prepared = prepare_document(document.source, document.plan, max_characters=100_000)
-    first_open, first_close, _missing_code, second_open, second_close, second_code = (
+    first_url, first_code, second_url, second_code = (
         item.token for item in prepared.placeholders
     )
     malformed = (
-        f"* {first_open}First{first_close} uses . [\n"
-        f"* Second]{second_open}{second_close} uses {second_code}.\n"
+        f"* [First]({first_url}) uses . [\n"
+        f"* Second]({second_url}) uses {second_code}.\n"
     )
     models = ScriptedModels([malformed, malformed])
     content = content_with(models)
@@ -1047,10 +1093,10 @@ def test_lost_placeholder_candidate_is_not_created() -> None:
 def test_reordered_link_pairs_are_not_published() -> None:
     document = document_for(b"Read [one](one.md), then [two](two.md).\n")
     prepared = prepare_document(document.source, document.plan, max_characters=100_000)
-    first_open, first_close, second_open, second_close = (
+    first_url, second_url = (
         item.token for item in prepared.placeholders
     )
-    reordered = f"Read {second_open}two{second_close}, after {first_open}one{first_close}.\n"
+    reordered = f"Read [two]({second_url}), after [one]({first_url}).\n"
     models = ScriptedModels([reordered, reordered])
     content = content_with(models)
 
@@ -1063,12 +1109,12 @@ def test_reordered_link_pairs_are_not_published() -> None:
 def test_live_nested_link_reorder_witness_is_not_published() -> None:
     document = document_for("* [Добавлена](issue) поддержка [репликации](guide).\n".encode())
     prepared = prepare_document(document.source, document.plan, max_characters=100_000)
-    outer_open, outer_close, inner_open, inner_close = (
+    outer_url, inner_url = (
         item.token for item in prepared.placeholders
     )
     reordered = (
-        f"* {inner_open}Support for replication{inner_close} "
-        f"{outer_open}has been added{outer_close}.\n"
+        f"* [Support for replication]({inner_url}) "
+        f"[has been added]({outer_url}).\n"
     )
     models = ScriptedModels([reordered, reordered])
     content = content_with(models)
@@ -1143,19 +1189,22 @@ def test_large_chunk_splits_when_technical_correction_is_filtered() -> None:
         models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "250000"}
     )._translate_document(document)
 
-    assert len(models.calls) == 4
+    assert len(models.calls) == 5
     assert "Important correction" in models.calls[1].prompt
     assert accepted_document.translated_markdown.encode() == source
 
 
 def test_provider_failure_is_not_semantically_retried() -> None:
     document = document_for(b"# Source heading\n")
-    models = ScriptedModels([ModelCallResult(None, AttemptError.TRANSPORT, ())])
+    models = ScriptedModels([
+        ModelCallResult(None, AttemptError.TRANSPORT, ()),
+        ModelCallResult(None, AttemptError.TRANSPORT, ()),
+    ])
 
     with pytest.raises(RuntimeBoundaryError, match="translation_model_failed"):
         content_with(models).translate_document(document)
 
-    assert len(models.calls) == 1
+    assert len(models.calls) == 2
 
 
 def test_prompt_limit_failure_happens_before_model_call() -> None:
@@ -1227,12 +1276,12 @@ def test_multiblock_unit_accepts_cosmetic_blank_line_change_without_retry() -> N
     models = ScriptedModels([invalid])
     operator_context = "Reviewer context"
 
-    content_with(models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "1100"}).translate_document(
+    content_with(models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "2600"}).translate_document(
         document, operator_context=operator_context
     )
 
     assert len(models.calls) == 1
-    assert all(len(call.prompt) <= 1_100 for call in models.calls)
+    assert all(len(call.prompt) <= 2_600 for call in models.calls)
 
 
 def test_nested_yfm_fence_code_mutation_gets_one_technical_correction() -> None:

@@ -1233,7 +1233,10 @@ def test_large_cosmetic_block_merge_keeps_repair_chunked() -> None:
     )
 
     assert result.repair_applied
-    assert result.final_candidate == (first_repair + second_repair).encode()
+    # The source has a blank-line boundary between the two repaired blocks;
+    # assembly preserves that document boundary while keeping each repair chunk
+    # independently model-sized.
+    assert result.final_candidate == (first_repair + "\n" + second_repair).encode()
     assert [call.role.value for call in executor.calls] == [
         "critic",
         "critic",

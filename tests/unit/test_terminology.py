@@ -21,7 +21,7 @@ def test_relevant_bilingual_glossary_section_is_added_to_prompt_context() -> Non
     assert "Строковые таблицы" in prompt
     assert "Row-oriented tables" in prompt
     assert "Очередь сообщений" not in prompt
-    assert "Use the following project glossary" in prompt
+    assert "Project glossary (SOURCE/TARGET pairs) is reference context only" in prompt
 
 
 def test_short_bold_emphasis_does_not_match_every_document() -> None:

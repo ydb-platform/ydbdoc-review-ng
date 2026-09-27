@@ -7,7 +7,13 @@ from datetime import timedelta
 from decimal import Decimal
 
 import pytest
-from _runtime_services import raw_repair_context
+from _runtime_services import (
+    raw_repair_context,
+    replace_response_text,
+    request_prompt,
+    request_schema,
+    response_text,
+)
 from test_continue_translation import CONTEXT, EN, RU, LifecycleServices
 
 from ydbdoc_review_ng import application
@@ -81,9 +87,9 @@ class ReviewServices(LifecycleServices):
         if not self.continuing:
             return super().model(request)
         body = json.loads(request.body)
-        schema_wrapper = body.get("jsonSchema")
+        schema_wrapper = request_schema(body)
         schema = schema_wrapper["schema"] if schema_wrapper is not None else None
-        prompt = body["messages"][-1]["text"]
+        prompt = request_prompt(body)
         path = prompt.split("Target path: ", 1)[1].split("\n", 1)[0]
         role = "repair" if schema is None else "critic"
         editable = schema is not None and "corrected_markdown" in schema["properties"]
@@ -269,27 +275,24 @@ def test_continuation_repair_publishes_exact_model_markdown():
             response = super().model(request)
             role = self.roles[-1]
             body = json.loads(request.body)
-            prompt = body["messages"][-1]["text"]
+            prompt = request_prompt(body)
             replacement = None
             if role == "translate" and "Nested source item" in prompt:
                 replacement = "* Parent translated\n* Nested translated item\n"
             elif role == "critic" and self.continuing and "Nested source item" in prompt:
                 payload = json.loads(response.body)
-                values = json.loads(payload["result"]["alternatives"][0]["message"]["text"])
+                values = json.loads(response_text(response.body))
                 if values["findings"]:
                     values["findings"][0]["searchable_snippet"] = "Parent translated"
                     values["corrected_markdown"] = (
                         "* Parent corrected\n* Nested translated item\n"
                     )
-                    payload["result"]["alternatives"][0]["message"]["text"] = json.dumps(
-                        values
-                    )
-                return HttpResponse(200, json.dumps(payload).encode(), Decimal("0.01"))
+                return HttpResponse(
+                    200, replace_response_text(response.body, json.dumps(values)), Decimal("0.01")
+                )
             if replacement is None:
                 return response
-            payload = json.loads(response.body)
-            payload["result"]["alternatives"][0]["message"]["text"] = replacement
-            return HttpResponse(200, json.dumps(payload).encode(), Decimal("0.01"))
+            return HttpResponse(200, replace_response_text(response.body, replacement), Decimal("0.01"))
 
     services = FormattingReviewServices(names=("a", "b"))
     source = b"* Parent\n  * Nested source item\n"

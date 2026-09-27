@@ -169,6 +169,12 @@ def _parse_native(document: Mapping[str, object], role: ModelRole) -> _ParsedRes
 
 
 def _parse_openai(document: Mapping[str, object], role: ModelRole) -> _ParsedResponse:
+    # Some local/test gateways expose the native Yandex envelope even when the
+    # OpenAI-compatible endpoint was selected. Accept that envelope as a
+    # compatibility response; real OpenAI responses continue through the strict
+    # choices parser below.
+    if type(document.get("choices")) is not list and "result" in document:
+        return _parse_native(document, role)
     usage = _usage_openai(document)
     choices = document.get("choices")
     if type(choices) is not list or not choices:
