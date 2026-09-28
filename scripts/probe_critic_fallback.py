@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from typing import cast
 
 from ydbdoc_review_ng.domain import Locale, RepoPath
 from ydbdoc_review_ng.models import (
@@ -14,8 +15,35 @@ from ydbdoc_review_ng.models import (
     YandexCredentials,
     YandexOpenAIClient,
 )
+from ydbdoc_review_ng.models.types import FrozenJson, mutable_json
 from ydbdoc_review_ng.quality.critic import build_critic_request
 from ydbdoc_review_ng.quality.repair import _fallback_editor_request
+
+
+def _targeted_probe_request(primary: ModelRequest) -> ModelRequest:
+    targeted = _fallback_editor_request(primary, primary.model)
+    return ModelRequest(
+        targeted.role,
+        targeted.model,
+        targeted.prompt
+        + "\n\nMandatory unresolved edits:\n"
+        + json.dumps(
+            [
+                {
+                    "reason": "The alias storage group is duplicated.",
+                    "searchable_snippet": "Storage group, distributed storage group, "
+                    "storage group, or Blob storage group",
+                    "expected_correction": "Remove the duplicate storage group alias.",
+                }
+            ]
+        )
+        + "\nApply every expected_correction and return changed corrected_markdown.",
+        None
+        if targeted.schema is None
+        else cast(FrozenJson, mutable_json(targeted.schema)),
+        targeted.max_tokens,
+        targeted.target_path,
+    )
 
 
 def main() -> int:
@@ -103,27 +131,7 @@ def main() -> int:
         target_is_excerpt=True,
         editable=True,
     )
-    targeted = _fallback_editor_request(diagnostic_primary, diagnostic_primary.model)
-    targeted = ModelRequest(
-        targeted.role,
-        targeted.model,
-        targeted.prompt
-        + "\n\nMandatory unresolved edits:\n"
-        + json.dumps(
-            [
-                {
-                    "reason": "The alias storage group is duplicated.",
-                    "searchable_snippet": "Storage group, distributed storage group, "
-                    "storage group, or Blob storage group",
-                    "expected_correction": "Remove the duplicate storage group alias.",
-                }
-            ]
-        )
-        + "\nApply every expected_correction and return changed corrected_markdown.",
-        targeted.schema,
-        targeted.max_tokens,
-        targeted.target_path,
-    )
+    targeted = _targeted_probe_request(diagnostic_primary)
     targeted_attempts: list[AttemptResult] = []
     targeted_result = NativeYandexClient(
         YandexCredentials(api_key, folder_id),

@@ -9,11 +9,17 @@ returned four concrete easy corrections as `repairable=false`, so the old final
 verdict retained them; the published glossary still contains the reported
 duplicate alias. The contract now gives those already diagnosed findings one
 targeted edit call and accepts only a structurally valid changed result. There
-is no repeated critique or open-ended repair loop. The change passed 1956
+is no repeated critique or open-ended repair loop. The change passed 1957
 offline tests, Ruff, strict mypy, wheel build and the installed
 translate/verify/continue smoke. Before another full translation, the consumer
 probe must additionally prove the actual YandexGPT targeted edit on the same
 synthetic duplicated-alias defect.
+
+Consumer probe `36492717292` stopped before the targeted model call because the
+probe harness reused the immutable internal schema representation when creating
+a second `ModelRequest`. Production already converts that schema back to JSON;
+the harness now follows the same path and has a direct construction regression
+test. No document translation ran in this failed probe.
 
 Run `36476204527` translated all ten documents and entered review, but stopped
 before publication on `changelog-enterprise.md`. YandexGPT exhausted its two
