@@ -1413,7 +1413,28 @@ def test_t017_n04_repair_preserves_logical_escaped_title_in_untouched_field() ->
     assert [call.role.value for call in executor.calls] == ["critic"]
 
 
-def test_unrepairable_red_uses_one_critic() -> None:
+def test_unrepairable_finding_gets_one_targeted_editor_call() -> None:
+    _plan, _request, _values, target = prepared()
+    corrected = raw_document(target).replace("Прочитайте", "Обязательно прочитайте")
+    executor = FakeExecutor(
+        critic_editor_json(
+            "RED",
+            [finding(repairable=False, snippet="Прочитайте", line=3)],
+            raw_document(target),
+        ),
+        fallback_editor_json(corrected),
+    )
+
+    result = review(executor)
+
+    assert result.final.verdict is Verdict.GREEN
+    assert result.repair_attempted
+    assert result.repair_applied
+    assert [call.role.value for call in executor.calls] == ["critic", "critic"]
+    assert "Mandatory unresolved edits" in executor.calls[1].prompt
+
+
+def test_unchanged_targeted_editor_result_stays_red_without_loop() -> None:
     _plan, _request, _values, target = prepared()
     executor = FakeExecutor(
         critic_editor_json(
@@ -1421,15 +1442,14 @@ def test_unrepairable_red_uses_one_critic() -> None:
             [finding(repairable=False, snippet="Прочитайте", line=3)],
             raw_document(target),
         ),
-        critic_json("RED", [finding(repairable=False, snippet="Прочитайте", line=3)]),
+        fallback_editor_json(raw_document(target)),
     )
 
     result = review(executor)
 
     assert result.final.verdict is Verdict.RED
-    assert result.repair_attempted
     assert not result.repair_applied
-    assert [call.role.value for call in executor.calls] == ["critic"]
+    assert len(executor.calls) == 2
 
 
 def test_mixed_findings_repair_only_locally_safe_mapped_fields() -> None:
@@ -1455,7 +1475,20 @@ def test_mixed_findings_repair_only_locally_safe_mapped_fields() -> None:
         raw_document(
             assemble_candidate(SOURCE, plan, request, {**values, safe_id: repaired})
         ),
-        critic_json("RED", [finding(repairable=False, snippet="Установка", line=1)]),
+        fallback_editor_json(
+            raw_document(
+                assemble_candidate(
+                    SOURCE,
+                    plan,
+                    request,
+                    {
+                        **values,
+                        request.fields[0].field_id: "Установка базы данных YDB",
+                        safe_id: repaired,
+                    },
+                )
+            )
+        ),
     )
 
     result = review(executor)
@@ -1467,7 +1500,7 @@ def test_mixed_findings_repair_only_locally_safe_mapped_fields() -> None:
     assert SOURCE.decode() not in editor_request.prompt
     assert "Прочитайте" in editor_request.prompt
     assert "<authoritative-source>" in editor_request.prompt
-    assert result.final.verdict is Verdict.RED
+    assert result.final.verdict is Verdict.GREEN
 
 
 def test_invalid_critic_edit_retains_original_and_red_verdict() -> None:

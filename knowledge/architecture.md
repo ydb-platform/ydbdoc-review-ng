@@ -159,8 +159,10 @@ Semantic defects such as duplicated glossary aliases are intentionally not
 encoded as growing local heuristics. The translator creates a structurally valid
 draft. For every document or aligned excerpt the critic-editor returns findings
 and the complete corrected Markdown in one response. A valid changed edit with
-only repairable findings resolves those draft findings. Unrepairable, missing,
-invalid or unchanged edits remain RED. There is no final-critic loop. All edits
+only repairable findings resolves those draft findings. Findings explicitly
+left unrepairable receive one targeted edit call containing the critic's own
+diagnosis; a valid changed result resolves them, while a missing, invalid or
+unchanged result remains RED. There is no final-critic loop. All edits
 are assembled, validated, built and published once. A full draft build must not
 run before the critic-editor: fixable draft lint errors would otherwise prevent
 the editor from running. Mechanical list-marker spacing is normalized locally

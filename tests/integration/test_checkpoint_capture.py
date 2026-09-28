@@ -204,7 +204,14 @@ class CaptureServices(RuntimeServices):
                     text = "[[YDBDOC_PROTECTED_9999]]"
                 if self.stop == "translation_assembly" and self.translations >= 2:
                     text = "[[YDBDOC_PROTECTED_9999]]"
-        elif "verdict" in (schema := schema_wrapper["schema"])["properties"]:
+        elif set((schema := schema_wrapper["schema"])["properties"]) == {
+            "corrected_markdown"
+        }:
+            role = "critic"
+            values = {
+                "corrected_markdown": raw_repair_context(prompt, "final-target")
+            }
+        elif "verdict" in schema["properties"]:
             role = "critic"
             self.critics += 1
             props = schema["properties"]["findings"]["items"]["properties"]
@@ -427,7 +434,7 @@ def test_red_pure_rename_replays_whole_counterpart_as_a_complete_document():
     content = RuntimeContent(source, None, ENV)
     replay = replay_continue(content, checkpoint)
     assert replay.accepted_documents == checkpoint.state.accepted_documents
-    assert services.roles == ["critic"]
+    assert services.roles == ["critic", "critic"]
     with pytest.raises(PersistenceError, match="scope selection"):
         replay_continue(
             content,

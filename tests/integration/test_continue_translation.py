@@ -419,6 +419,7 @@ def test_pending_success_uses_full_review_single_repair_and_captures_red():
         "critic",
         "critic",
         "critic",
+        "critic",
     ]
     assert following.state.stage is ContinuationStage.REVIEW
     assert following.target_sha == result.final_commit_sha

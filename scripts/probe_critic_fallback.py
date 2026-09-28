@@ -7,6 +7,9 @@ import os
 
 from ydbdoc_review_ng.domain import Locale, RepoPath
 from ydbdoc_review_ng.models import (
+    AttemptResult,
+    ModelRequest,
+    NativeYandexClient,
     UrllibTransport,
     YandexCredentials,
     YandexOpenAIClient,
@@ -49,7 +52,7 @@ def main() -> int:
         or os.environ.get("YDBDOC_MODEL")
         or "deepseek-v4-flash",
     )
-    attempts = []
+    attempts: list[AttemptResult] = []
     client = YandexOpenAIClient(
         YandexCredentials(
             api_key,
@@ -80,11 +83,73 @@ def main() -> int:
         print("critic fallback probe failed: corrected_markdown is not text")
         return 1
     usage = result.attempts[-1].usage
+    diagnostic_source = (
+        "**Группа хранения**, **группа распределённого хранилища** или "
+        "**группа Blob Storage** — место надёжного хранения данных."
+    ).encode()
+    diagnostic_target = (
+        b"**Storage group**, **distributed storage group**, **storage group**, or "
+        b"**Blob storage group** is a place for reliable data storage."
+    )
+    diagnostic_primary = build_critic_request(
+        model=os.environ.get("YDBDOC_MODEL_CRITIC") or "yandexgpt-5.1",
+        source=diagnostic_source,
+        target=diagnostic_target,
+        target_path=RepoPath("ydb/docs/en/probe.md"),
+        source_locale=Locale.RU,
+        target_locale=Locale.EN,
+        requested_ids=("document",),
+        source_is_excerpt=True,
+        target_is_excerpt=True,
+        editable=True,
+    )
+    targeted = _fallback_editor_request(diagnostic_primary, diagnostic_primary.model)
+    targeted = ModelRequest(
+        targeted.role,
+        targeted.model,
+        targeted.prompt
+        + "\n\nMandatory unresolved edits:\n"
+        + json.dumps(
+            [
+                {
+                    "reason": "The alias storage group is duplicated.",
+                    "searchable_snippet": "Storage group, distributed storage group, "
+                    "storage group, or Blob storage group",
+                    "expected_correction": "Remove the duplicate storage group alias.",
+                }
+            ]
+        )
+        + "\nApply every expected_correction and return changed corrected_markdown.",
+        targeted.schema,
+        targeted.max_tokens,
+        targeted.target_path,
+    )
+    targeted_attempts: list[AttemptResult] = []
+    targeted_result = NativeYandexClient(
+        YandexCredentials(api_key, folder_id),
+        UrllibTransport(),
+        targeted_attempts.append,
+    ).invoke(targeted)
+    if not targeted_result.success or targeted_result.text is None:
+        print("targeted editor probe failed: model call")
+        return 1
+    try:
+        targeted_payload = json.loads(targeted_result.text)
+    except json.JSONDecodeError:
+        print("targeted editor probe failed: malformed JSON")
+        return 1
+    corrected = targeted_payload.get("corrected_markdown")
+    if type(corrected) is not str or corrected == diagnostic_target.decode():
+        print("targeted editor probe failed: unchanged correction")
+        return 1
+    targeted_usage = targeted_result.attempts[-1].usage
     print(
-        "critic fallback probe passed;",
+        "critic fallback and targeted editor probes passed;",
         f"prompt_characters={len(request.prompt)};",
         f"input_tokens={usage.input_tokens};",
-        f"output_tokens={usage.output_tokens}",
+        f"output_tokens={usage.output_tokens};",
+        f"targeted_input_tokens={targeted_usage.input_tokens};",
+        f"targeted_output_tokens={targeted_usage.output_tokens}",
     )
     return 0
 

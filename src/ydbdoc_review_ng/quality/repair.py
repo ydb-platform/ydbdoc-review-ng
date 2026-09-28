@@ -10,7 +10,7 @@ from typing import Protocol, cast
 from ydbdoc_review_ng.continuation import AcceptedMap
 from ydbdoc_review_ng.domain import Locale, RepoPath
 from ydbdoc_review_ng.models import AttemptError, ModelCallResult, ModelRequest
-from ydbdoc_review_ng.models.types import FrozenJson
+from ydbdoc_review_ng.models.types import FrozenJson, mutable_json
 from ydbdoc_review_ng.parser.markdown import build_markdown_plan
 from ydbdoc_review_ng.plan import BlockKind, ProtectedKind, SourcePlan, fields_of
 from ydbdoc_review_ng.quality.critic import build_critic_request, parse_critic_response
@@ -580,6 +580,7 @@ def review_translation(
     effective_chunks: list[DocumentChunk] = []
     responses: list[str] = []
     editor_results: list[CriticResult] = []
+    unresolved_findings: list[Finding] = []
     editor_changed_target = False
 
     def invoke_editor(request: ModelRequest) -> ModelCallResult:
@@ -587,8 +588,22 @@ def review_translation(
             before_model_call()
         return executor.invoke(request)
 
+    def flat_correction(response: ModelCallResult, /) -> str:
+        if not response.success or response.text is None:
+            raise QualityExecutionError("critic")
+        try:
+            payload = json.loads(response.text)
+        except json.JSONDecodeError:
+            raise QualityExecutionError("critic") from None
+        if type(payload) is not dict or set(payload) != {"corrected_markdown"}:
+            raise QualityExecutionError("critic")
+        correction = payload["corrected_markdown"]
+        if type(correction) is not str:
+            raise QualityExecutionError("critic")
+        return correction
+
     def accept_editor_response(
-        chunk: DocumentChunk, response: ModelCallResult, /
+        chunk: DocumentChunk, request: ModelRequest, response: ModelCallResult, /
     ) -> None:
         nonlocal editor_changed_target
         if not response.success or response.text is None:
@@ -606,6 +621,41 @@ def review_translation(
         correction = (
             proposed_correction if result.verdict is Verdict.RED else current_target
         )
+        pending = tuple(
+            finding
+            for finding in result.findings
+            if not finding.repairable
+        )
+        if pending:
+            before_targeted_edit = correction
+            repair_payload = [
+                {
+                    "reason": finding.reason,
+                    "expected_correction": finding.expected_correction,
+                    "searchable_snippet": finding.searchable_snippet,
+                }
+                for finding in pending
+            ]
+            repair_request = _fallback_editor_request(request, request.model)
+            repair_request = ModelRequest(
+                repair_request.role,
+                repair_request.model,
+                repair_request.prompt
+                + "\n\nMandatory unresolved edits:\n"
+                + json.dumps(repair_payload, ensure_ascii=False)
+                + "\nApply every listed expected_correction now and return the complete "
+                "changed target excerpt. Do not merely repeat the input. This is the only "
+                "correction attempt.",
+                None
+                if repair_request.schema is None
+                else cast(FrozenJson, mutable_json(repair_request.schema)),
+                repair_request.max_tokens,
+                repair_request.target_path,
+            )
+            correction = flat_correction(invoke_editor(repair_request))
+            if correction != before_targeted_edit:
+                pending = ()
+        unresolved_findings.extend(pending)
         editor_changed_target = editor_changed_target or correction != current_target
         editor_results.append(result)
         validate_chunk_response(chunk, document_request.placeholders, correction)
@@ -616,17 +666,7 @@ def review_translation(
         chunk: DocumentChunk, response: ModelCallResult, /
     ) -> None:
         nonlocal editor_changed_target
-        if not response.success or response.text is None:
-            raise QualityExecutionError("critic")
-        try:
-            payload = json.loads(response.text)
-        except json.JSONDecodeError:
-            raise QualityExecutionError("critic") from None
-        if type(payload) is not dict or set(payload) != {"corrected_markdown"}:
-            raise QualityExecutionError("critic")
-        correction = payload["corrected_markdown"]
-        if type(correction) is not str:
-            raise QualityExecutionError("critic")
+        correction = flat_correction(response)
         current_target = "".join(target_blocks[chunk.block_start : chunk.block_end])
         editor_changed_target = editor_changed_target or correction != current_target
         validate_chunk_response(chunk, document_request.placeholders, correction)
@@ -698,7 +738,7 @@ def review_translation(
         if not response.success or response.text is None:
             raise QualityExecutionError("critic")
         try:
-            accept_editor_response(chunk, response)
+            accept_editor_response(chunk, request, response)
         except DocumentTranslationError:
             return False
         return True
@@ -789,10 +829,11 @@ def review_translation(
         before_repaired_map(accepted_maps[0])
     if on_validated_edit is not None:
         on_validated_edit(final_candidate)
-    # The critic-editor is the final semantic writer. A valid correction resolves
-    # every finding it marked repairable. Findings it explicitly marked
-    # unrepairable remain visible and keep the result RED; no model loop is used.
-    unresolved = tuple(finding for finding in findings if not finding.repairable)
+    # The critic-editor is the final semantic writer. Its valid primary edits
+    # resolve repairable findings; one valid changed targeted edit resolves the
+    # remaining diagnoses. An unchanged targeted response stays RED. There is no
+    # second critique or repair loop.
+    unresolved = tuple(dict.fromkeys(unresolved_findings))
     final = CriticResult(Verdict.RED if unresolved else Verdict.GREEN, unresolved)
     return QualityReviewResult(
         target,

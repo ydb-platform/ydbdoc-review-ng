@@ -1,5 +1,20 @@
 # Live fallback contract failure after independent replay (2026-09-28)
 
+Full run `36485186895` proved the fallback repair in production: YandexGPT
+content-filtered `layout.md`, two exact translator units were edited successfully
+by DeepSeek, all ten documents completed review and build, and PR #54352 was
+atomically updated to `e36e8411d9e6feefaab6da215f863c06069521d6` on current
+main. The terminal RED was semantic, not an execution failure: glossary critic
+returned four concrete easy corrections as `repairable=false`, so the old final
+verdict retained them; the published glossary still contains the reported
+duplicate alias. The contract now gives those already diagnosed findings one
+targeted edit call and accepts only a structurally valid changed result. There
+is no repeated critique or open-ended repair loop. The change passed 1956
+offline tests, Ruff, strict mypy, wheel build and the installed
+translate/verify/continue smoke. Before another full translation, the consumer
+probe must additionally prove the actual YandexGPT targeted edit on the same
+synthetic duplicated-alias defect.
+
 Run `36476204527` translated all ten documents and entered review, but stopped
 before publication on `changelog-enterprise.md`. YandexGPT exhausted its two
 content-filter attempts; the one-shot DeepSeek fallback then returned HTTP 400

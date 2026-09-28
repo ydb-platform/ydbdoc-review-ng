@@ -86,6 +86,9 @@ class ReviewServices(LifecycleServices):
         prompt = request_prompt(body)
         path = prompt.split("Target path: ", 1)[1].split("\n", 1)[0]
         role = "repair" if schema is None else "critic"
+        flat_editor = schema is not None and set(schema["properties"]) == {
+            "corrected_markdown"
+        }
         editable = schema is not None and "corrected_markdown" in schema["properties"]
         self.roles.append(role)
         self.prompts.append((role, prompt))
@@ -93,7 +96,11 @@ class ReviewServices(LifecycleServices):
         self.timeline.append(role)
         if self.failure == role:
             raise TimeoutError("model unavailable")
-        if role == "critic":
+        if flat_editor:
+            values = {
+                "corrected_markdown": raw_repair_context(prompt, "final-target")
+            }
+        elif role == "critic":
             outcomes = self.outcomes.get(path, [])
             outcome = outcomes.pop(0) if outcomes else "green"
             values = {"verdict": "GREEN" if outcome == "green" else "RED", "findings": []}
@@ -320,6 +327,8 @@ def test_repeated_red_preserves_unresolved_path_order_for_the_next_continue():
     assert services.resume().verdict is Verdict.GREEN
     assert [path for _, path, _ in services.calls] == [
         EN + "c.md",
+        EN + "c.md",
+        EN + "b.md",
         EN + "b.md",
         EN + "c.md",
         EN + "b.md",
@@ -364,7 +373,9 @@ def test_pinned_rename_review_never_derives_maps_from_target_and_replays_metadat
     services.outcomes = {EN + "a.md": ["repair", "red"] if repair else ["red"]}
     result = services.resume()
     assert result.verdict is (Verdict.GREEN if repair else Verdict.RED)
-    assert services.roles == ["critic", "critic"]
+    assert services.roles == (
+        ["critic", "critic"] if repair else ["critic", "critic", "critic"]
+    )
     if repair:
         repair_prompt = services.prompts[0][1]
         assert services.calls[0][2] is not None
@@ -522,7 +533,8 @@ def test_head_change_during_comment_write_fails_without_consuming_checkpoint(
         services.resume()
     failed = list(services.jobs.values())[-1]
     assert failed["status"] == "failed" and failed["error"] == "report_failed"
-    assert services.roles == ["critic"] and services.timeline == ["critic", "report"]
+    expected = ["critic"] if verdict == "green" else ["critic", "critic"]
+    assert services.roles == expected and services.timeline == [*expected, "report"]
     assert services.branch_head == new_head
     assert set(services.rows) == {saved.continuation_id}
     assert services.rows[saved.continuation_id]["status"] == "open"
@@ -545,7 +557,11 @@ def test_head_change_during_comment_write_fails_without_consuming_checkpoint(
     assert services.rows[saved.continuation_id]["status"] == "closed"
     assert len(services.comments) == 1 and services.comments[0]["id"] == comment_id
     assert services.comments[0]["body"].startswith("🟢 GREEN\n")
-    assert services.roles == ["critic", "critic"]
+    assert services.roles == (
+        ["critic", "critic"]
+        if verdict == "green"
+        else ["critic", "critic", "critic"]
+    )
 
 
 @pytest.mark.parametrize("mode", ["continue", "verify"])
@@ -647,8 +663,8 @@ def test_review_red_handoff_preserves_one_logical_checkpoint_after_boundary_faul
     assert eligible.target_sha == saved.target_sha
     assert eligible.expires_at == saved.expires_at
     assert eligible.state.accepted_documents == saved.state.accepted_documents
-    assert services.roles == ["critic"]
+    assert services.roles == ["critic", "critic"]
     assert services.resume().verdict is Verdict.GREEN
     with pytest.raises(application.WorkflowError):
         services.resume()
-    assert services.roles == ["critic", "critic"]
+    assert services.roles == ["critic", "critic", "critic"]

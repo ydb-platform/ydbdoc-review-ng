@@ -366,6 +366,23 @@ class InstalledContinueServices(RuntimeServices):
 
         response = super().model(request)
         schema = request_schema(json.loads(request.body))
+        if (
+            self.stop_review
+            and schema is not None
+            and set(schema["schema"]["properties"]) == {"corrected_markdown"}
+        ):
+            prompt = request_prompt(json.loads(request.body))
+            values = {
+                "corrected_markdown": raw_repair_context(prompt, "final-target")
+            }
+            body = json.loads(response.body)
+            if "choices" in body:
+                body["choices"][0]["message"]["content"] = json.dumps(values)
+            else:
+                body["result"]["alternatives"][0]["message"]["text"] = json.dumps(
+                    values
+                )
+            return HttpResponse(200, json.dumps(body).encode(), Decimal("0.01"))
         if self.stop_review and schema is not None and "verdict" in schema["schema"]["properties"]:
             properties = schema["schema"]["properties"]
             values = {
