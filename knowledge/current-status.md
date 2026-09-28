@@ -552,6 +552,14 @@ runtime или модели: запрос YandexGPT строился с обяз
 gate точного дерева зелёный: 1959 non-live тестов, Ruff, strict mypy,
 wheel/sdist и installed smoke `translate + verify + continue`.
 
+После публикации `ff3ec57` CI `main` и `v1.0.1` прошли. Probe-only run
+`36499207977` подтвердил прохождение fallback-стадии, но через 223 секунды
+получил model-call failure на structured YandexGPT critic до parser-а; перевод
+документов не запускался. Probe теперь печатает для каждой стадии отдельный
+progress marker, а при model failure — безопасные typed failure, HTTP status и
+provider response status без prompt/ответа. Это нужно получить отдельным
+повторным probe до полного перевода.
+
 ## Локальная доработка source-only перевода
 
 27 сентября 2026 добавлена локальная, ещё не опубликованная доработка

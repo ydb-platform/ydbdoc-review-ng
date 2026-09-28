@@ -9,6 +9,7 @@ from typing import cast
 from ydbdoc_review_ng.domain import Locale, RepoPath
 from ydbdoc_review_ng.models import (
     AttemptResult,
+    ModelCallResult,
     ModelRequest,
     NativeYandexClient,
     UrllibTransport,
@@ -84,6 +85,14 @@ def _parse_diagnostic_probe_response(raw: str) -> None:
     )
 
 
+def _failure_summary(result: ModelCallResult) -> str:
+    last = result.attempts[-1] if result.attempts else None
+    failure = result.failure.value if result.failure is not None else "unknown"
+    http_status = None if last is None else last.http_status
+    response_status = None if last is None else last.response_status
+    return f"{failure}; http={http_status}; status={response_status}"
+
+
 def main() -> int:
     api_key = os.environ.get("YANDEX_API_KEY", "")
     folder_id = os.environ.get("YANDEX_FOLDER_ID", "")
@@ -129,13 +138,7 @@ def main() -> int:
     )
     result = client.invoke(request)
     if not result.success or result.text is None:
-        last = result.attempts[-1] if result.attempts else None
-        print(
-            "critic fallback probe failed:",
-            result.failure.value if result.failure is not None else "unknown",
-            None if last is None else last.http_status,
-            None if last is None else last.response_status,
-        )
+        print("critic fallback probe failed:", _failure_summary(result))
         return 1
     try:
         payload = json.loads(result.text)
@@ -148,6 +151,7 @@ def main() -> int:
     if type(payload["corrected_markdown"]) is not str:
         print("critic fallback probe failed: corrected_markdown is not text")
         return 1
+    print("critic fallback probe passed")
     usage = result.attempts[-1].usage
     diagnostic_primary = _diagnostic_probe_request(
         os.environ.get("YDBDOC_MODEL_CRITIC") or "yandexgpt-5.1"
@@ -159,13 +163,14 @@ def main() -> int:
         primary_attempts.append,
     ).invoke(diagnostic_primary)
     if not primary_result.success or primary_result.text is None:
-        print("structured critic probe failed: model call")
+        print("structured critic probe failed: model call;", _failure_summary(primary_result))
         return 1
     try:
         _parse_diagnostic_probe_response(primary_result.text)
     except CriticResponseError as error:
         print(f"structured critic probe failed: response contract ({error.reason.value})")
         return 1
+    print("structured critic probe passed")
     primary_usage = primary_result.attempts[-1].usage
     targeted = _targeted_probe_request(diagnostic_primary)
     targeted_attempts: list[AttemptResult] = []
@@ -175,7 +180,7 @@ def main() -> int:
         targeted_attempts.append,
     ).invoke(targeted)
     if not targeted_result.success or targeted_result.text is None:
-        print("targeted editor probe failed: model call")
+        print("targeted editor probe failed: model call;", _failure_summary(targeted_result))
         return 1
     try:
         targeted_payload = json.loads(targeted_result.text)
