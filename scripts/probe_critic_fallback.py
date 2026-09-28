@@ -16,6 +16,11 @@ from ydbdoc_review_ng.quality.repair import _fallback_editor_request
 
 
 def main() -> int:
+    api_key = os.environ.get("YANDEX_API_KEY", "")
+    folder_id = os.environ.get("YANDEX_FOLDER_ID", "")
+    if not api_key or not folder_id:
+        print("critic fallback probe unavailable: model credentials are not configured")
+        return 2
     source = ("Стабильная тестовая строка для проверки контракта модели.\n" * 180).encode()
     target = ("Stable test line for validating the model contract.\n" * 180).encode()
     primary = build_critic_request(
@@ -40,8 +45,8 @@ def main() -> int:
     attempts = []
     client = YandexOpenAIClient(
         YandexCredentials(
-            os.environ.get("YANDEX_API_KEY", ""),
-            os.environ.get("YANDEX_FOLDER_ID", ""),
+            api_key,
+            folder_id,
         ),
         UrllibTransport(),
         attempts.append,

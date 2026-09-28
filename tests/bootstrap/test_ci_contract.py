@@ -73,6 +73,26 @@ def test_action_exports_builtin_github_token_only_as_dedicated_read_credential()
     assert action_text.count("${{ github.token }}") == 1
 
 
+def test_model_probe_is_translate_only_authorized_and_exits_before_workflow() -> None:
+    action = yaml.safe_load(
+        (ROOT / ".github/actions/doc-review/action.yml").read_bytes()
+    )
+    step = next(
+        item
+        for item in action["runs"]["steps"]
+        if "-m ydbdoc_review_ng.cli" in item.get("run", "")
+    )
+    script = step["run"]
+    assert '[[ "$MODE" == translate' in script
+    assert 'item.get("name") == "doc_model_probe"' in script
+    assert '"$actor" == "${GITHUB_ACTOR:-}"' in script
+    assert '[[ "$authorized" == true ]] || exit 1' in script
+    assert 'scripts/probe_critic_fallback.py' in script
+    assert script.index('scripts/probe_critic_fallback.py') < script.index(
+        'args=("$MODE" --pr "$PR")'
+    )
+
+
 @pytest.mark.parametrize(
     ("mode", "inputs"),
     [

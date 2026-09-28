@@ -70,8 +70,29 @@ runs:
         YDBDOC_GITHUB_READ_TOKEN: ${{ github.token }}
         YDBDOC_DOCS_ROOT: ${{ github.workspace }}/ydb/docs
         YDBDOC_RUNTIME_FACTORY: ydbdoc_review_ng.runtime:create_runtime
+        YDBDOC_ACTION_PATH: ${{ github.action_path }}
       run: |
         # Credentials remain environment references, never shell arguments.
+        probe_only=false
+        if [[ "$MODE" == translate && -n "${GITHUB_EVENT_PATH:-}" ]]; then
+          probe_only=$(python - <<'PY'
+        import json, os
+        with open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8") as stream:
+            event = json.load(stream)
+        labels = event.get("pull_request", {}).get("labels", [])
+        print("true" if any(item.get("name") == "doc_model_probe" for item in labels) else "false")
+        PY
+          )
+        fi
+        if [[ "$probe_only" == true ]]; then
+          authorized=false
+          for actor in $(printf '%s' "${YDBDOC_ALLOWED_ACTORS:-}" | tr ',\t\r\n' '    '); do
+            if [[ "$actor" == "${GITHUB_ACTOR:-}" ]]; then authorized=true; fi
+          done
+          [[ "$authorized" == true ]] || exit 1
+          python "$YDBDOC_ACTION_PATH/../../../scripts/probe_critic_fallback.py"
+          exit
+        fi
         args=("$MODE" --pr "$PR")
         case "$MODE" in
           translate) args+=(--source-sha "$SOURCE_SHA" --budget-rub "$BUDGET_RUB") ;;

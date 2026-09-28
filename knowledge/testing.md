@@ -9,10 +9,13 @@
   на отсутствие повтора при неопределённом результате.
 - Fixture добавляется для конкретного requirement, а не ради размера матрицы.
 - После изменения контракта резервного critic перед платным переводом отдельно
-  запускается `.github/workflows/model-contract-probe.yml`. Он проверяет
-  синтетическим, не содержащим документацию запросом реальный alternate provider
-  и плоский ответ `corrected_markdown`; offline suite не доказывает
-  cross-provider совместимость.
+  запускается model-contract probe. В репозитории инструмента это
+  `.github/workflows/model-contract-probe.yml`; если model secrets доступны
+  только consumer-репозиторию, на исходный PR временно ставится
+  `doc_model_probe`, после чего штатный `doc_translate` выполняет лишь probe.
+  Он проверяет синтетическим, не содержащим документацию запросом реальный
+  alternate provider и плоский ответ `corrected_markdown`; offline suite не
+  доказывает cross-provider совместимость.
 
 ## Независимая приёмка
 

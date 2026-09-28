@@ -12,9 +12,11 @@ The fallback now keeps the same intact source/target pair but uses the flat
 translation endpoint. The correction still passes placeholder/structure
 validation and the final Diplodoc build. A separate manual GitHub workflow
 `model-contract-probe.yml` exercises this exact fallback client and response
-shape with real repository model credentials before another paid translation
-run. No translation rerun is allowed until that probe and the offline release
-gate both pass.
+shape with real model credentials before another paid translation run. When the
+tool repository has no model secret, the authorized `doc_model_probe` label
+makes the existing YDB action run only this synthetic probe and exit without
+translation or publication. No translation rerun is allowed until that probe
+and the offline release gate both pass.
 
 # Independent pre-rerun audit blocked unsafe critic splitting (2026-09-28)
 
