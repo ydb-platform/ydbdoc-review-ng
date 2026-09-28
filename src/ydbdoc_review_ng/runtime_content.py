@@ -99,7 +99,6 @@ from ydbdoc_review_ng.translation import (
     TranslationRequest,
     assemble_candidate,
     build_document_correction_note,
-    build_document_critic_prompt,
     build_document_prompt,
     build_translation_request,
     document_operator_guidance,
@@ -124,7 +123,6 @@ _DIAGNOSTIC_PLACEHOLDER = re.compile(
     r"\[\[(?:YDBDOC_PROTECTED_(?:[0-9]+|LINK_[0-9]+_(?:OPEN|CLOSE))|YDBDOC_URL_[0-9]+)\]\]"
 )
 _PLACEHOLDER_PREFIXES = ("[[YDBDOC_PROTECTED_", "[[YDBDOC_URL_")
-_INVALID_RESPONSE_SPLIT_MIN_CHARACTERS = 4_000
 _ATX_HEADING_LINE = re.compile(r"(?m)^ {0,3}#{1,6}[ \t]+")
 
 
@@ -546,6 +544,7 @@ class RuntimeContent:
         self.source, self.models, self.environment = source, models, environment
         self.model = environment.get("YDBDOC_MODEL") or "deepseek-v4-flash"
         self.fallback_model = environment.get("YDBDOC_MODEL_FALLBACK") or "yandexgpt-5.1"
+        self.critic_model = environment.get("YDBDOC_MODEL_CRITIC") or "yandexgpt-5.1"
         self.wikipedia = WikipediaLanglinks()
         self.roots = LocaleRoots(RepoPath("ydb/docs/ru/core"), RepoPath("ydb/docs/en/core"))
         self.documents: tuple[Document, ...] = ()
@@ -1172,76 +1171,52 @@ class RuntimeContent:
                 )
                 return fallback
 
-            prompt = build_document_prompt(
-                chunk,
-                entry.pair.source_locale.value,
-                entry.pair.target_locale.value,
-                terminology_context=chunk_terminology_context,
-            )
-            if operator_context is not None:
-                prompt += document_operator_guidance(operator_context)
-            result = invoke_model(prompt, ModelRole.TRANSLATE)
-            if not result.success or result.text is None:
-                should_split = result.failure is AttemptError.CONTENT_FILTER
-                return None, result.failure, should_split
-
-            draft = result.text
-            try:
-                validate_chunk_response(chunk, prepared.placeholders, draft)
-            except DocumentTranslationError as error:
-                diagnostic: str | None = str(error)
-            else:
-                # A draft that satisfies the deterministic contract is already a
-                # publishable translation. Do not replace it with a critic response
-                # merely because the model chose a different Markdown block layout.
-                return draft, None, False
-            for critic_attempt in (1, 2):
-                critic_prompt = build_document_critic_prompt(
+            for attempt in (1, 2):
+                prompt = build_document_prompt(
                     chunk,
-                    draft,
                     entry.pair.source_locale.value,
                     entry.pair.target_locale.value,
-                    diagnostic=diagnostic,
+                    correction=attempt == 2,
+                    correction_note=note,
+                    previous_response=previous_response,
                     terminology_context=chunk_terminology_context,
                 )
                 if operator_context is not None:
-                    critic_prompt += document_operator_guidance(operator_context)
-                critic_result = invoke_model(critic_prompt, ModelRole.CRITIC)
-                if not critic_result.success or critic_result.text is None:
-                    # A critic failure is not a source-content filter failure. Only a
-                    # genuinely large chunk may be split as a last-resort provider
-                    # workaround; small chunks fail clearly instead of multiplying calls.
-                    should_split = (
-                        critic_result.failure is AttemptError.CONTENT_FILTER
-                        and len(chunk.text) >= _INVALID_RESPONSE_SPLIT_MIN_CHARACTERS
-                    )
-                    return None, critic_result.failure, should_split
+                    prompt += document_operator_guidance(operator_context)
+                result = invoke_model(prompt, ModelRole.TRANSLATE)
+                if not result.success or result.text is None:
+                    return None, result.failure, result.failure is AttemptError.CONTENT_FILTER
                 try:
-                    validate_chunk_response(chunk, prepared.placeholders, critic_result.text)
+                    validate_chunk_response(chunk, prepared.placeholders, result.text)
                 except DocumentTranslationError as error:
-                    if critic_attempt == 2:
-                        return None, None, True
                     write_trace(
                         "translation",
                         "chunk_validation",
-                        "retry",
+                        "retry" if attempt == 1 else "fail",
                         article=entry.pair.target_path.value,
                         chunk_index=chunk_index,
                         chunks_total=len(prepared.chunks),
-                        attempt=critic_attempt,
-                        code="critic_response_invalid",
+                        attempt=attempt,
+                        code=str(error),
                     )
-                    diagnostic = str(error)
-                    draft = critic_result.text
+                    if attempt == 2:
+                        return None, None, True
+                    missing = tuple(token for token in chunk.placeholders if token not in result.text)
+                    note = build_document_correction_note(
+                        document.source,
+                        chunk,
+                        prepared.placeholders,
+                        missing,
+                        validation_problem=str(error),
+                    )
+                    previous_response = result.text
                 else:
-                    return critic_result.text, None, False
-            raise AssertionError("translation semantic attempt bound exhausted")
+                    return result.text, None, False
+            raise AssertionError("translation technical attempt bound exhausted")
 
         def translate_chunk(
             chunk: DocumentChunk,
             chunk_index: int,
-            *,
-            is_adaptive_child: bool,
         ) -> None:
             if not any(
                 block.fields
@@ -1258,16 +1233,7 @@ class RuntimeContent:
                 effective_chunks.append(chunk)
                 responses.append(accepted_response)
                 return
-            children = (
-                split_content_filter_chunk(chunk, block_texts)
-                if should_split
-                and (
-                    failure is AttemptError.CONTENT_FILTER
-                    or is_adaptive_child
-                    or len(chunk.text) >= _INVALID_RESPONSE_SPLIT_MIN_CHARACTERS
-                )
-                else None
-            )
+            children = split_content_filter_chunk(chunk, block_texts) if should_split else None
             if children is None:
                 if should_split and failure is None:
                     raise InvalidTranslationResponse("translation_response_invalid")
@@ -1276,7 +1242,6 @@ class RuntimeContent:
                 translate_chunk(
                     child,
                     chunk_index,
-                    is_adaptive_child=True,
                 )
 
         for chunk_index, chunk in enumerate(prepared.chunks, 1):
@@ -1290,7 +1255,6 @@ class RuntimeContent:
                 translate_chunk(
                     chunk,
                     chunk_index,
-                    is_adaptive_child=False,
                 )
         def assembly_failure(stage: str, error: Exception) -> None:
             write_trace(
@@ -1587,7 +1551,7 @@ class RuntimeContent:
 
             review = review_translation(
                 self.models,
-                model=self.model,
+                model=self.critic_model,
                 source=document.source,
                 source_plan=document.plan,
                 translation_request=document.request,

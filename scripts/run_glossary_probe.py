@@ -17,7 +17,6 @@ from pr_translation_smoke.glossary_probe import (
 )
 from pr_translation_smoke.yandex_openai_client import complete_markdown
 
-
 SOURCE_PATH = "ydb/docs/ru/core/concepts/glossary.md"
 DEFAULT_REF = "dd2b2f3bff7e634b043f3a35c378db6510787178"
 

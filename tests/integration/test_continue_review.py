@@ -280,7 +280,6 @@ def test_continuation_repair_publishes_exact_model_markdown():
             if role == "translate" and "Nested source item" in prompt:
                 replacement = "* Parent translated\n* Nested translated item\n"
             elif role == "critic" and self.continuing and "Nested source item" in prompt:
-                payload = json.loads(response.body)
                 values = json.loads(response_text(response.body))
                 if values["findings"]:
                     values["findings"][0]["searchable_snippet"] = "Parent translated"

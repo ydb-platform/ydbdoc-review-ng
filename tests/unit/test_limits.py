@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import pytest
 
-from ydbdoc_review_ng.domain import GitSha, RepoPath, RepositoryId, SnapshotRef
 from ydbdoc_review_ng.direction import Direction
+from ydbdoc_review_ng.domain import GitSha, RepoPath, RepositoryId, SnapshotRef
 from ydbdoc_review_ng.runtime_content import Limits
 from ydbdoc_review_ng.runtime_github import RuntimeBoundaryError
 from ydbdoc_review_ng.scope import DependencyWitness, ScopeMeasurement, ScopePreflightRequest
-
 
 SNAPSHOT = SnapshotRef(RepositoryId("ydb-platform/ydb"), GitSha("a" * 40))
 

@@ -38,9 +38,7 @@ from ydbdoc_review_ng.scope import FileOperation, ScopeEntry, ScopeOrigin
 from ydbdoc_review_ng.translation import (
     DocumentTranslationError,
     assemble_candidate,
-    build_document_prompt,
     build_translation_request,
-    document_operator_guidance,
     prepare_document,
 )
 
@@ -55,12 +53,7 @@ class ScriptedModels:
         self.calls: list[ModelRequest] = []
 
     def invoke(self, request: ModelRequest, /) -> ModelCallResult:
-        if len(self.calls) >= len(self.responses):
-            if request.role.value != "critic":
-                raise IndexError("scripted model response exhausted")
-            response = self.responses[-1]
-        else:
-            response = self.responses[len(self.calls)]
+        response = self.responses[len(self.calls)]
         self.calls.append(request)
         if type(response) is ModelCallResult:
             return response
@@ -157,7 +150,8 @@ class NestedInvalidThenEchoModels:
 
 def _heading_block(number: int, length: int) -> str:
     prefix = f"## Block {number:03d} "
-    return prefix + "x" * (length - len(prefix) - 1) + "\n"
+    body_length = length - len(prefix) - 1
+    return prefix + ("x " * body_length)[:body_length] + "\n"
 
 
 def content_filter_witness(*, with_leading_chunk: bool = False) -> bytes:
@@ -364,7 +358,7 @@ def test_translate_document_uses_complete_markdown_and_selected_direction(
     )
 
 
-def test_translator_draft_is_repaired_by_full_markdown_critic() -> None:
+def test_translator_draft_gets_one_technical_correction() -> None:
     document = document_for(
         "# Исходный заголовок\n\nТекст со [ссылкой](guide.md).\n".encode(),
         target=None,
@@ -377,16 +371,16 @@ def test_translator_draft_is_repaired_by_full_markdown_critic() -> None:
 
     _accepted, accepted_document = content_with(models)._translate_document(document)
 
-    assert [call.role.value for call in models.calls] == ["translate", "critic"]
+    assert [call.role.value for call in models.calls] == ["translate", "translate"]
     assert "<AUTHORITATIVE_SOURCE_RU>" in models.calls[1].prompt
     assert draft in models.calls[1].prompt
-    assert "Return the complete corrected Markdown only" in models.calls[1].prompt
+    assert "<PREVIOUS_RESPONSE>" in models.calls[1].prompt
     assert accepted_document.translated_markdown == (
         "# Translated heading\n\nText with [link](guide.md).\n"
     )
 
 
-def test_critic_prompt_has_one_draft_and_leaves_boundary_newlines_to_code() -> None:
+def test_correction_prompt_has_one_previous_response() -> None:
     document = document_for(
         "# Заголовок\n\nТекст со [ссылкой](guide.md).\n".encode(), target=None
     )
@@ -398,9 +392,9 @@ def test_critic_prompt_has_one_draft_and_leaves_boundary_newlines_to_code() -> N
     content_with(models)._translate_document(document)
 
     critic_prompt = models.calls[1].prompt
-    assert critic_prompt.count("<TRANSLATION_DRAFT_EN>") == 1
+    assert critic_prompt.count("<PREVIOUS_RESPONSE>") == 1
     assert critic_prompt.count("# Heading\n\nText with [link](guide.md).\n") == 1
-    assert "Boundary contract:" not in critic_prompt
+    assert "Boundary contract:" in critic_prompt
 
 
 def test_translation_uses_glossary_context_for_each_chunk(monkeypatch) -> None:
@@ -673,7 +667,7 @@ def test_translate_rejects_link_groups_that_exchange_source_endpoints(
     with pytest.raises(InvalidTranslationResponse, match="translation_response_invalid"):
         content_with(models).translate_document(document)
 
-    assert len(models.calls) == 3
+    assert len(models.calls) == 2
 
 
 @pytest.mark.parametrize("source_locale", [Locale.RU, Locale.EN])
@@ -691,18 +685,18 @@ def test_translate_rejects_crossed_link_group_intervals(source_locale: Locale) -
     with pytest.raises(InvalidTranslationResponse, match="translation_response_invalid"):
         content_with(models).translate_document(document)
 
-    assert len(models.calls) == 3
+    assert len(models.calls) == 2
 
 
 @pytest.mark.parametrize(
     ("second_response", "succeeds"),
     [
         (
-            "---\ntitle: Fixed title\ndescription: Valid value\n---\nTranslated body.\n",
+            "---\ntitle: Fixed title\ndescription: Valid value\n---\n",
             True,
         ),
         (
-            '---\ntitle: "Still broken\ndescription: Invalid again\n---\nTranslated body.\n',
+            '---\ntitle: "Still broken\ndescription: Invalid again\n---\n',
             False,
         ),
     ],
@@ -711,9 +705,9 @@ def test_translate_rejects_crossed_link_group_intervals(source_locale: Locale) -
 def test_malformed_frontmatter_response_uses_one_technical_correction(
     second_response: str, succeeds: bool
 ) -> None:
-    source = b"---\ntitle: Source title\ndescription: Source value\n---\nSource body.\n"
+    source = b"---\ntitle: Source title\ndescription: Source value\n---\n"
     document = document_for(source)
-    malformed = '---\ntitle: "Broken title\ndescription: Invalid value\n---\nTranslated body.\n'
+    malformed = '---\ntitle: "Broken title\ndescription: Invalid value\n---\n'
     models = ScriptedModels([malformed, second_response])
 
     if succeeds:
@@ -731,7 +725,7 @@ def test_malformed_frontmatter_response_uses_one_technical_correction(
         with pytest.raises(InvalidTranslationResponse, match="translation_response_invalid"):
             content_with(models).translate_document(document)
 
-    assert len(models.calls) == (2 if succeeds else 3)
+    assert len(models.calls) == 2
     assert "document_response:structure_mismatch" in models.calls[1].prompt
 
 
@@ -740,7 +734,7 @@ def test_large_document_uses_minimum_response_safe_raw_chunks(
     source_locale: Locale,
 ) -> None:
     source = (
-        "\n\n".join(f"Paragraph {number:03d} " + "x" * 775 for number in range(140)).encode()
+        "\n\n".join(f"Paragraph {number:03d} " + ("x " * 388)[:775] for number in range(140)).encode()
         + b"\n"
     )
     assert 110_000 < len(source.decode()) < 112_000
@@ -983,7 +977,7 @@ def test_non_final_parent_does_not_trigger_adaptive_split() -> None:
 
 
 def test_content_filter_on_technical_correction_does_not_publish_invalid_response() -> None:
-    document = document_for(b"# See [guide](guide.md).\n# Next heading\n")
+    document = document_for(b"# See [guide](guide.md).\n")
     prepared = prepare_document(document.source, document.plan, max_characters=100_000)
     missing_placeholder = prepared.placeholders[0]
     invalid = prepared.chunks[0].text.replace(missing_placeholder.token, "", 1)
@@ -1013,13 +1007,13 @@ def test_complete_markdown_response_gets_exactly_one_technical_correction() -> N
     with pytest.raises(InvalidTranslationResponse, match="translation_response_invalid"):
         content._translate_document(document)
 
-    assert len(models.calls) == 3
+    assert len(models.calls) == 2
     assert "Important correction" not in models.calls[0].prompt
     assert "<PREVIOUS_RESPONSE>" not in models.calls[0].prompt
     correction = models.calls[1].prompt
     assert "Important correction" in correction
     assert prepared.chunks[0].text in correction
-    assert f"<TRANSLATION_DRAFT_EN>\n{invalid}</TRANSLATION_DRAFT_EN>" in correction
+    assert f"<PREVIOUS_RESPONSE>\n{invalid}\n</PREVIOUS_RESPONSE>" in correction
     assert "Rejected translation:" not in correction
     assert placeholder.token in correction
     assert "reorder" in correction
@@ -1039,7 +1033,7 @@ def test_invalid_correction_does_not_fall_back_to_primary_invalid_response() -> 
     with pytest.raises(InvalidTranslationResponse, match="translation_response_invalid"):
         content._translate_document(document)
 
-    assert len(models.calls) == 3
+    assert len(models.calls) == 2
 
 
 def test_exhausted_missing_placeholder_rejects_malformed_markdown() -> None:
@@ -1049,20 +1043,20 @@ def test_exhausted_missing_placeholder_rejects_malformed_markdown() -> None:
     )
     document = document_for(source)
     prepared = prepare_document(document.source, document.plan, max_characters=100_000)
-    first_url, first_code, second_url, second_code = (
+    first_url, _first_code, second_url, second_code = (
         item.token for item in prepared.placeholders
     )
     malformed = (
         f"* [First]({first_url}) uses . [\n"
         f"* Second]({second_url}) uses {second_code}.\n"
     )
-    models = ScriptedModels([malformed, malformed])
+    models = ScriptedModels([malformed, malformed, malformed, malformed])
     content = content_with(models)
 
     with pytest.raises(InvalidTranslationResponse, match="translation_response_invalid"):
         content._translate_document(document)
 
-    assert len(models.calls) == 3
+    assert len(models.calls) == 4
 
 
 def test_missing_placeholder_does_not_bypass_malformed_frontmatter() -> None:
@@ -1079,7 +1073,7 @@ def test_missing_placeholder_does_not_bypass_malformed_frontmatter() -> None:
     with pytest.raises(InvalidTranslationResponse, match="translation_response_invalid"):
         content._translate_document(document)
 
-    assert len(models.calls) == 3
+    assert len(models.calls) == 2
 
 
 @pytest.mark.parametrize(
@@ -1101,7 +1095,7 @@ def test_malformed_unknown_placeholder_remains_terminal_after_correction(
     with pytest.raises(InvalidTranslationResponse, match="translation_response_invalid"):
         content._translate_document(document)
 
-    assert len(models.calls) == 3
+    assert len(models.calls) == 2
 
 
 def test_validate_plan_never_allows_unvalidated_translation_bytes() -> None:
@@ -1143,7 +1137,7 @@ def test_lost_placeholder_candidate_is_not_created() -> None:
     with pytest.raises(InvalidTranslationResponse, match="translation_response_invalid"):
         content._translate_document(document)
 
-    assert len(models.calls) == 3
+    assert len(models.calls) == 2
 
 
 def test_reordered_link_pairs_are_not_published() -> None:
@@ -1159,7 +1153,7 @@ def test_reordered_link_pairs_are_not_published() -> None:
     with pytest.raises(InvalidTranslationResponse, match="translation_response_invalid"):
         content._translate_document(document)
 
-    assert len(models.calls) == 3
+    assert len(models.calls) == 2
 
 
 def test_live_nested_link_reorder_witness_is_not_published() -> None:
@@ -1198,7 +1192,8 @@ def test_exhausted_invalid_large_chunk_is_split_once_and_validated() -> None:
 
     _accepted, accepted_document = content._translate_document(document)
 
-    assert len(models.calls) == 3
+    assert len(models.calls) == 4
+    assert "".join(_source_from_prompt(c.prompt) for c in models.calls[2:]) == parent.text
     assert "Important correction" in models.calls[1].prompt
     assert accepted_document.translated_markdown.encode() == source
 
@@ -1222,7 +1217,8 @@ def test_invalid_adaptive_child_is_split_again_until_valid() -> None:
         models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "250000"}
     )._translate_document(document)
 
-    assert len(models.calls) == 3
+    assert len(models.calls) == 10
+    assert len(_source_from_prompt(models.calls[-1].prompt)) < len(parent.text)
     assert accepted_document.translated_markdown.encode() == source
 
 
@@ -1375,3 +1371,38 @@ def test_translation_trace_is_payload_free(capsys: pytest.CaptureFixture[str]) -
     ]
     assert "PRIVATE SOURCE" not in output
     assert "PRIVATE TRANSLATED" not in output
+
+
+def test_small_multiblock_invalid_chunk_splits_after_one_correction() -> None:
+    source = b"# First `one`\n\n# Second `two`\n"
+    document = document_for(source, target=None)
+    prepared = prepare_document(source, document.plan, max_characters=6000)
+    invalid = prepared.chunks[0].text.replace(prepared.placeholders[0].token, "")
+    models = InvalidTwiceThenEchoModels(invalid)
+
+    _, accepted = content_with(models)._translate_document(document)
+
+    assert accepted.translated_markdown.encode() == source
+    assert len(models.calls) == 4
+    assert all(call.role.value == "translate" for call in models.calls)
+    children = [_source_from_prompt(call.prompt) for call in models.calls[2:]]
+    assert "".join(children) == prepared.chunks[0].text
+    assert all(len(child) < len(prepared.chunks[0].text) for child in children)
+    assert "<PREVIOUS_RESPONSE>" in models.calls[1].prompt
+    assert "`one`" in models.calls[1].prompt
+
+
+def test_invalid_indivisible_chunk_has_two_calls_and_safe_diagnostic(capsys) -> None:
+    document = document_for(b"# Private-prose `one`\n", target=None)
+    models = ScriptedModels(["# bad\n", "# bad\n"])
+
+    with pytest.raises(InvalidTranslationResponse):
+        content_with(models)._translate_document(document)
+
+    assert len(models.calls) == 2
+    events = [json.loads(line.removeprefix("YDBDOC_TRACE "))
+              for line in capsys.readouterr().err.splitlines()]
+    failures = [event for event in events if event['operation'] == 'chunk_validation']
+    assert len(failures) == 2
+    assert all(event['code'] == 'document_response:placeholder_mismatch' for event in failures)
+    assert all('Private-prose' not in json.dumps(event) for event in events)

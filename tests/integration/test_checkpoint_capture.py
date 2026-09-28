@@ -200,9 +200,9 @@ class CaptureServices(RuntimeServices):
                 role = "translate"
                 self.translations += 1
                 text = translated_markdown(prompt)
-                if self.stop == "translation" and self.translations in {2, 3}:
+                if self.stop == "translation" and self.translations >= 2:
                     text = "[[YDBDOC_PROTECTED_9999]]"
-                if self.stop == "translation_assembly" and self.translations in {2, 3}:
+                if self.stop == "translation_assembly" and self.translations >= 2:
                     text = "[[YDBDOC_PROTECTED_9999]]"
         elif "verdict" in (schema := schema_wrapper["schema"])["properties"]:
             role = "critic"
@@ -323,10 +323,10 @@ def test_two_invalid_current_field_responses_preserve_first_map_and_pending_orde
     assert checkpoint.scope_target_paths == tuple(
         RepoPath(f"ydb/docs/en/core/{n}.md") for n in ("a", "b", "c", "z")
     )
-    assert services.roles == ["translate", "translate", "critic", "critic"]
+    assert services.roles == ["translate", "translate", "translate"]
     attempts = [row for row in services.audit if "attempt_id" in row]
-    assert len(attempts) == 4
-    assert sum(row["cost_rub"] for row in attempts) == Decimal("0.04")
+    assert len(attempts) == 3
+    assert sum(row["cost_rub"] for row in attempts) == Decimal("0.03")
     assert services.commits == 0 and services.audit[-1]["status"] == "failed"
 
 
@@ -341,8 +341,8 @@ def test_twice_lost_known_placeholder_stops_before_publication() -> None:
     with pytest.raises(WorkflowError):
         services.translate()
 
-    assert services.roles == ["translate", "critic", "critic"]
-    assert services.critics == 2
+    assert services.roles == ["translate", "translate"]
+    assert services.critics == 0
     assert services.commits == 0
     assert services.files[target_path] == b"# Old\n"
     checkpoint = services.checkpoint()
@@ -599,7 +599,7 @@ def test_lost_terminal_ack_and_failed_close_cannot_be_resumed():
     services = LostTerminalAck(stop="translation")
     with pytest.raises((WorkflowError, PersistenceError)):
         services.translate()
-    assert services.roles == ["translate", "translate", "critic", "critic"]
+    assert services.roles == ["translate", "translate", "translate"]
     assert services.rows  # The real checkpoint write reached storage.
     with pytest.raises(PersistenceError):
         services.checkpoint()

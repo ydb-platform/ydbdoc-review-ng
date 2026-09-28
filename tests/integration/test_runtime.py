@@ -80,11 +80,18 @@ def test_shipped_composition_translates_then_verifies_current_pr_without_retrans
         "YANDEX_API_KEY": "secret",
         "YANDEX_FOLDER_ID": "folder",
     }
+    model_uris = []
+
+    def record_model(request):
+        body = json.loads(request.body)
+        model_uris.append(body.get("modelUri") or body.get("model"))
+        return services.model(request)
+
     runtime = create_runtime(
         environment=environment,
         ydb_executor=services,
         github_transport=services.github,
-        model_transport=services.model,
+        model_transport=record_model,
     )
     assert (
         main(
@@ -93,6 +100,8 @@ def test_shipped_composition_translates_then_verifies_current_pr_without_retrans
         )
         == 0
     )
+    assert "deepseek" in model_uris[0]
+    assert "yandexgpt-5.1" in model_uris[1]
     assert services.files["ydb/docs/en/core/page.md"] == b"# Translated\n"
     assert len(services.comments) == 1
     assert services.comments[0]["body"].startswith("🟢 GREEN\n")

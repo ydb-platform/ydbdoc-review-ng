@@ -4,8 +4,9 @@
 
 - `temperature = 0`.
 - Reasoning полностью отключён.
-- Строгий structured output по JSON Schema.
-- Raw JSON повторно проверяется локально независимо от гарантий провайдера.
+- Translate возвращает raw Markdown и проходит локальную проверку protected fragments.
+- Direction и semantic critic возвращают structured output по JSON Schema;
+  raw JSON повторно проверяется локально независимо от гарантий провайдера.
 - Каждая начатая attempt сохраняется в durable state с параметрами, входом,
   status/error, сырым ответом и usage при их наличии.
 - Любой полученный response, включая malformed или семантически неудачный,
@@ -19,7 +20,8 @@
   допускает один deterministic split по ближайшей к середине top-level block
   boundary. Дочерний chunk при повторном content-filter делится тем же способом,
   пока диапазон top-level blocks строго уменьшается; успешные соседние chunks не
-  перезапускаются. Correction и другие provider errors этот split не включают.
+  перезапускаются. Невалидная correction и content-filter на correction также допускают split
+  TRANSLATE; другие provider errors деление не включают.
 - В raw-Markdown prompts каждый placeholder требуется ровно один раз в своём
   source top-level block. Только независимые `inline_code` и атомарные `template`
   могут менять порядок внутри переводимого поля; остальные placeholders и
@@ -34,7 +36,8 @@ JSON Schema. В интеграционном прогоне PR 51079 все 361 
 `reasoningTokens = 0`. Канонический текущий model URI:
 `gpt://<folder>/yandexgpt-5.1`; суффикс `/latest` не используется в default,
 но явный `YDBDOC_MODEL` сохраняет возможность выбрать другой URI. В runtime это
-fallback-модель для перевода.
+fallback-модель для перевода и отдельная модель critic-editor/final critic
+по умолчанию (`YDBDOC_MODEL_CRITIC`).
 
 ### DeepSeek V4 Flash
 

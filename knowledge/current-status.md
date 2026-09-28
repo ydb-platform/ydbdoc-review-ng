@@ -1,3 +1,29 @@
+# Отладка 2026-09-28 (в работе)
+
+Исходный main/tag v1.0.1: `0a64e34ba57c93968c1525ae3e3a039edb724e5a`.
+Разобран run `36379127309`, PR #50858: translator и два raw-Markdown critic
+ответа на glossary chunk 5/33, затем InvalidTranslationResponse. В публичном
+логе нет точной причины валидации или model responses, поэтому конкретные
+невалидные bytes из этого run не воспроизведены.
+
+Подтверждены дефекты: две critic-коррекции вместо одной translator-коррекции;
+порог adaptive split 4000 при реальных source chunks меньше 3000; отсутствие
+кода валидации в chunk trace. Новые regression witnesses падали до изменения
+и проходят после. Исправлены mocks, которые молча повторяли последний critic
+response и позволяли тестам recursive split проходить без реального деления.
+Смысловой critic теперь имеет отдельную настройку модели. Требования обновлены.
+
+Локальные проверки завершены: 1900 passed, 3 deselected (130.78 s), Ruff,
+mypy (47 source files), git diff --check, wheel/sdist build, installed smoke
+translate + verify + continue без сети. Профильный runtime suite: 111 passed;
+continuation + timeout regressions: 102 passed. Полный suite выполнен под
+subreaper из-за контейнерного PID 1. Внешний запуск ещё не выполнен; успех
+перевода и deployment пока не заявлены.
+Ресурсы контролируются отдельным локальным журналом; свободно около 3.7 ГБ RAM
+и 28 ГБ диска.
+
+---
+
 # Текущий handoff
 
 Обновлено: 2026-09-25. Рабочая ветка: `main`, актуальный commit

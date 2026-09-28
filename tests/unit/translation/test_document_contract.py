@@ -66,7 +66,7 @@ def test_translation_prompt_uses_authoritative_source_only() -> None:
 
 
 def test_translation_prompt_forbids_creating_or_reusing_links() -> None:
-    source = "See [guide](guide.md) and [reference](reference.md).\n".encode()
+    source = b"See [guide](guide.md) and [reference](reference.md).\n"
     _plan, request = prepared(source)
 
     prompt = build_document_prompt(request.chunks[0], "ru", "en")
