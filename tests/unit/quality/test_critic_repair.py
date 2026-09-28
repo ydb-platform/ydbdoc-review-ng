@@ -253,6 +253,61 @@ def test_critic_packs_adjacent_exact_translator_chunks_without_realignment() -> 
     assert current_editor_target(executor.calls[0]) == "".join(draft_responses)
 
 
+def test_content_filter_keeps_exact_translator_chunk_for_fallback_model() -> None:
+    source = (
+        b"## First\n\nA very short source paragraph.\n\n"
+        b"## Second\n\nAnother short source paragraph.\n"
+    )
+    target = (
+        "## First translated\n\n"
+        + "A much longer translated paragraph. " * 40
+        + "\n\n## Second translated\n\nShort.\n"
+    ).encode()
+    plan = build_markdown_plan(SNAPSHOT, SOURCE_PATH, source)
+    request = build_translation_request(source, plan)
+    draft_request = prepare_document(source, plan, max_characters=100_000)
+    draft_responses = (raw_document(target),)
+
+    class FilterThenFallbackExecutor:
+        def __init__(self) -> None:
+            self.calls: list[ModelRequest] = []
+
+        def invoke(self, model_request: ModelRequest, /) -> ModelCallResult:
+            self.calls.append(model_request)
+            if len(self.calls) == 1:
+                return ModelCallResult(None, AttemptError.CONTENT_FILTER, ())
+            return ModelCallResult(
+                critic_editor_json(
+                    "GREEN", [], current_editor_target(model_request)
+                ),
+                None,
+                (),
+            )
+
+    executor = FilterThenFallbackExecutor()
+    result = review_translation(
+        executor,
+        model="critic-model",
+        fallback_model="translator-model",
+        source=source,
+        source_plan=plan,
+        translation_request=request,
+        target=target,
+        target_path=PATH,
+        source_locale=Locale.EN,
+        target_locale=Locale.RU,
+        draft_request=draft_request,
+        draft_responses=draft_responses,
+    )
+
+    assert result.final_candidate == target
+    assert [call.model for call in executor.calls] == [
+        "critic-model",
+        "translator-model",
+    ]
+    assert current_editor_target(executor.calls[1]) == draft_responses[0]
+
+
 def test_primary_critic_applies_its_own_correction_without_repair_call() -> None:
     plan, request, values, target = prepared()
     field_id = request.fields[1].field_id
@@ -862,7 +917,7 @@ def test_large_repair_uses_response_safe_chunks_and_restores_exact_target() -> N
     assert result.final_candidate == target
 
 
-def test_exhausted_content_filter_splits_aligned_critic_edit() -> None:
+def test_exhausted_content_filter_uses_intact_fallback_request() -> None:
     lengths = [157] * 49 + [177] + [130] * 60 + [131]
     parts = []
     for number, length in enumerate(lengths):
@@ -905,6 +960,7 @@ def test_exhausted_content_filter_splits_aligned_critic_edit() -> None:
     result = review_translation(
         executor,
         model="model",
+        fallback_model="fallback-model",
         source=source,
         source_plan=plan,
         translation_request=request,
@@ -927,19 +983,17 @@ def test_exhausted_content_filter_splits_aligned_critic_edit() -> None:
     target_chunks = tuple(
         current_editor_target(call) for call in repair_calls
     )
-    assert tuple(map(len, source_chunks)) == (15_801, 7_870, 7_931)
-    assert tuple(map(len, target_chunks)) == (15_801, 7_870, 7_931)
-    assert source_chunks[1] + source_chunks[2] == source_chunks[0]
+    assert tuple(map(len, source_chunks)) == (15_801, 15_801)
+    assert tuple(map(len, target_chunks)) == (15_801, 15_801)
+    assert source_chunks[1] == source_chunks[0]
+    assert target_chunks[1] == target_chunks[0]
+    assert [call.model for call in repair_calls] == ["model", "fallback-model"]
     assert result.final_candidate == target
     assert not result.repair_applied
-    assert [call.role.value for call in executor.calls] == [
-        "critic",
-        "critic",
-        "critic",
-    ]
+    assert [call.role.value for call in executor.calls] == ["critic", "critic"]
 
 
-def test_content_filter_in_repair_child_splits_again() -> None:
+def test_content_filter_from_primary_and_fallback_is_terminal() -> None:
     lengths = [157] * 49 + [177] + [130] * 60 + [131]
     source = "".join(
         f"## Block {number:03d} " + "x" * (length - len(f"## Block {number:03d} ") - 1) + "\n"
@@ -967,28 +1021,30 @@ def test_content_filter_in_repair_child_splits_again() -> None:
             return ModelCallResult(critic_json("GREEN", []), None, ())
 
     executor = NestedContentFilterExecutor()
-    result = review_translation(
-        executor,
-        model="model",
-        source=source,
-        source_plan=plan,
-        translation_request=request,
-        target=source,
-        target_path=PATH,
-        source_locale=Locale.EN,
-        target_locale=Locale.RU,
-        max_request_characters=250_000,
-    )
+    with pytest.raises(QualityExecutionError, match="quality_execution:critic"):
+        review_translation(
+            executor,
+            model="model",
+            fallback_model="fallback-model",
+            source=source,
+            source_plan=plan,
+            translation_request=request,
+            target=source,
+            target_path=PATH,
+            source_locale=Locale.EN,
+            target_locale=Locale.RU,
+            max_request_characters=250_000,
+        )
 
     repair_calls = tuple(
         call for call in executor.calls if "Act as a critic-editor" in call.prompt
     )
-    assert result.final_candidate == source
-    assert len(repair_calls) == 5
+    assert len(repair_calls) == 2
+    assert [call.model for call in repair_calls] == ["model", "fallback-model"]
     assert all(call.role.value == "critic" for call in repair_calls)
 
 
-def test_repair_content_filter_uses_only_boundary_with_uneven_children() -> None:
+def test_repair_content_filter_does_not_split_uneven_translation() -> None:
     parts = []
     for number, length in ((1, 9_000), (2, 1_000)):
         prefix = f"## Block {number:03d} "
@@ -1029,6 +1085,7 @@ def test_repair_content_filter_uses_only_boundary_with_uneven_children() -> None
     result = review_translation(
         executor,
         model="model",
+        fallback_model="fallback-model",
         source=source,
         source_plan=plan,
         translation_request=request,
@@ -1051,15 +1108,13 @@ def test_repair_content_filter_uses_only_boundary_with_uneven_children() -> None
     target_chunks = tuple(
         current_editor_target(call) for call in repair_calls
     )
-    assert tuple(map(len, source_chunks)) == (10_000, 9_000, 1_000)
-    assert tuple(map(len, target_chunks)) == (10_000, 9_000, 1_000)
-    assert source_chunks[1] + source_chunks[2] == source_chunks[0]
+    assert tuple(map(len, source_chunks)) == (10_000, 10_000)
+    assert tuple(map(len, target_chunks)) == (10_000, 10_000)
+    assert source_chunks[0] == source_chunks[1]
+    assert target_chunks[0] == target_chunks[1]
+    assert [call.model for call in repair_calls] == ["model", "fallback-model"]
     assert result.final_candidate == target
-    assert [call.role.value for call in executor.calls] == [
-        "critic",
-        "critic",
-        "critic",
-    ]
+    assert [call.role.value for call in executor.calls] == ["critic", "critic"]
 
 
 def test_repair_derives_current_field_values_from_actual_target() -> None:

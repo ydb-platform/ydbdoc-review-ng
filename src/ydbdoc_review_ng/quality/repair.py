@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
-from typing import Protocol
+from typing import Protocol, cast
 
 from ydbdoc_review_ng.continuation import AcceptedMap
 from ydbdoc_review_ng.domain import Locale, RepoPath
 from ydbdoc_review_ng.models import AttemptError, ModelCallResult, ModelRequest
+from ydbdoc_review_ng.models.types import FrozenJson, mutable_json
 from ydbdoc_review_ng.parser.markdown import build_markdown_plan
 from ydbdoc_review_ng.plan import BlockKind, ProtectedKind, SourcePlan, fields_of
 from ydbdoc_review_ng.quality.critic import build_critic_request, parse_critic_response
@@ -29,7 +30,6 @@ from ydbdoc_review_ng.translation import (
     build_translation_request,
     prepare_document,
     restore_document,
-    split_content_filter_chunk,
     validate_chunk_response,
     verify_document_candidate,
 )
@@ -468,6 +468,7 @@ def review_translation(
     executor: ModelExecutor,
     *,
     model: str,
+    fallback_model: str | None = None,
     source: bytes,
     source_plan: SourcePlan,
     translation_request: TranslationRequest,
@@ -516,7 +517,7 @@ def review_translation(
     if (draft_request is None) != (draft_responses is None):
         raise QualityInputError("incomplete_draft_chunks")
     if draft_request is None:
-        editor_requests, document_request, source_blocks, target_blocks = _editor_requests(
+        editor_requests, document_request, _source_blocks, target_blocks = _editor_requests(
             model=model,
             source=source,
             source_plan=source_plan,
@@ -532,7 +533,7 @@ def review_translation(
         )
     else:
         assert draft_responses is not None
-        editor_requests, document_request, source_blocks, target_blocks = (
+        editor_requests, document_request, _source_blocks, target_blocks = (
             _editor_requests_from_draft(
                 model=model,
                 source=source,
@@ -555,22 +556,6 @@ def review_translation(
     responses: list[str] = []
     editor_results: list[CriticResult] = []
     editor_changed_target = False
-
-    def child_editor_request(chunk: DocumentChunk) -> ModelRequest:
-        request = _editor_request(
-            model=model,
-            source_text=chunk.text,
-            target_text="".join(target_blocks[chunk.block_start : chunk.block_end]),
-            target_path=target_path,
-            source_locale=source_locale,
-            target_locale=target_locale,
-            requested_ids=critic_field_ids,
-            operator_context=operator_context,
-            terminology_context=terminology_context,
-        )
-        if len(request.prompt) > max_request_characters:
-            raise QualityInputError
-        return request
 
     def invoke_editor(request: ModelRequest) -> ModelCallResult:
         if before_model_call is not None:
@@ -604,22 +589,30 @@ def review_translation(
 
     def process_editor_chunk(chunk: DocumentChunk, request: ModelRequest) -> bool:
         response = invoke_editor(request)
-        if not response.success or response.text is None:
-            children = (
-                split_content_filter_chunk(
-                    chunk,
-                    source_blocks,
-                    aligned_block_texts=target_blocks,
+        if (
+            (not response.success or response.text is None)
+            and response.failure is AttemptError.CONTENT_FILTER
+            and fallback_model is not None
+            and fallback_model != request.model
+        ):
+            # Keep the exact validated source/target pair intact. Splitting the
+            # translated target proportionally to source block lengths is not a
+            # real alignment and can cut Markdown or placeholders. One other
+            # provider gets the same critic-editor request; there is no loop.
+            response = invoke_editor(
+                ModelRequest(
+                    request.role,
+                    fallback_model,
+                    request.prompt,
+                    None
+                    if request.schema is None
+                    else cast(FrozenJson, mutable_json(request.schema)),
+                    request.max_tokens,
+                    request.target_path,
                 )
-                if response.failure is AttemptError.CONTENT_FILTER
-                else None
             )
-            if children is None:
-                raise QualityExecutionError("critic")
-            return all(
-                process_editor_chunk(child, child_editor_request(child))
-                for child in children
-            )
+        if not response.success or response.text is None:
+            raise QualityExecutionError("critic")
         try:
             accept_editor_response(chunk, response)
         except DocumentTranslationError:

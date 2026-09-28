@@ -22,6 +22,10 @@
   пока диапазон top-level blocks строго уменьшается; успешные соседние chunks не
   перезапускаются. Невалидная correction и content-filter на correction также допускают split
   TRANSLATE; другие provider errors деление не включают.
+- Critic-editor не делит уже переведённый target после content-filter: source и
+  target могут иметь разные длины, поэтому пропорциональный разрез небезопасен.
+  Та же целая пара один раз передаётся `YDBDOC_MODEL_CRITIC_FALLBACK` (по
+  умолчанию основной модели перевода); следующий отказ терминален.
 - В raw-Markdown prompts каждый placeholder требуется ровно один раз в своём
   source top-level block. Только независимые `inline_code` и атомарные `template`
   могут менять порядок внутри переводимого поля; остальные placeholders и

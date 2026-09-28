@@ -169,3 +169,6 @@ corrected Markdown excerpt is the edit unit; this keeps large documents to a few
 dozens of top-level-block calls. During `doc_translate`, these excerpts are the
 exact validated translator chunk pairs retained in memory. The review stage
 does not parse and heuristically realign the assembled source and target again.
+If the critic provider exhausts its bounded content-filter retry, one fallback
+critic model receives the same intact pair. The translated target is never split
+proportionally to source block lengths.

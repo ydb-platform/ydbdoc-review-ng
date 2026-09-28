@@ -1,3 +1,28 @@
+# Independent pre-rerun audit blocked unsafe critic splitting (2026-09-28)
+
+No paid rerun was started after `260ca71`. An independent red-team review found
+that its normal critic path reused exact validated translator chunks, but the
+`content_filter` recovery path still divided translated target text
+proportionally to source block lengths. RU and EN block lengths are not an
+alignment; the split could land inside Markdown or a protected placeholder.
+The previous run had several real critic content filters, so this was a release
+blocker despite the green general test suite.
+
+A regression witness failed on the old path. Recovery now sends the same intact
+source/target pair once to a fallback critic model (the translator model by
+default) and then fails closed; there is no target split or retry tree. A
+read-only planner replay on all ten current YDB source documents at main
+`069f77ee171510db53326831731012ae27651467` produced 113 translation chunks and
+26 critic requests, with a maximum critic prompt of 41473 characters. Even if
+every primary critic request is content-filtered, orchestration is bounded at
+52 critic model invocations. Every document round-tripped and packed under the
+48000-character limit. Release gate: 1951 tests passed (3 live deselected),
+Ruff, mypy, diff-check, wheel/sdist build and installed CLI smoke for translate,
+verify and continue are green. Publication, tool CI and the next paid run remain
+pending; do not start `doc_translate` before tool CI passes.
+
+---
+
 # Second critic chunk planner failed on glossary (2026-09-28)
 
 Run `36461077089` translated all ten documents and reduced the changelog review
