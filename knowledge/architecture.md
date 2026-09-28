@@ -128,3 +128,11 @@ The path recognizer previously treated decimal 1.79 as a filename. Russian
 validation. Bare decimals (including signed/exponent forms) are excluded from
 PATH; explicit/nested numeric paths, filenames with an extension, URLs and
 inline code remain protected. This does not weaken numeric semantic review.
+
+## Complete build overlay on reruns (2026-09-28)
+
+DiplodocBuildValidator must overlay every plan entry, including before == after.
+Those bytes describe the remote translation head, not the local base checkout.
+Filtering by remote diff omitted unchanged TOC/assets on reruns and skipped all
+validation for unchanged candidates. Build overlays and restores the full plan;
+Git publication still uses real diffs for commit/no-op decisions.

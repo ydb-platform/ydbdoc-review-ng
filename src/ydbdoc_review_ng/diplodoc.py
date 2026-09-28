@@ -57,7 +57,10 @@ class DiplodocBuildValidator:
         return ()
 
     def __call__(self, plan: PublicationPlan, /) -> None:
-        changes = tuple(item for item in plan.files if item.before != item.after)
+        # `before` belongs to the remote translation head, while docs_root can
+        # be a clean base checkout. Validate the complete candidate, not merely
+        # the diff against a previous translation (also during verification).
+        changes = plan.files
         if not changes:
             return
         originals: list[tuple[Path, bytes | None]] = []

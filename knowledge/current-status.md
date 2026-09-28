@@ -1,3 +1,22 @@
+# Repeat-run build overlay (2026-09-28)
+
+Main/tag `d35aa3b30e873dd70be901c03a4a815f383e08c4`, tool CI green.
+Run `36398164442` translated all ten documents, including metrics. Build failed
+with YFM003: optimization files not declared in target TOC. No new branch commit.
+Root cause: Diplodoc overlay filtered before == after entries against the remote
+translation head, although its checkout was clean base. Thus the complete
+candidate contained the TOC/assets, but build omitted unchanged entries.
+Fix overlays all plan files and builds nonempty unchanged plans. Regression
+witnesses cover absent base TOC/binary asset, deletion and checkout restoration.
+Release gate: 1948 passed, 3 deselected (133.45 s), Ruff, mypy (49 files),
+diff-check, wheel/sdist and installed smoke all green. Real Diplodoc 5.61.0 /
+Node 24 build passed on clean source 59c247bb52af966f6801a77d0c28cb73948df93e,
+overlaying the published 36-file candidate with 26 unchanged entries. Used one
+worker and 768 MB heap caps; checkout git diff empty afterward. New translation
+still needs an external run; this local build does not certify old prose quality.
+
+---
+
 # Decimal localization regression (2026-09-28)
 
 Main/tag `08acc684be17ab15a9f560df9330af34a74e86e6`, tool CI green.
