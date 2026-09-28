@@ -23,6 +23,12 @@ makes the existing YDB action run only this synthetic probe and exit without
 translation or publication. No translation rerun is allowed until that probe
 and the offline release gate both pass.
 
+Consumer probe run `36484882330` passed on commit `51176d6`: the real DeepSeek
+endpoint accepted the flat fallback contract and returned a valid response for
+a translator-sized unit (`15197` prompt characters, `4337` input tokens, `968`
+output tokens). The probe did not translate documents or change PR #54352; its
+head remained `6f926402d8e12d9b53a5eaec5bfbf700a7311d50`.
+
 # Independent pre-rerun audit blocked unsafe critic splitting (2026-09-28)
 
 No paid rerun was started after `260ca71`. An independent red-team review found
