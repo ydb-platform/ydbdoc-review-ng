@@ -1,3 +1,16 @@
+# Upstream build blocker fixed; translation restart (2026-09-28)
+
+The user merged the two changelog link corrections into YDB main. Verified both
+RU and EN at source 7499dabb37413cd1191c35293e617bbd4508a871: removed addresses
+are absent and the existing redirect destination is used with version=v26.2.
+No separate source-fix PR is needed. The production code remains the tested
+baseline-preflight release d124d0fde509b75db5f479a12fbc8a05090c4a58 (1950 tests,
+both tool CI runs green). Next: fresh doc_translate on merged source PR50858;
+the workflow pins current main at startup. Full end-to-end acceptance remains
+pending: a new translation commit/PR, semantic review and matching-head checks.
+
+---
+
 # Broken upstream baseline and early build gate (2026-09-28)
 
 Main/tag d099051a880d5d3d69f717304840e66a0040661c, tool CI green.
