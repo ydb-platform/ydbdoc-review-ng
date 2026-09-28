@@ -162,15 +162,18 @@ and the complete corrected Markdown in one response. A valid changed edit with
 only repairable findings resolves those draft findings. Findings explicitly
 left unrepairable receive one targeted edit call containing the critic's own
 diagnosis; a valid changed result resolves them, while a missing, invalid or
-unchanged result remains RED. There is no final-critic loop. All edits
-are assembled, validated, built and published once. A full draft build must not
+unchanged result remains RED. There is no final-critic loop. Editor responses
+contain whole excerpts without legacy field IDs. One schema-invalid
+HTTP-success response may be repeated once with the parser reason; this is a
+bounded technical retry, not a semantic review loop. The edits are assembled,
+validated, built and published once. A full draft build must not
 run before the critic-editor: fixable draft lint errors would otherwise prevent
 the editor from running. Mechanical list-marker spacing is normalized locally
 outside code before review; the final candidate always receives the strict build.
-The critic has its own 48000-character request budget. Its schema uses one
-document sentinel instead of document-wide field-ID enums because a complete
-corrected Markdown excerpt is the edit unit; this keeps large documents to a few large calls instead of
-dozens of top-level-block calls. During `doc_translate`, these excerpts are the
+The critic has its own 48000-character request budget. Its schema omits field
+IDs because a complete corrected Markdown excerpt is the edit unit; this keeps
+large documents to a few large calls instead of dozens of top-level-block calls.
+During `doc_translate`, these excerpts are the
 exact validated translator chunk pairs retained in memory. The review stage
 does not parse and heuristically realign the assembled source and target again.
 If the critic provider exhausts its bounded content-filter retry, one fallback

@@ -1664,11 +1664,6 @@ def test_repairable_but_unmapped_red_does_not_guess_a_repair_field() -> None:
         ('{"verdict":"GREEN","findings":[],"extra":1}', CriticResponseErrorReason.UNEXPECTED_FIELD),
         ('{"verdict":"green","findings":[]}', CriticResponseErrorReason.INVALID_VERDICT),
         ('{"verdict":"GREEN","findings":[{}]}', CriticResponseErrorReason.INVALID_FINDING),
-        ('{"verdict":"RED","findings":[]}', CriticResponseErrorReason.INCONSISTENT_RESULT),
-        (
-            '{"verdict":"GREEN","findings":[{"repairable":false,"reason":"x","expected_correction":"y","searchable_snippet":"z","target_path":"ydb/docs/ru/example.md","target_line":1}]}',
-            CriticResponseErrorReason.INCONSISTENT_RESULT,
-        ),
     ],
 )
 def test_critic_parser_rejects_malformed_extra_duplicate_and_inconsistent_results(
@@ -1680,6 +1675,31 @@ def test_critic_parser_rejects_malformed_extra_duplicate_and_inconsistent_result
     assert caught.value.reason is reason
     assert raw not in str(caught.value)
     assert raw not in repr(caught.value)
+
+
+@pytest.mark.parametrize(
+    ("raw_verdict", "findings", "expected"),
+    [
+        ("RED", [], Verdict.GREEN),
+        (
+            "GREEN",
+            [finding(repairable=False, snippet="Прочитайте", line=3)],
+            Verdict.RED,
+        ),
+    ],
+)
+def test_critic_parser_derives_redundant_verdict_from_findings(
+    raw_verdict: str,
+    findings: list[dict[str, object]],
+    expected: Verdict,
+) -> None:
+    result = parse_critic_response(
+        critic_json(raw_verdict, findings),
+        target_path=PATH,
+        requested_ids=(),
+    )
+
+    assert result.verdict is expected
 
 
 def test_green_critic_editor_may_return_a_valid_correction() -> None:
@@ -2064,6 +2084,21 @@ def test_model_failure_and_malformed_critic_are_typed_and_non_echoing() -> None:
     assert secret not in repr(failed.value)
 
     with pytest.raises(CriticResponseError) as malformed:
-        review(FakeExecutor(secret))
+        review(FakeExecutor(secret, secret))
     assert secret not in str(malformed.value)
     assert secret not in repr(malformed.value)
+
+
+def test_malformed_critic_gets_exactly_one_contract_retry() -> None:
+    executor = FakeExecutor("not-json", critic_json("GREEN", []))
+
+    result = review(executor)
+
+    assert result.final.verdict is Verdict.GREEN
+    assert len(executor.calls) == 2
+    assert "previous response violated" in executor.calls[1].prompt
+    for call in executor.calls:
+        schema = mutable_json(call.schema)
+        assert type(schema) is dict
+        finding = schema["properties"]["findings"]["items"]
+        assert "field_ids" not in finding["properties"]

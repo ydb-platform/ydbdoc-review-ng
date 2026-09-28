@@ -9,7 +9,7 @@ returned four concrete easy corrections as `repairable=false`, so the old final
 verdict retained them; the published glossary still contains the reported
 duplicate alias. The contract now gives those already diagnosed findings one
 targeted edit call and accepts only a structurally valid changed result. There
-is no repeated critique or open-ended repair loop. The change passed 1957
+is no repeated critique or open-ended repair loop. The change passed 1958
 offline tests, Ruff, strict mypy, wheel build and the installed
 translate/verify/continue smoke. Before another full translation, the consumer
 probe must additionally prove the actual YandexGPT targeted edit on the same
@@ -20,6 +20,17 @@ probe harness reused the immutable internal schema representation when creating
 a second `ModelRequest`. Production already converts that schema back to JSON;
 the harness now follows the same path and has a direct construction regression
 test. No document translation ran in this failed probe.
+
+Consumer probe `36493461433` then passed both real providers. Full run
+`36493639142` translated all ten documents and successfully used the DeepSeek
+fallback, but stopped on the third glossary critic excerpt: YandexGPT returned
+HTTP 200 / FINAL and the strict parser rejected the payload. The remaining
+legacy whole-document sentinel `field_ids=["document"]` allowed schema-valid
+combinations that the parser rejected. Runtime critic-editor requests now omit
+field IDs entirely, derive the redundant verdict from findings, and permit one
+bounded technical retry for a schema-invalid success response. The consumer
+probe now also runs an actual structured critic response through the strict
+parser before testing targeted edit.
 
 Run `36476204527` translated all ten documents and entered review, but stopped
 before publication on `changelog-enterprise.md`. YandexGPT exhausted its two

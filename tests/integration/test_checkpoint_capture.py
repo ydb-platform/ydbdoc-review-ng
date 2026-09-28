@@ -234,8 +234,6 @@ class CaptureServices(RuntimeServices):
                         "target_line": 1,
                     }
                 ]
-                if values["findings"][0]["repairable"]:
-                    values["findings"][0]["field_ids"] = props["field_ids"]["items"]["enum"]
             if editable:
                 current = raw_repair_context(prompt, "final-target")
                 values["corrected_markdown"] = (

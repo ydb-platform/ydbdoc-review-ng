@@ -16,7 +16,7 @@ from ydbdoc_review_ng.models import (
     YandexOpenAIClient,
 )
 from ydbdoc_review_ng.models.types import FrozenJson, mutable_json
-from ydbdoc_review_ng.quality.critic import build_critic_request
+from ydbdoc_review_ng.quality.critic import build_critic_request, parse_critic_response
 from ydbdoc_review_ng.quality.repair import _fallback_editor_request
 
 
@@ -68,7 +68,7 @@ def main() -> int:
         target_path=RepoPath("ydb/docs/en/probe.md"),
         source_locale=Locale.RU,
         target_locale=Locale.EN,
-        requested_ids=("document",),
+        requested_ids=(),
         source_is_excerpt=True,
         target_is_excerpt=True,
         editable=True,
@@ -131,6 +131,27 @@ def main() -> int:
         target_is_excerpt=True,
         editable=True,
     )
+    primary_attempts: list[AttemptResult] = []
+    primary_result = NativeYandexClient(
+        YandexCredentials(api_key, folder_id),
+        UrllibTransport(),
+        primary_attempts.append,
+    ).invoke(diagnostic_primary)
+    if not primary_result.success or primary_result.text is None:
+        print("structured critic probe failed: model call")
+        return 1
+    try:
+        parse_critic_response(
+            primary_result.text,
+            target_path=RepoPath("ydb/docs/en/probe.md"),
+            requested_ids=(),
+            editable=True,
+            current_target=diagnostic_target.decode(),
+        )
+    except ValueError:
+        print("structured critic probe failed: response contract")
+        return 1
+    primary_usage = primary_result.attempts[-1].usage
     targeted = _targeted_probe_request(diagnostic_primary)
     targeted_attempts: list[AttemptResult] = []
     targeted_result = NativeYandexClient(
@@ -156,6 +177,8 @@ def main() -> int:
         f"prompt_characters={len(request.prompt)};",
         f"input_tokens={usage.input_tokens};",
         f"output_tokens={usage.output_tokens};",
+        f"primary_input_tokens={primary_usage.input_tokens};",
+        f"primary_output_tokens={primary_usage.output_tokens};",
         f"targeted_input_tokens={targeted_usage.input_tokens};",
         f"targeted_output_tokens={targeted_usage.output_tokens}",
     )

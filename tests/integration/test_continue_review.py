@@ -114,9 +114,6 @@ class ReviewServices(LifecycleServices):
                     "target_path": path,
                     "target_line": 1,
                 }
-                if outcome == "repair":
-                    ids = schema["properties"]["findings"]["items"]["properties"]["field_ids"]
-                    finding["field_ids"] = ids["items"]["enum"][:1]
                 values["findings"].append(finding)
             if editable:
                 current = raw_repair_context(prompt, "final-target")

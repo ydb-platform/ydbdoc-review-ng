@@ -467,9 +467,6 @@ class CriticExecutor:
             first_field = fields_of(target_plan)[0]
             snippet = self.candidate[first_field.span.start : first_field.span.end].decode()
             assert request.schema is not None
-            finding_id = request.schema["properties"]["findings"]["items"]["properties"][
-                "field_ids"
-            ]["items"]["enum"][0]
             text = json.dumps(
                 {
                     "verdict": "RED",
@@ -481,7 +478,6 @@ class CriticExecutor:
                             "searchable_snippet": snippet,
                             "target_path": self.context.target_path.value,
                             "target_line": first_field.lines.start,
-                            "field_ids": [finding_id],
                         }
                     ],
                     "corrected_markdown": request.prompt.split(

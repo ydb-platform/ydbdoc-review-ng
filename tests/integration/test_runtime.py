@@ -269,7 +269,6 @@ def test_runtime_preserves_list_formatting_drift_through_critic() -> None:
                             "searchable_snippet": "translated item",
                             "target_path": "ydb/docs/en/core/page.md",
                             "target_line": 2,
-                            "field_ids": ["document"],
                         }
                     ],
                 }
@@ -1776,7 +1775,6 @@ def test_critic_edit_is_validated_then_published_once_before_pr():
                         "searchable_snippet": "Translated",
                         "target_path": "ydb/docs/en/core/page.md",
                         "target_line": 1,
-                        "field_ids": ["document"],
                     }
                 ],
             }

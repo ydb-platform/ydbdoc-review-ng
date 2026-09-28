@@ -123,7 +123,7 @@ def build_critic_request(
         "Always include field_ids in every finding. Use [] when no safe exact field mapping "
         "exists.\n"
         if requested_ids
-        else "Do not include field_ids because this document has no repairable fields.\n"
+        else "Do not include field_ids; this editor returns the complete corrected excerpt.\n"
     )
     if target_is_excerpt:
         source_scope_instruction = (
@@ -286,9 +286,11 @@ def parse_critic_response(
                 tuple(field_ids),
             )
         )
-    verdict = Verdict(raw_verdict)
-    if (verdict is Verdict.GREEN and findings) or (verdict is Verdict.RED and not findings):
-        raise CriticResponseError(CriticResponseErrorReason.INCONSISTENT_RESULT)
+    # Findings are the canonical verdict signal. Provider-side JSON schema can
+    # validate both fields independently but cannot reliably enforce their
+    # cross-field relationship across supported model backends. Normalizing the
+    # redundant verdict avoids rejecting an otherwise complete strict response.
+    verdict = Verdict.RED if findings else Verdict.GREEN
     corrected_markdown: str | None = None
     if editable:
         raw_correction = document["corrected_markdown"]

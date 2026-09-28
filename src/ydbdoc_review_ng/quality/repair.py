@@ -13,7 +13,11 @@ from ydbdoc_review_ng.models import AttemptError, ModelCallResult, ModelRequest
 from ydbdoc_review_ng.models.types import FrozenJson, mutable_json
 from ydbdoc_review_ng.parser.markdown import build_markdown_plan
 from ydbdoc_review_ng.plan import BlockKind, ProtectedKind, SourcePlan, fields_of
-from ydbdoc_review_ng.quality.critic import build_critic_request, parse_critic_response
+from ydbdoc_review_ng.quality.critic import (
+    CriticResponseError,
+    build_critic_request,
+    parse_critic_response,
+)
 from ydbdoc_review_ng.quality.types import (
     CriticResult,
     Finding,
@@ -538,7 +542,10 @@ def review_translation(
         if accepted_map is not None or not full_repair
         else ()
     )
-    critic_field_ids = ("document",)
+    # Full-excerpt editor responses no longer use the legacy field-level repair
+    # protocol. Keeping a synthetic "document" field ID only creates schema
+    # combinations that the strict response parser cannot represent.
+    critic_field_ids: tuple[str, ...] = ()
     if (draft_request is None) != (draft_responses is None):
         raise QualityInputError("incomplete_draft_chunks")
     if draft_request is None:
@@ -739,6 +746,21 @@ def review_translation(
             raise QualityExecutionError("critic")
         try:
             accept_editor_response(chunk, request, response)
+        except CriticResponseError as error:
+            retry = ModelRequest(
+                request.role,
+                request.model,
+                request.prompt
+                + "\n\nYour previous response violated the required JSON contract "
+                + f"({error.reason.value}). Return the same review exactly once more, "
+                "strictly matching the response schema. Do not add prose outside JSON.",
+                None
+                if request.schema is None
+                else cast(FrozenJson, mutable_json(request.schema)),
+                request.max_tokens,
+                request.target_path,
+            )
+            accept_editor_response(chunk, retry, invoke_editor(retry))
         except DocumentTranslationError:
             return False
         return True
