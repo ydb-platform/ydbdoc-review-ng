@@ -140,3 +140,19 @@ def test_unchanged_candidate_still_runs_build_and_restores_checkout(tmp_path: Pa
     with pytest.raises(module.DiplodocBuildError):
         validator(_plan(b"BROKEN\n", b"BROKEN\n"))
     assert page.read_bytes() == b"base page\n"
+
+
+def test_baseline_build_rejects_existing_errors_without_modifying_checkout(tmp_path: Path) -> None:
+    module = _validator_module()
+    page = tmp_path / 'ydb/docs/en/page.md'
+    page.parent.mkdir(parents=True)
+    page.write_bytes(b'BROKEN baseline\n')
+    validator = module.DiplodocBuildValidator(
+        tmp_path / 'ydb/docs', command=(sys.executable, str(_fake_yfm(tmp_path)))
+    )
+    with pytest.raises(module.DiplodocBuildError):
+        validator.validate_baseline()
+    assert page.read_bytes() == b'BROKEN baseline\n'
+    page.write_bytes(b'fixed baseline\n')
+    validator.validate_baseline()
+    assert page.read_bytes() == b'fixed baseline\n'

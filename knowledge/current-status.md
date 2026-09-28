@@ -1,3 +1,26 @@
+# Broken upstream baseline and early build gate (2026-09-28)
+
+Main/tag d099051a880d5d3d69f717304840e66a0040661c, tool CI green.
+Run 36403582436 translated all ten documents, but failed before publication.
+Source 2754af525a70f50f8e986a64aa9bcb4d99cf5b1d has two YFM003 failures at
+ru/en changelog-server.md:68: import-export-column-tables.md?version=v26.2.
+The page and TOC entry were removed upstream between runs; redirects point to
+concepts/query_execution/federated_query/import_and_export.md, while changelog
+links still use the removed path. A real official build of the untouched source
+reproduced exactly both failures. This is not a translator defect.
+Added a trusted-base preflight before any translation/direction model call to
+avoid spending another full translation on an already broken checkout.
+Requirements and architecture updated. Release gate: 1950 passed, 3 deselected
+(130.55 s), Ruff, mypy (49 files), diff-check, wheel/sdist and installed runtime
+smoke all green.
+A two-line source-link fix following the existing redirects passed a full
+Diplodoc 5.61.0 / Node 24 build; checkout restored. Publishing this fix in the
+separate YDB repository is awaiting user approval; no YDB source mutation
+has been made. Translation branch remains old 48ab27d with untranslated prose,
+no translation PR yet. Do not claim completion or silently waive build errors.
+
+---
+
 # Repeat-run build overlay (2026-09-28)
 
 Main/tag `d35aa3b30e873dd70be901c03a4a815f383e08c4`, tool CI green.

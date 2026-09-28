@@ -56,23 +56,12 @@ class DiplodocBuildValidator:
             return (f"ERR Diplodoc exited with status {returncode}",)
         return ()
 
-    def __call__(self, plan: PublicationPlan, /) -> None:
-        # `before` belongs to the remote translation head, while docs_root can
-        # be a clean base checkout. Validate the complete candidate, not merely
-        # the diff against a previous translation (also during verification).
-        changes = plan.files
-        if not changes:
-            return
-        originals: list[tuple[Path, bytes | None]] = []
+    def validate_baseline(self) -> None:
+        """Reject a broken trusted checkout before paying for translation."""
+        self._build()
+
+    def _build(self) -> None:
         try:
-            for change in changes:
-                path = self._candidate_path(change.path.value)
-                originals.append((path, path.read_bytes() if path.is_file() else None))
-                if change.after is None:
-                    path.unlink(missing_ok=True)
-                else:
-                    path.parent.mkdir(parents=True, exist_ok=True)
-                    path.write_bytes(change.after)
             with tempfile.TemporaryDirectory(prefix="ydbdoc-diplodoc-") as output_root:
                 environment = {
                     "LANG": "C.UTF-8",
@@ -96,6 +85,28 @@ class DiplodocBuildValidator:
                     for issue in issues:
                         print(f"YDBDOC_DIPLODOC {issue}", flush=True)
                     raise DiplodocBuildError(issues)
+        except (OSError, subprocess.SubprocessError) as error:
+            issue = f"ERR Diplodoc invocation failed: {type(error).__name__}"
+            raise DiplodocBuildError((issue,)) from None
+
+    def __call__(self, plan: PublicationPlan, /) -> None:
+        # `before` belongs to the remote translation head, while docs_root can
+        # be a clean base checkout. Validate the complete candidate, not merely
+        # the diff against a previous translation (also during verification).
+        changes = plan.files
+        if not changes:
+            return
+        originals: list[tuple[Path, bytes | None]] = []
+        try:
+            for change in changes:
+                path = self._candidate_path(change.path.value)
+                originals.append((path, path.read_bytes() if path.is_file() else None))
+                if change.after is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(change.after)
+            self._build()
         except DiplodocBuildError:
             raise
         except (OSError, subprocess.SubprocessError) as error:

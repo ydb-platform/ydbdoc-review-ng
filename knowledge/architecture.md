@@ -136,3 +136,14 @@ Those bytes describe the remote translation head, not the local base checkout.
 Filtering by remote diff omitted unchanged TOC/assets on reruns and skipped all
 validation for unchanged candidates. Build overlays and restores the full plan;
 Git publication still uses real diffs for commit/no-op decisions.
+
+## Translation baseline preflight (2026-09-28)
+
+Production RuntimeContent receives DiplodocBuildValidator.validate_baseline when
+YDBDOC_DOCS_ROOT is configured. doc_translate invokes it before prepare_source,
+including before model-assisted direction selection. It builds the untouched
+trusted checkout with the same compiler/error policy as candidate validation.
+A broken base fails prepare with trusted_base_build trace, before model calls
+or publication; it is not a recoverable translation checkpoint. Candidate build
+still runs after translation and before every publication. Verify/continue retain
+their existing candidate validation and do not add this translation preflight.

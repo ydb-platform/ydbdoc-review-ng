@@ -1867,3 +1867,39 @@ def test_runtime_never_reports_green_after_branch_moves_during_critic():
     )
     assert not services.pr_exists
     assert not services.comments
+
+
+def test_broken_trusted_base_stops_before_any_model_call(monkeypatch, tmp_path, capsys):
+    from ydbdoc_review_ng.cli import main
+    from ydbdoc_review_ng.diplodoc import DiplodocBuildError, DiplodocBuildValidator
+    from ydbdoc_review_ng.runtime import create_runtime
+
+    services = RuntimeServices()
+    calls = []
+
+    def reject_baseline(self):
+        calls.append(self.docs_root)
+        raise DiplodocBuildError(('ERR ru/changelog-server.md: unreachable link',))
+
+    monkeypatch.setattr(DiplodocBuildValidator, 'validate_baseline', reject_baseline)
+    runtime = create_runtime(
+        environment={
+            'GITHUB_ACTOR': 'maintainer', 'YDBDOC_ALLOWED_ACTORS': 'maintainer',
+            'YANDEX_API_KEY': 'secret', 'YANDEX_FOLDER_ID': 'folder',
+            'YDBDOC_DOCS_ROOT': str(tmp_path),
+        },
+        ydb_executor=services, github_transport=services.github, model_transport=services.model,
+    )
+    result = main(
+        ['translate', '--pr', '42', '--source-sha', services.source, '--budget-rub', '10'],
+        dispatcher=runtime,
+    )
+    assert result != 0
+    assert calls == [tmp_path.resolve()]
+    assert not any(event[0] == 'MODEL' for event in services.events)
+    assert not any(
+        method in {'POST', 'PATCH', 'DELETE'} for method, _ in services.events
+        if method != 'MODEL'
+    )
+    assert not services.comments
+    assert 'trusted_base_build' in capsys.readouterr().err

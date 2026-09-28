@@ -541,9 +541,11 @@ class DirectionClient:
 
 class RuntimeContent:
     def __init__(
-        self, source: RuntimeSource, models: RecordedModels, environment: Mapping[str, str]
+        self, source: RuntimeSource, models: RecordedModels, environment: Mapping[str, str],
+        *, baseline_validator: Callable[[], None] | None = None,
     ) -> None:
         self.source, self.models, self.environment = source, models, environment
+        self.baseline_validator = baseline_validator
         self.model = environment.get("YDBDOC_MODEL") or "deepseek-v4-flash"
         self.fallback_model = environment.get("YDBDOC_MODEL_FALLBACK") or "yandexgpt-5.1"
         self.critic_model = environment.get("YDBDOC_MODEL_CRITIC") or "yandexgpt-5.1"
@@ -987,6 +989,9 @@ class RuntimeContent:
             files[change.path.value] = change.after
 
     def prepare_translation(self, snapshot: ImmutableRunSnapshot, /) -> WorkflowCandidate:
+        if self.baseline_validator is not None:
+            with traced("prepare", "trusted_base_build"):
+                self.baseline_validator()
         with traced(
             "prepare",
             "prepare_source",

@@ -457,9 +457,12 @@ def create_runtime(
     )
     models = RecordedModels(env, persistence, model_transport or UrllibTransport())
     source = RuntimeSource(env, github)
-    content = RuntimeContent(source, models, env)
     docs_root = env.get("YDBDOC_DOCS_ROOT", "").strip()
     diplodoc = DiplodocBuildValidator(Path(docs_root)) if docs_root else None
+    content = RuntimeContent(
+        source, models, env,
+        baseline_validator=None if diplodoc is None else diplodoc.validate_baseline,
+    )
 
     def validate_plan(
         snapshot: ImmutableRunSnapshot,

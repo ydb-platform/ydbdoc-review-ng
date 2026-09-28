@@ -562,6 +562,11 @@ gate не выполняется. Конкурентная атомарная re
 - Заголовок создаваемого translation PR имеет формат
   `PR #<source_pr> translation`.
 - Commit/push выполняется только после обязательных локальных проверок.
+- В `doc_translate` до любых model calls (включая определение направления)
+  выполняется полный build trusted checkout. Ошибка исходной сборки останавливает
+  job в `prepare`, фиксируется как `trusted_base_build` и не расходует model budget.
+  Сначала требуется исправить исходную документацию; такая проверка не заменяет
+  обязательный build готового candidate.
 - Перед первым commit/push и перед commit исправления critic-editor candidate накладывается на
   trusted checkout base-ветки и полностью собирается официальным Diplodoc CLI
   той же stable-линии, что использует `build-docs` YDB. Любая строка `ERR`,
