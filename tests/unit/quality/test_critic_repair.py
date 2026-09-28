@@ -119,6 +119,13 @@ def critic_editor_json(
     )
 
 
+def fallback_editor_json(corrected_markdown: str) -> str:
+    return json.dumps(
+        {"corrected_markdown": corrected_markdown},
+        ensure_ascii=False,
+    )
+
+
 def current_editor_target(request: ModelRequest) -> str:
     return request.prompt.split("<final-target>\n", 1)[1].split("</final-target>", 1)[0]
 
@@ -277,9 +284,7 @@ def test_content_filter_keeps_exact_translator_chunk_for_fallback_model() -> Non
             if len(self.calls) == 1:
                 return ModelCallResult(None, AttemptError.CONTENT_FILTER, ())
             return ModelCallResult(
-                critic_editor_json(
-                    "GREEN", [], current_editor_target(model_request)
-                ),
+                fallback_editor_json(current_editor_target(model_request)),
                 None,
                 (),
             )
@@ -305,6 +310,12 @@ def test_content_filter_keeps_exact_translator_chunk_for_fallback_model() -> Non
         "critic-model",
         "translator-model",
     ]
+    assert mutable_json(executor.calls[1].schema) == {
+        "type": "object",
+        "properties": {"corrected_markdown": {"type": "string"}},
+        "required": ["corrected_markdown"],
+        "additionalProperties": False,
+    }
     assert current_editor_target(executor.calls[1]) == draft_responses[0]
 
 
@@ -940,17 +951,8 @@ def test_exhausted_content_filter_uses_intact_fallback_request() -> None:
                 self.repair_calls += 1
                 if self.repair_calls == 1:
                     return ModelCallResult(None, AttemptError.CONTENT_FILTER, ())
-                problems = (
-                    [finding(repairable=True, snippet="Block 000", line=1)]
-                    if self.repair_calls == 2
-                    else []
-                )
                 return ModelCallResult(
-                    critic_editor_json(
-                        "RED" if problems else "GREEN",
-                        problems,
-                        current_editor_target(model_request),
-                    ),
+                    fallback_editor_json(current_editor_target(model_request)),
                     None,
                     (),
                 )
@@ -1065,17 +1067,8 @@ def test_repair_content_filter_does_not_split_uneven_translation() -> None:
                 self.repair_calls += 1
                 if self.repair_calls == 1:
                     return ModelCallResult(None, AttemptError.CONTENT_FILTER, ())
-                problems = (
-                    [finding(repairable=True, snippet="Block 001", line=1)]
-                    if self.repair_calls == 2
-                    else []
-                )
                 return ModelCallResult(
-                    critic_editor_json(
-                        "RED" if problems else "GREEN",
-                        problems,
-                        current_editor_target(model_request),
-                    ),
+                    fallback_editor_json(current_editor_target(model_request)),
                     None,
                     (),
                 )

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Callable
 from typing import Protocol, cast
@@ -9,7 +10,7 @@ from typing import Protocol, cast
 from ydbdoc_review_ng.continuation import AcceptedMap
 from ydbdoc_review_ng.domain import Locale, RepoPath
 from ydbdoc_review_ng.models import AttemptError, ModelCallResult, ModelRequest
-from ydbdoc_review_ng.models.types import FrozenJson, mutable_json
+from ydbdoc_review_ng.models.types import FrozenJson
 from ydbdoc_review_ng.parser.markdown import build_markdown_plan
 from ydbdoc_review_ng.plan import BlockKind, ProtectedKind, SourcePlan, fields_of
 from ydbdoc_review_ng.quality.critic import build_critic_request, parse_critic_response
@@ -464,6 +465,30 @@ def _editor_requests_from_draft(
     )
 
 
+def _fallback_editor_request(request: ModelRequest, fallback_model: str, /) -> ModelRequest:
+    fallback_schema = cast(
+        FrozenJson,
+        {
+            "type": "object",
+            "properties": {"corrected_markdown": {"type": "string"}},
+            "required": ["corrected_markdown"],
+            "additionalProperties": False,
+        },
+    )
+    return ModelRequest(
+        request.role,
+        fallback_model,
+        request.prompt
+        + "\n\nFallback response contract: return exactly one JSON field named "
+        "corrected_markdown containing the complete final corrected target excerpt. This "
+        "contract overrides the earlier request for verdict and findings. Return no other "
+        "fields and no prose outside JSON.",
+        fallback_schema,
+        request.max_tokens,
+        request.target_path,
+    )
+
+
 def review_translation(
     executor: ModelExecutor,
     *,
@@ -587,8 +612,33 @@ def review_translation(
         effective_chunks.append(chunk)
         responses.append(correction)
 
+    def accept_fallback_response(
+        chunk: DocumentChunk, response: ModelCallResult, /
+    ) -> None:
+        nonlocal editor_changed_target
+        if not response.success or response.text is None:
+            raise QualityExecutionError("critic")
+        try:
+            payload = json.loads(response.text)
+        except json.JSONDecodeError:
+            raise QualityExecutionError("critic") from None
+        if type(payload) is not dict or set(payload) != {"corrected_markdown"}:
+            raise QualityExecutionError("critic")
+        correction = payload["corrected_markdown"]
+        if type(correction) is not str:
+            raise QualityExecutionError("critic")
+        current_target = "".join(target_blocks[chunk.block_start : chunk.block_end])
+        editor_changed_target = editor_changed_target or correction != current_target
+        validate_chunk_response(chunk, document_request.placeholders, correction)
+        effective_chunks.append(chunk)
+        responses.append(correction)
+        # The fallback is a final editor, not a second diagnostic judge. Its
+        # correction is accepted only after the same structural validation.
+        editor_results.append(CriticResult(Verdict.GREEN, ()))
+
     def process_editor_chunk(chunk: DocumentChunk, request: ModelRequest) -> bool:
         response = invoke_editor(request)
+        used_fallback = False
         if (
             (not response.success or response.text is None)
             and response.failure is AttemptError.CONTENT_FILTER
@@ -598,23 +648,18 @@ def review_translation(
             # Keep the exact validated source/target pair intact. Splitting the
             # translated target proportionally to source block lengths is not a
             # real alignment and can cut Markdown or placeholders. One other
-            # provider gets the same critic-editor request; there is no loop.
-            response = invoke_editor(
-                ModelRequest(
-                    request.role,
-                    fallback_model,
-                    request.prompt,
-                    None
-                    if request.schema is None
-                    else cast(FrozenJson, mutable_json(request.schema)),
-                    request.max_tokens,
-                    request.target_path,
-                )
-            )
+            # provider gets the same intact source/target pair with the flat
+            # response contract already used successfully by the translator;
+            # there is no loop.
+            response = invoke_editor(_fallback_editor_request(request, fallback_model))
+            used_fallback = True
         if not response.success or response.text is None:
             raise QualityExecutionError("critic")
         try:
-            accept_editor_response(chunk, response)
+            if used_fallback:
+                accept_fallback_response(chunk, response)
+            else:
+                accept_editor_response(chunk, response)
         except DocumentTranslationError:
             return False
         return True

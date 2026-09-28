@@ -1,3 +1,21 @@
+# Live fallback contract failure after independent replay (2026-09-28)
+
+Run `36476204527` translated all ten documents and entered review, but stopped
+before publication on `changelog-enterprise.md`. YandexGPT exhausted its two
+content-filter attempts; the one-shot DeepSeek fallback then returned HTTP 400
+`invalid_request`. The earlier independent replay proved chunk alignment,
+request bounds and round-trip assembly, but did not exercise the alternate
+provider with the critic's nested findings schema. That was the missing check.
+
+The fallback now keeps the same intact source/target pair but uses the flat
+`{corrected_markdown: string}` schema already exercised by the DeepSeek
+translation endpoint. The correction still passes placeholder/structure
+validation and the final Diplodoc build. A separate manual GitHub workflow
+`model-contract-probe.yml` exercises this exact fallback client and response
+shape with real repository model credentials before another paid translation
+run. No translation rerun is allowed until that probe and the offline release
+gate both pass.
+
 # Independent pre-rerun audit blocked unsafe critic splitting (2026-09-28)
 
 No paid rerun was started after `260ca71`. An independent red-team review found
