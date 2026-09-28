@@ -558,6 +558,9 @@ class RuntimeContent:
         self.plans: FrozenSourcePlans | None = None
         self.review_paths: tuple[RepoPath, ...] | None = None
         self.review_operator_context: str | None = None
+        self.review_drafts: dict[
+            RepoPath, tuple[DocumentTranslationRequest, tuple[str, ...]]
+        ] = {}
         self.publisher: GitPublicationAdapter
 
     def _terminology_context(
@@ -707,6 +710,7 @@ class RuntimeContent:
         self, snapshot: ImmutableRunSnapshot, /, *, translate: bool = True
     ) -> FrozenPreparation:
         """Read and preflight pinned scope inputs without a model call or mutation."""
+        self.review_drafts.clear()
         changes = []
         for raw in self.source.inventory.files:
             name = raw.path.value
@@ -1336,6 +1340,13 @@ class RuntimeContent:
         except UnicodeError as error:
             assembly_failure("candidate_utf8", error)
         accepted = AcceptedMap(entry.pair.target_path, tuple(sorted(values.items())))
+        # Keep the exact validated translator input/output pairs. The critic must
+        # edit these same semantic chunks instead of reparsing and heuristically
+        # realigning the assembled document.
+        self.review_drafts[entry.pair.target_path] = (
+            effective_request,
+            tuple(responses),
+        )
         return accepted, AcceptedDocument(entry.pair.target_path, candidate_text)
 
     @staticmethod
@@ -1542,7 +1553,7 @@ class RuntimeContent:
     ) -> QualityReviewResult:
         files = unpack(candidate.content)
         critic_limit = int(
-            self.environment.get("YDBDOC_MAX_CRITIC_REQUEST_CHARACTERS") or "24000"
+            self.environment.get("YDBDOC_MAX_CRITIC_REQUEST_CHARACTERS") or "48000"
         )
         reviews = []
         repaired = False
@@ -1572,34 +1583,48 @@ class RuntimeContent:
             def publish_map(value: AcceptedMap) -> None:
                 accepted[value.target_path] = value
 
-            review = review_translation(
-                self.models,
-                model=self.critic_model,
-                source=document.source,
-                source_plan=document.plan,
-                translation_request=document.request,
-                target=target,
-                target_path=path,
-                source_locale=document.entry.pair.source_locale,
-                target_locale=document.entry.pair.target_locale,
-                on_validated_edit=apply_correction,
-                accepted_map=restored_map,
-                full_repair=selective and restored_map is None,
-                operator_context=self.review_operator_context,
-                terminology_context=self._terminology_context(
-                    document,
-                    max_characters=critic_limit,
-                ),
-                before_model_call=check_head if selective else None,
-                before_repaired_map=publish_map if selective else None,
-                link_resolver=self._link_resolver(
-                    document,
-                    document.entry.target_content
-                    if document.entry.target_content is not None
-                    else document.entry.rename_from_target_content,
-                ),
-                max_request_characters=critic_limit,
-            )
+            draft = self.review_drafts.get(path)
+
+            try:
+                review = review_translation(
+                    self.models,
+                    model=self.critic_model,
+                    source=document.source,
+                    source_plan=document.plan,
+                    translation_request=document.request,
+                    target=target,
+                    target_path=path,
+                    source_locale=document.entry.pair.source_locale,
+                    target_locale=document.entry.pair.target_locale,
+                    on_validated_edit=apply_correction,
+                    accepted_map=restored_map,
+                    full_repair=selective and restored_map is None,
+                    operator_context=self.review_operator_context,
+                    terminology_context=self._terminology_context(
+                        document,
+                        max_characters=critic_limit,
+                    ),
+                    before_model_call=check_head if selective else None,
+                    before_repaired_map=publish_map if selective else None,
+                    link_resolver=self._link_resolver(
+                        document,
+                        document.entry.target_content
+                        if document.entry.target_content is not None
+                        else document.entry.rename_from_target_content,
+                    ),
+                    max_request_characters=critic_limit,
+                    draft_request=None if draft is None else draft[0],
+                    draft_responses=None if draft is None else draft[1],
+                )
+            except QualityInputError as error:
+                write_trace(
+                    "quality",
+                    "document_input",
+                    "fail",
+                    article=path.value,
+                    code=error.reason,
+                )
+                raise
             if (
                 document.entry.operation is not FileOperation.RENAME_TARGET
                 or review.repair_applied

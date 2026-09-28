@@ -15,6 +15,7 @@ from ydbdoc_review_ng.quality import (
     CriticResponseError,
     CriticResponseErrorReason,
     QualityExecutionError,
+    QualityInputError,
     QualityReviewResult,
     RepairErrorReason,
     Verdict,
@@ -172,6 +173,84 @@ def test_green_uses_one_critic_and_does_not_attempt_repair() -> None:
     assert [call.role.value for call in executor.calls] == ["critic"]
     assert executor.calls[0].target_path == PATH
     assert PATH.value in executor.calls[0].prompt
+
+
+def test_critic_reuses_exact_validated_translator_chunks() -> None:
+    plan, request, _values, target = prepared()
+    draft_request = prepare_document(SOURCE, plan, max_characters=100_000)
+    draft_responses = (raw_document(target),)
+    executor = FakeExecutor(critic_json("GREEN", []))
+
+    result = review_translation(
+        executor,
+        model="model",
+        source=SOURCE,
+        source_plan=plan,
+        translation_request=request,
+        target=target,
+        target_path=PATH,
+        source_locale=Locale.EN,
+        target_locale=Locale.RU,
+        draft_request=draft_request,
+        draft_responses=draft_responses,
+    )
+
+    assert result.final_candidate == target
+    assert current_editor_target(executor.calls[0]) == draft_responses[0]
+    assert "<authoritative-source>\n" + draft_request.chunks[0].text in executor.calls[0].prompt
+
+
+def test_critic_rejects_mismatched_saved_draft_with_exact_reason() -> None:
+    plan, request, _values, target = prepared()
+    draft_request = prepare_document(SOURCE, plan, max_characters=100_000)
+    executor = FakeExecutor()
+
+    with pytest.raises(QualityInputError, match="quality_input:draft_target_mismatch"):
+        review_translation(
+            executor,
+            model="model",
+            source=SOURCE,
+            source_plan=plan,
+            translation_request=request,
+            target=target,
+            target_path=PATH,
+            source_locale=Locale.EN,
+            target_locale=Locale.RU,
+            draft_request=draft_request,
+            draft_responses=(raw_document(target) + "extra",),
+        )
+
+
+def test_critic_packs_adjacent_exact_translator_chunks_without_realignment() -> None:
+    source = b"\n\n".join(
+        f"## Section {number}\n\nParagraph {number}.".encode()
+        for number in range(1, 5)
+    ) + b"\n"
+    plan = build_markdown_plan(SNAPSHOT, SOURCE_PATH, source)
+    request = build_translation_request(source, plan)
+    draft_request = prepare_document(source, plan, max_characters=45)
+    assert len(draft_request.chunks) > 1
+    draft_responses = tuple(chunk.text for chunk in draft_request.chunks)
+    executor = FakeExecutor(critic_json("GREEN", []))
+
+    result = review_translation(
+        executor,
+        model="model",
+        source=source,
+        source_plan=plan,
+        translation_request=request,
+        target=source,
+        target_path=PATH,
+        source_locale=Locale.EN,
+        target_locale=Locale.RU,
+        max_request_characters=48_000,
+        draft_request=draft_request,
+        draft_responses=draft_responses,
+    )
+
+    assert result.final_candidate == source
+    assert len(executor.calls) == 1
+    assert current_editor_target(executor.calls[0]) == "".join(draft_responses)
 
 
 def test_primary_critic_applies_its_own_correction_without_repair_call() -> None:

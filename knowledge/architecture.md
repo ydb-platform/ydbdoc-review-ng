@@ -163,7 +163,9 @@ are assembled, validated, built and published once. A full draft build must not
 run before the critic-editor: fixable draft lint errors would otherwise prevent
 the editor from running. Mechanical list-marker spacing is normalized locally
 outside code before review; the final candidate always receives the strict build.
-The critic has its own 24000-character request budget. Its schema uses one
+The critic has its own 48000-character request budget. Its schema uses one
 document sentinel instead of document-wide field-ID enums because a complete
 corrected Markdown excerpt is the edit unit; this keeps large documents to a few large calls instead of
-dozens of top-level-block calls.
+dozens of top-level-block calls. During `doc_translate`, these excerpts are the
+exact validated translator chunk pairs retained in memory. The review stage
+does not parse and heuristically realign the assembled source and target again.

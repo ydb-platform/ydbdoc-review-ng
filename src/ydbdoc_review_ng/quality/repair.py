@@ -47,8 +47,9 @@ class ModelExecutor(Protocol):
 
 
 class QualityInputError(ValueError):
-    def __init__(self) -> None:
-        super().__init__("quality_input:inconsistent_candidate")
+    def __init__(self, reason: str = "inconsistent_candidate") -> None:
+        self.reason = reason
+        super().__init__(f"quality_input:{reason}")
 
 
 class QualityExecutionError(RuntimeError):
@@ -346,6 +347,123 @@ def _editor_requests(
     )
 
 
+def _editor_requests_from_draft(
+    *,
+    model: str,
+    source: bytes,
+    source_plan: SourcePlan,
+    target: bytes,
+    target_path: RepoPath,
+    source_locale: Locale,
+    target_locale: Locale,
+    document_request: DocumentTranslationRequest,
+    draft_responses: tuple[str, ...],
+    requested_ids: tuple[str, ...],
+    operator_context: str | None,
+    max_characters: int,
+    terminology_context: str | None = None,
+) -> tuple[
+    tuple[ModelRequest, ...],
+    DocumentTranslationRequest,
+    tuple[str, ...],
+    tuple[str, ...],
+]:
+    """Build critic inputs from the exact validated translator chunk pairs."""
+    if len(document_request.chunks) != len(draft_responses):
+        raise QualityInputError("draft_response_count_mismatch")
+    try:
+        restored = restore_document(source, source_plan, document_request, draft_responses)
+    except (DocumentTranslationError, AssemblyError, UnicodeError, ValueError, TypeError):
+        raise QualityInputError("draft_restore_failed") from None
+    if restored != target:
+        raise QualityInputError("draft_target_mismatch")
+
+    source_blocks = _document_block_texts(
+        source, source_plan, document_request.placeholders
+    )
+    target_blocks = [""] * len(source_blocks)
+    requests: list[ModelRequest] = []
+    chunks: list[DocumentChunk] = []
+    draft_index = 0
+    while draft_index < len(document_request.chunks):
+        accepted: tuple[DocumentChunk, str, ModelRequest] | None = None
+        candidate_end = draft_index + 1
+        while candidate_end <= len(document_request.chunks):
+            source_chunks = document_request.chunks[draft_index:candidate_end]
+            source_text = "".join(item.text for item in source_chunks)
+            draft = "".join(draft_responses[draft_index:candidate_end])
+            chunk = DocumentChunk(
+                source_text,
+                source_chunks[0].block_start,
+                source_chunks[-1].block_end,
+                tuple(token for item in source_chunks for token in item.placeholders),
+            )
+            request = _editor_request(
+                model=model,
+                source_text=source_text,
+                target_text=draft,
+                target_path=target_path,
+                source_locale=source_locale,
+                target_locale=target_locale,
+                requested_ids=requested_ids,
+                operator_context=operator_context,
+                terminology_context=terminology_context,
+            )
+            if (
+                len(request.prompt) > max_characters
+                or max(len(source_text), len(draft))
+                > RAW_MARKDOWN_RESPONSE_MAX_CHARACTERS
+            ):
+                break
+            accepted = chunk, draft, request
+            candidate_end += 1
+        if accepted is None:
+            raise QualityInputError("draft_critic_prompt_exceeds_limit")
+        chunk, draft, request = accepted
+        chunks.append(chunk)
+        requests.append(request)
+
+        # Child segments are used only after a provider content-filter refusal.
+        # Preserve the exact draft concatenation while assigning deterministic
+        # boundaries proportional to the already accepted source blocks.
+        block_texts = source_blocks[chunk.block_start : chunk.block_end]
+        if not block_texts:
+            draft_index = candidate_end - 1
+            continue
+        lengths = tuple(len(value) for value in block_texts)
+        total = sum(lengths)
+        boundaries = [0]
+        consumed = 0
+        for length in lengths[:-1]:
+            consumed += length
+            wanted = len(draft) * consumed // total if total else 0
+            candidates = tuple(
+                match.end()
+                for match in re.finditer(r"\s+", draft)
+                if boundaries[-1] < match.end() < len(draft)
+            )
+            boundaries.append(
+                min(candidates, key=lambda value: abs(value - wanted))
+                if candidates
+                else wanted
+            )
+        boundaries.append(len(draft))
+        for block_index, start, block_end in zip(
+            range(chunk.block_start, chunk.block_end),
+            boundaries[:-1],
+            boundaries[1:],
+            strict=True,
+        ):
+            target_blocks[block_index] = draft[start:block_end]
+        draft_index = candidate_end - 1
+    return (
+        tuple(requests),
+        DocumentTranslationRequest(tuple(chunks), document_request.placeholders),
+        source_blocks,
+        tuple(target_blocks),
+    )
+
+
 def review_translation(
     executor: ModelExecutor,
     *,
@@ -366,6 +484,8 @@ def review_translation(
     max_request_characters: int = 200_000,
     link_resolver: LinkResolver | None = None,
     terminology_context: str | None = None,
+    draft_request: DocumentTranslationRequest | None = None,
+    draft_responses: tuple[str, ...] | None = None,
 ) -> QualityReviewResult:
     """Let the critic turn the translator draft into the final validated candidate."""
     if accepted_map is None and not full_repair:
@@ -393,23 +513,42 @@ def review_translation(
         else ()
     )
     critic_field_ids = ("document",)
-    editor_requests, document_request, source_blocks, target_blocks = _editor_requests(
-        model=model,
-        source=source,
-        source_plan=source_plan,
-        target=target,
-        target_path=target_path,
-        source_locale=source_locale,
-        target_locale=target_locale,
-        # The editor returns complete corrected Markdown. A single document
-        # sentinel preserves the finding contract without embedding every field
-        # ID in the schema (the glossary enum alone exceeded the request budget).
-        requested_ids=critic_field_ids,
-        operator_context=operator_context,
-        max_characters=max_request_characters,
-        link_resolver=link_resolver,
-        terminology_context=terminology_context,
-    )
+    if (draft_request is None) != (draft_responses is None):
+        raise QualityInputError("incomplete_draft_chunks")
+    if draft_request is None:
+        editor_requests, document_request, source_blocks, target_blocks = _editor_requests(
+            model=model,
+            source=source,
+            source_plan=source_plan,
+            target=target,
+            target_path=target_path,
+            source_locale=source_locale,
+            target_locale=target_locale,
+            requested_ids=critic_field_ids,
+            operator_context=operator_context,
+            max_characters=max_request_characters,
+            link_resolver=link_resolver,
+            terminology_context=terminology_context,
+        )
+    else:
+        assert draft_responses is not None
+        editor_requests, document_request, source_blocks, target_blocks = (
+            _editor_requests_from_draft(
+                model=model,
+                source=source,
+                source_plan=source_plan,
+                target=target,
+                target_path=target_path,
+                source_locale=source_locale,
+                target_locale=target_locale,
+                document_request=draft_request,
+                draft_responses=draft_responses,
+                requested_ids=critic_field_ids,
+                operator_context=operator_context,
+                max_characters=max_request_characters,
+                terminology_context=terminology_context,
+            )
+        )
     repair_error: RepairErrorReason | None = None
     repaired_candidate: bytes | None = None
     effective_chunks: list[DocumentChunk] = []

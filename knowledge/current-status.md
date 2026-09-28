@@ -1,3 +1,24 @@
+# Second critic chunk planner failed on glossary (2026-09-28)
+
+Run `36461077089` translated all ten documents and reduced the changelog review
+from 99 to 62 critic calls, but failed before the first critic call for
+`ydb/docs/en/core/concepts/glossary.md`. The public trace only exposed
+`QualityInputError`; this was itself a diagnostics defect. The cause was the
+remaining second chunk planner: after translation had already validated its
+source chunks and model responses, review reparsed and heuristically realigned
+the complete source and target under a different set of invariants.
+
+For `doc_translate`, runtime now retains and reviews the exact validated
+`source chunk → translator response` pairs. There is no second alignment pass,
+no new model loop and no extra semantic retry. `QualityInputError` now carries a
+specific safe reason and the trace records the failing article and reason.
+The real 138-KB glossary has 16 translator chunks but packs into 8 critic
+requests under the independent 48000-character budget; the largest prompt is
+34132 characters and the largest model-written excerpt stays below 12000.
+The local gate passes: 1949 tests, Ruff, mypy, diff-check and wheel build.
+
+---
+
 # Critic request explosion and schema overflow (2026-09-28)
 
 Run `36454018170` confirmed that the editor now runs, but exposed remaining old
@@ -5,7 +26,7 @@ complexity: the translator's 6000-character limit was reused for the critic,
 and the critic schema embedded every field ID. It made 99 successful critic
 calls for only two changelog files (24 + 75), then failed with
 `QualityInputError` before the next document could be packed. No candidate was
-published. The critic now has an independent 24000-character limit and a single
+published. The critic now has an independent 48000-character limit and a single
 document sentinel instead of a document-wide field-ID enum; complete corrected Markdown excerpts are the edit
 unit. This removes the schema overflow and packs adjacent blocks into far fewer
 calls without adding retries.
