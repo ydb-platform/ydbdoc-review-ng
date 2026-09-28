@@ -114,6 +114,7 @@ from ydbdoc_review_ng.translation.document import (
     _document_block_texts,
     verify_document_candidate_with_links,
 )
+from ydbdoc_review_ng.translation.language import validate_translated_prose
 
 if TYPE_CHECKING:
     from ydbdoc_review_ng.persistence import ContinuationCheckpoint
@@ -1204,6 +1205,10 @@ class RuntimeContent:
                     return None, result.failure, result.failure is AttemptError.CONTENT_FILTER
                 try:
                     validate_chunk_response(chunk, prepared.placeholders, result.text)
+                    validate_translated_prose(
+                        chunk, result.text, entry.pair.source_locale.value,
+                        entry.pair.target_locale.value,
+                    )
                 except DocumentTranslationError as error:
                     write_trace(
                         "translation",

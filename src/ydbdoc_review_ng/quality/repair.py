@@ -196,51 +196,38 @@ def _invoke_critic(
         boundary = min(boundaries, key=lambda item: abs(item - midpoint), default=midpoint)
         return text[:boundary], text[boundary:]
 
-    request = request_for(source, source_excerpt=False)
-    requests: tuple[ModelRequest, ...]
-    if len(request.prompt) <= _CRITIC_REQUEST_MAX_CHARACTERS:
-        requests = (request,)
-    else:
-        pending_pairs = [(source.decode("utf-8"), target.decode("utf-8"))]
-        pairs: list[tuple[bytes, bytes]] = []
-        while pending_pairs:
-            source_text, target_text = pending_pairs.pop()
-            source_part, target_part = source_text.encode(), target_text.encode()
-            pair_request = request_for(
-                source_part,
-                target_part,
-                source_excerpt=True,
-                target_excerpt=True,
-            )
-            if len(pair_request.prompt) <= _CRITIC_REQUEST_MAX_CHARACTERS:
-                pairs.append((source_part, target_part))
-                continue
-            source_left, source_right = split_text(source_text)
-            target_left, target_right = split_text(target_text)
-            pending_pairs.append((source_right, target_right))
-            pending_pairs.append((source_left, target_left))
-        requests = tuple(
-            request_for(
-                source_part,
-                target_part,
-                source_excerpt=True,
-                target_excerpt=True,
-            )
-            for source_part, target_part in pairs
-        )
-
+    # Keep the excerpts alongside requests so provider-filter failures can be
+    # split without replaying already accepted neighbours. This applies to both
+    # read-only primary review and the fresh final critic.
+    pending = [(source.decode("utf-8"), target.decode("utf-8"), False, 0)]
     results: list[CriticResult] = []
-    for item in requests:
-        if before_model_call is not None:
-            before_model_call()
-        response = executor.invoke(item)
-        if not response.success or response.text is None:
-            raise QualityExecutionError("final_critic" if final else "critic")
-        results.append(
-            parse_critic_response(
-                response.text, target_path=target_path, requested_ids=requested_ids
-            )
+    while pending:
+        source_text, target_text, excerpt, filter_depth = pending.pop()
+        request = request_for(
+            source_text.encode(),
+            target_text.encode(),
+            source_excerpt=excerpt,
+            target_excerpt=excerpt,
         )
+        oversized = len(request.prompt) > _CRITIC_REQUEST_MAX_CHARACTERS
+        if not oversized:
+            if before_model_call is not None:
+                before_model_call()
+            response = executor.invoke(request)
+            if response.success and response.text is not None:
+                results.append(
+                    parse_critic_response(
+                        response.text, target_path=target_path, requested_ids=requested_ids
+                    )
+                )
+                continue
+            if response.failure is not AttemptError.CONTENT_FILTER or filter_depth >= 4:
+                raise QualityExecutionError("final_critic" if final else "critic")
+            filter_depth += 1
+        source_left, source_right = split_text(source_text)
+        target_left, target_right = split_text(target_text)
+        pending.append((source_right, target_right, True, filter_depth))
+        pending.append((source_left, target_left, True, filter_depth))
     findings: list[Finding] = []
     for result in results:
         for finding in result.findings:

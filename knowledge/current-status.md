@@ -1,3 +1,24 @@
+# Critic recovery and untranslated prose (2026-09-28)
+
+Main/tag `9b7ee7c93b6029ebe6bc480a310e6f0fd5a4eaa0` прошёл CI.
+Run `36388057226` перевёл документы и успешно собрал Diplodoc с 25 ресурсами.
+Опубликована ветка `translation/pr-50858`, head
+`48ab27d817cd0183144d2f9f80141bec1addea34`; PR ещё не создан.
+Source SHA: `cc87bc31caed5e6e786b2b9aec6474ba59a5e773`.
+Review упал на changelog-server: два provider content-filter, затем
+QualityExecutionError. В read-only critic отсутствовало adaptive splitting,
+хотя critic-editor его поддерживал. Добавлено ограниченное деление пары
+source/target без повторов проверенных соседей. Release gate: 1935 passed,
+3 deselected (130.40 s), Ruff, mypy (49 files), diff-check, wheel/sdist и
+installed smoke translate/verify/continue прошли.
+Inspection опубликованного candidate также выявил русские абзацы в пяти
+английских документах. Они были model-visible, но translator их скопировал.
+Добавлен RU→EN source-echo guard и объяснение для correction prompt. Поэтому
+после release gate нужен новый doc_translate, а не только doc_verify старой
+ветки. Старый candidate не считается готовым переводом.
+
+---
+
 # Следующий дефект: ресурсы статей (2026-09-28)
 
 Commit `a45326e317163ab689e6837149a9c0d9f0bd551f` опубликован в main и v1.0.1.

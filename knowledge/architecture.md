@@ -102,3 +102,21 @@ verify и continuation повторно вычисляют этот набор �
 
 GitHubBackend кэширует только успешное чтение bytes/отсутствия по immutable
 snapshot/path (4096 записей, 16 MiB). Ошибки и текущие heads не кэшируются.
+
+## Read-only critic filter recovery (2026-09-28)
+
+Read-only primary/final review retains source/target pairs with pending requests.
+An explicit provider content-filter splits only that pair (four levels maximum),
+using the same ordered text boundaries as size splitting. Successful neighbours
+are retained. Transport failures and exhausted/indivisible pairs fail closed.
+This is distinct from the existing block-aligned critic-editor recovery.
+
+## Copied prose guard (2026-09-28)
+
+The published candidate in run 36388057226 contained untranslated Russian prose
+in five English documents. Parser inspection confirmed that these were normal
+model-visible fields, not protected blocks. RU→EN chunk acceptance now rejects
+verbatim Russian spans of at least 32 letters, ignoring whitespace differences.
+Protected code/URLs/templates are placeholders before this check. The existing
+single translator correction and recursive split handle this validation error.
+Short names/terms and non-verbatim semantic errors still require the critic.

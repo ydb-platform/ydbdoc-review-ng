@@ -1406,3 +1406,28 @@ def test_invalid_indivisible_chunk_has_two_calls_and_safe_diagnostic(capsys) -> 
     assert len(failures) == 2
     assert all(event['code'] == 'document_response:placeholder_mismatch' for event in failures)
     assert all('Private-prose' not in json.dumps(event) for event in events)
+
+
+def test_copied_russian_paragraph_requires_translation_correction() -> None:
+    source = "Русский абзац о выполнении запросов должен быть полностью переведён.\n"
+    translated = "The Russian paragraph about query execution must be fully translated.\n"
+    models = ScriptedModels([source, translated])
+    _, result = content_with(models)._translate_document(document_for(source.encode()))
+    assert result.translated_markdown == translated
+    assert len(models.calls) == 2
+    assert "untranslated_source_prose" in models.calls[1].prompt
+    assert "Translate every user-facing paragraph" in models.calls[1].prompt
+
+
+def test_repeated_source_echo_is_not_accepted_as_english() -> None:
+    source = "Русский абзац о выполнении запросов должен быть полностью переведён.\n"
+    models = ScriptedModels([source, source])
+    with pytest.raises(InvalidTranslationResponse):
+        content_with(models)._translate_document(document_for(source.encode()))
+    assert len(models.calls) == 2
+
+
+def test_cyrillic_inside_protected_code_does_not_require_translation() -> None:
+    source = '# Heading\n\n```text\nРусский абзац внутри кода сохраняется полностью без изменений.\n```\n'
+    _, result = content_with(EchoChunkModels())._translate_document(document_for(source.encode()))
+    assert result.translated_markdown == source

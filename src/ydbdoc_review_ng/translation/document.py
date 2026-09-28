@@ -406,6 +406,12 @@ def build_document_correction_note(
         lines.append(
             f"Validation failed: {validation_problem}. Return Markdown with structure/tokens intact."
         )
+    if validation_problem == "document_response:untranslated_source_prose":
+        lines.append(
+            "The previous response copied long Russian source phrases without translating. "
+            "Translate every user-facing paragraph and heading into English, including the "
+            "remainder of the chunk. Do not return source prose unchanged."
+        )
     lines.append(
         "Never add, remove, rename, reorder, or alter placeholders. Keep the source link count "
         "unchanged. Never create, remove, split, merge, or duplicate links, or reuse a URL token."
