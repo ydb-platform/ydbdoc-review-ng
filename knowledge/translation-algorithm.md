@@ -156,9 +156,9 @@ critic-editor получает точные source chunks и уже валиди
 переводчика нет.
 При превышении provider limit source и target делятся на соответствующие
 упорядоченные excerpt-пары.
-Для critic-editor используется отдельный лимит 48000 символов. Schema использует
-один document sentinel вместо field IDs документа: единица применения — полный исправленный
-Markdown excerpt. Packing набирает максимально крупные excerpts и не
+Для critic-editor используется отдельный лимит 48000 символов. Schema не
+содержит field IDs документа: единица применения — полный исправленный Markdown
+excerpt. Packing набирает максимально крупные excerpts и не
 деградирует до десятков вызовов из-за большого enum.
 Явный content-filter на critic-editor excerpt вызывает один вызов резервной
 модели для каждой исходной точной пары `translator chunk → validated response`,

@@ -539,6 +539,19 @@ model calls, но теперь корректно сообщил в CI: «Пер
 `ydb-platform/ydb` использовать `GH_TOKEN="$YDB_GH_TOKEN"` при unset
 `GITHUB_TOKEN`; значения токенов не печатать и не сохранять.
 
+## Независимый critic probe после run 36493639142
+
+Probe-only run `36498438498` остановился с безопасной причиной
+`unexpected_field`. Это оказался дефект probe harness, а не новый дефект
+runtime или модели: запрос YandexGPT строился с обязательным
+`field_ids=["document"]`, а ответ разбирался runtime-контрактом, где
+`field_ids` запрещено. Модель корректно выполнила выданную schema. Probe теперь
+использует один и тот же production whole-excerpt контракт без field IDs на
+стороне запроса и парсера; отдельный unit test фиксирует их синхронность. До
+зелёного повторного probe полный перевод не запускается. Независимый offline
+gate точного дерева зелёный: 1959 non-live тестов, Ruff, strict mypy,
+wheel/sdist и installed smoke `translate + verify + continue`.
+
 ## Локальная доработка source-only перевода
 
 27 сентября 2026 добавлена локальная, ещё не опубликованная доработка

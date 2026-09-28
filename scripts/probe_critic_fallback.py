@@ -23,6 +23,15 @@ from ydbdoc_review_ng.quality.critic import (
 )
 from ydbdoc_review_ng.quality.repair import _fallback_editor_request
 
+_DIAGNOSTIC_SOURCE = (
+    "**Группа хранения**, **группа распределённого хранилища** или "
+    "**группа Blob Storage** — место надёжного хранения данных."
+).encode()
+_DIAGNOSTIC_TARGET = (
+    b"**Storage group**, **distributed storage group**, **storage group**, or "
+    b"**Blob storage group** is a place for reliable data storage."
+)
+
 
 def _targeted_probe_request(primary: ModelRequest) -> ModelRequest:
     targeted = _fallback_editor_request(primary, primary.model)
@@ -47,6 +56,31 @@ def _targeted_probe_request(primary: ModelRequest) -> ModelRequest:
         else cast(FrozenJson, mutable_json(targeted.schema)),
         targeted.max_tokens,
         targeted.target_path,
+    )
+
+
+def _diagnostic_probe_request(model: str) -> ModelRequest:
+    return build_critic_request(
+        model=model,
+        source=_DIAGNOSTIC_SOURCE,
+        target=_DIAGNOSTIC_TARGET,
+        target_path=RepoPath("ydb/docs/en/probe.md"),
+        source_locale=Locale.RU,
+        target_locale=Locale.EN,
+        requested_ids=(),
+        source_is_excerpt=True,
+        target_is_excerpt=True,
+        editable=True,
+    )
+
+
+def _parse_diagnostic_probe_response(raw: str) -> None:
+    parse_critic_response(
+        raw,
+        target_path=RepoPath("ydb/docs/en/probe.md"),
+        requested_ids=(),
+        editable=True,
+        current_target=_DIAGNOSTIC_TARGET.decode(),
     )
 
 
@@ -115,25 +149,8 @@ def main() -> int:
         print("critic fallback probe failed: corrected_markdown is not text")
         return 1
     usage = result.attempts[-1].usage
-    diagnostic_source = (
-        "**Группа хранения**, **группа распределённого хранилища** или "
-        "**группа Blob Storage** — место надёжного хранения данных."
-    ).encode()
-    diagnostic_target = (
-        b"**Storage group**, **distributed storage group**, **storage group**, or "
-        b"**Blob storage group** is a place for reliable data storage."
-    )
-    diagnostic_primary = build_critic_request(
-        model=os.environ.get("YDBDOC_MODEL_CRITIC") or "yandexgpt-5.1",
-        source=diagnostic_source,
-        target=diagnostic_target,
-        target_path=RepoPath("ydb/docs/en/probe.md"),
-        source_locale=Locale.RU,
-        target_locale=Locale.EN,
-        requested_ids=("document",),
-        source_is_excerpt=True,
-        target_is_excerpt=True,
-        editable=True,
+    diagnostic_primary = _diagnostic_probe_request(
+        os.environ.get("YDBDOC_MODEL_CRITIC") or "yandexgpt-5.1"
     )
     primary_attempts: list[AttemptResult] = []
     primary_result = NativeYandexClient(
@@ -145,13 +162,7 @@ def main() -> int:
         print("structured critic probe failed: model call")
         return 1
     try:
-        parse_critic_response(
-            primary_result.text,
-            target_path=RepoPath("ydb/docs/en/probe.md"),
-            requested_ids=(),
-            editable=True,
-            current_target=diagnostic_target.decode(),
-        )
+        _parse_diagnostic_probe_response(primary_result.text)
     except CriticResponseError as error:
         print(f"structured critic probe failed: response contract ({error.reason.value})")
         return 1
@@ -172,7 +183,7 @@ def main() -> int:
         print("targeted editor probe failed: malformed JSON")
         return 1
     corrected = targeted_payload.get("corrected_markdown")
-    if type(corrected) is not str or corrected == diagnostic_target.decode():
+    if type(corrected) is not str or corrected == _DIAGNOSTIC_TARGET.decode():
         print("targeted editor probe failed: unchanged correction")
         return 1
     targeted_usage = targeted_result.attempts[-1].usage
