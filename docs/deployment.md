@@ -66,7 +66,9 @@ model calls and audit, never the report. RED exits 1 in every CLI mode.
 The runtime composes pair discovery, one mixed-direction decision, dependency
 scope/preflight, parser, strict translation, protected-fragment checks, and one
 critic-editor pass per document or excerpt. All valid edits are collected before
-one guarded publication. Validated bytes become Git Data blobs/tree/commit and a
+one strict candidate build and one guarded publication. The draft is not fully
+built before the critic-editor; only local structural checks and safe Markdown
+normalization run there. Validated bytes become Git Data blobs/tree/commit and a
 guarded ref update. Byte-identical output cannot create a PR or comment. Final QA
 follows publication; checks are read for the exact head,
 and branch movement blocks stale reporting. An updated PR body records the exact

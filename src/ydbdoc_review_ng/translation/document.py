@@ -33,6 +33,9 @@ _PLACEHOLDER_RESIDUE = re.compile(
 _EMPTY_LINK = re.compile(r"\]\(\s*\)")
 _ATX_HEADING = re.compile(r"^ {0,3}#{1,6}(?:\s|$)")
 _TOP_LEVEL_LIST_ITEM = re.compile(r"^(?:[*+-]|[0-9]+[.)])\s+")
+_LIST_ITEM_SPACING = re.compile(
+    r"^(?P<prefix> {0,3}(?:[*+-]|[0-9]+[.)]))(?P<spacing>[ \t]+)(?=\S)"
+)
 _FENCE_LINE = re.compile(r"^ {0,3}(?P<marker>`{3,}|~{3,})(?P<rest>.*)$")
 _OUTER_PROVIDER_FENCE = re.compile(
     r"\A```(?:markdown)?[ \t]*\r?\n(?P<body>.*?)(?:\r\n|\n)```[ \t]*(?:\r?\n)?\Z",
@@ -104,6 +107,9 @@ def _markdown_style_problems(value: bytes, /) -> tuple[tuple[str, int | None], .
             problems.append(("blank_before_fence", index + 1))
         if not outside_fence[index]:
             continue
+        list_item = _LIST_ITEM_SPACING.match(line)
+        if list_item is not None and list_item.group("spacing") != " ":
+            problems.append(("list_marker_space", index + 1))
         if _ATX_HEADING.match(line):
             if index and lines[index - 1].strip():
                 problems.append(("blank_before_heading", index + 1))
@@ -181,6 +187,7 @@ def _normalize_publishable_markdown(source: bytes, target: bytes, /) -> bytes:
     seen: Counter[str] = Counter()
     before: set[int] = set()
     after: set[int] = set()
+    list_spacing: set[int] = set()
     for problem, line_number in _markdown_style_problems(target):
         seen[problem] += 1
         if line_number is None or seen[problem] <= allowed[problem]:
@@ -189,8 +196,10 @@ def _normalize_publishable_markdown(source: bytes, target: bytes, /) -> bytes:
             before.add(line_number)
         elif problem == "blank_after_heading":
             after.add(line_number)
+        elif problem == "list_marker_space":
+            list_spacing.add(line_number)
 
-    if not before and not after:
+    if not before and not after and not list_spacing:
         return target
     text = target.decode("utf-8")
     lines = text.splitlines(keepends=True)
@@ -199,6 +208,8 @@ def _normalize_publishable_markdown(source: bytes, target: bytes, /) -> bytes:
     for line_number, line in enumerate(lines, 1):
         if line_number in before and result and result[-1].strip():
             result.append(newline)
+        if line_number in list_spacing:
+            line = _LIST_ITEM_SPACING.sub(r"\g<prefix> ", line, count=1)
         result.append(line)
         if (
             line_number in after

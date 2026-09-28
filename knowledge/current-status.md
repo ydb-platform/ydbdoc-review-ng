@@ -1,3 +1,26 @@
+# Draft build blocked the editor (2026-09-28)
+
+The first real run of the two-stage pipeline, `36445575313`, translated all ten
+documents but failed before any critic-editor call or publication. The draft
+`en/changelog-server.md` contained 17 `MD030` errors (three spaces after list
+markers). The workflow incorrectly ran the full Diplodoc build between the
+translator and critic-editor, so an editable draft defect prevented the editor
+from running at all. The translation branch correctly remained at the previous
+head `6f926402d8e12d9b53a5eaec5bfbf700a7311d50`; atomic publication worked.
+
+The translate order is now local structural validation and safe Markdown
+normalization, one critic-editor pass, then one strict full-candidate Diplodoc
+build and publication. List-marker spacing introduced by a model is normalized
+deterministically outside fenced and indented code. This adds no model call and
+prevents the observed `MD030` failure even when the semantic editor returns the
+draft unchanged. Regression coverage asserts critic-before-build ordering and
+the exact list normalization while preserving code literals. The full gate is
+green: 1946 passed, 3 live tests deselected; Ruff, mypy, diff-check, wheel build
+and installed translate/verify/continue smoke all pass. Publishing and a new
+real rerun are pending.
+
+---
+
 # Two-stage semantic pipeline rewrite (2026-09-28)
 
 The RED translation PR showed that the previous control flow was conceptually
@@ -22,7 +45,8 @@ Coverage confirms one critic call for a corrected chunk and one critic call per
 each of two corrected documents, with a single publication. The full local gate
 is green: 1944 passed, 3 live tests deselected; Ruff, mypy and diff-check pass.
 Wheel/sdist build and installed CLI smoke for translate/verify/continue pass.
-Publishing and the real rerun are still pending.
+The rewrite was published as `89fafaa96b98540d87b706ca56b43df99841a2c1`;
+the first real rerun and its follow-up are recorded above.
 
 ---
 

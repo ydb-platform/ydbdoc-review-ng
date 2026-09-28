@@ -143,8 +143,11 @@ fence и любой неизвестный язык целиком protected.
 
 ## Проверка качества
 
-После детерминированной проверки черновика critic-editor сравнивает protected
-authoritative source и protected target целиком или крупными осмысленными блоками.
+После локальной проверки структуры и безопасной нормализации черновика
+critic-editor сравнивает protected authoritative source и protected target
+целиком или крупными осмысленными блоками. Полный Diplodoc build выполняется
+только после critic-editor: build черновика не должен лишать редактор возможности
+исправить его.
 При превышении provider limit
 source и target сразу делятся на соответствующие упорядоченные excerpt-пары.
 Явный content-filter на critic-editor excerpt вызывает такое же рекурсивное
@@ -158,8 +161,10 @@ model repair call нет. Каждый документ/excerpt получает
 critic-editor response. Валидное изменённое исправление с только repairable
 findings считается финальным; unrepairable, отсутствующее, невалидное или
 побайтно неизменное исправление оставляет RED. Затем обязательны восстановление
-protected fragments, локальные validators и полный Diplodoc build изменённого
-candidate. Все документы публикуются одним commit. Final critic и следующие
+protected fragments, локальные validators и полный Diplodoc build итогового
+candidate, даже если critic не изменил bytes. Лишние пробелы после list marker
+нормализуются детерминированно вне fenced/indented code, без model call. Все
+документы публикуются одним commit. Final critic и следующие
 semantic repair attempts отсутствуют.
 
 Технический transport retry может быть bounded, но не превращается в
@@ -177,6 +182,7 @@ Operator context обрамляется отдельно от authoritative Mark
 невалидный chunk не публикуется. Каждый отказ пишет безопасный код валидации
 без model response и source prose; успешные соседние chunks не повторяются.
 
-Смысловая проверка остаётся отдельным этапом между предвалидацией черновика и
-единственной публикацией. По умолчанию переводчик — DeepSeek V4 Flash, critic-editor —
+Смысловая проверка остаётся отдельным этапом между локальной структурной
+валидацией черновика и единственной публикацией. Строгий Diplodoc build идёт
+после неё. По умолчанию переводчик — DeepSeek V4 Flash, critic-editor —
 YandexGPT 5.1 (`YDBDOC_MODEL_CRITIC` позволяет явно выбрать модель).

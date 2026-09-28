@@ -18,8 +18,8 @@
 ## Минимальный поток
 
 `doc_translate` идёт линейно: create job audit → authorize → snapshot →
-budget → direction/scope → parse → translate → validate/assemble/reparse →
-critic-editor → optional revalidate → one commit/push
+budget → direction/scope → parse → translate → local structural validation and
+safe Markdown normalization → critic-editor → full validation/Diplodoc build → one commit/push
 → PR verdict → terminal job status.
 
 `doc_verify` создаёт job audit, берёт текущую translation branch и authoritative
@@ -159,4 +159,7 @@ draft. For every document or aligned excerpt the critic-editor returns findings
 and the complete corrected Markdown in one response. A valid changed edit with
 only repairable findings resolves those draft findings. Unrepairable, missing,
 invalid or unchanged edits remain RED. There is no final-critic loop. All edits
-are assembled, validated, built and published once.
+are assembled, validated, built and published once. A full draft build must not
+run before the critic-editor: fixable draft lint errors would otherwise prevent
+the editor from running. Mechanical list-marker spacing is normalized locally
+outside code before review; the final candidate always receives the strict build.

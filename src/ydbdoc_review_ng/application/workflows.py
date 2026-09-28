@@ -503,14 +503,11 @@ class LinearWorkflows:
             )
             stage = WorkflowStage.PREPARE
             candidate = self._content.prepare_translation(snapshot)
-            stage = WorkflowStage.VALIDATE
-            self._content.validate_candidate(snapshot, candidate)
             stage = WorkflowStage.REVIEW
             review = self._reviewer.review(snapshot, candidate)
             reviewed = WorkflowCandidate(review.final_candidate, candidate.review_context)
-            if reviewed.content != candidate.content:
-                stage = WorkflowStage.VALIDATE
-                self._content.validate_candidate(snapshot, reviewed)
+            stage = WorkflowStage.VALIDATE
+            self._content.validate_candidate(snapshot, reviewed)
             stage = WorkflowStage.PUBLISH
             final_sha = self._publisher.publish(snapshot, reviewed)
             stage = WorkflowStage.REPORT

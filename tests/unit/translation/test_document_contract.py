@@ -513,6 +513,29 @@ def test_missing_blank_after_heading_is_restored_before_publication() -> None:
     assert candidate == b"## Translated heading\n\nRelease date: July 27, 2026.\n"
 
 
+def test_extra_list_marker_spaces_are_normalized_before_review_and_build() -> None:
+    source = b"- First item\n- Second item\n"
+    plan, request = prepared(source)
+
+    candidate = restore_document(
+        source,
+        plan,
+        request,
+        ("-   Translated first item\n-   Translated second item\n",),
+    )
+
+    assert candidate == b"- Translated first item\n- Translated second item\n"
+
+
+def test_list_like_text_in_fenced_or_indented_code_is_not_normalized() -> None:
+    source = b"```text\n-   keep fenced\n```\n\n    -   keep indented\n"
+    plan, request = prepared(source)
+
+    candidate = restore_document(source, plan, request, (request.chunks[0].text,))
+
+    assert candidate == source
+
+
 def test_missing_blank_before_fence_is_restored_before_publication() -> None:
     source = b"Before.\n\n```sql\nSELECT 1;\n```\n\nAfter.\n"
     plan, request = prepared(source)

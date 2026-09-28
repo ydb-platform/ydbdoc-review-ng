@@ -665,8 +665,8 @@ def test_offline_translate_runs_real_pipeline_in_both_directions(
         assert b"```" + language in target
     assert case.calls == ["translate", "critic"]
     assert (
-        case.events.index("validate")
-        < case.events.index("critic")
+        case.events.index("critic")
+        < case.events.index("validate")
         < case.events.index("publish")
         < case.events.index("create_pr")
     )
