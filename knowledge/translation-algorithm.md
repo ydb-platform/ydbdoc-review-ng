@@ -161,10 +161,12 @@ critic-editor получает точные source chunks и уже валиди
 Markdown excerpt. Packing набирает максимально крупные excerpts и не
 деградирует до десятков вызовов из-за большого enum.
 Явный content-filter на critic-editor excerpt вызывает один вызов резервной
-модели с той же целой source/target-парой и плоской schema из единственного
+модели для каждой исходной точной пары `translator chunk → validated response`,
+входившей в этот excerpt, с плоской schema из единственного
 `corrected_markdown`. Сложные диагностические findings для fallback не нужны:
 его результат принимается только после тех же структурных валидаторов. Target
-не режется эвристически и успешные соседние excerpts не повторяются.
+не режется эвристически, fallback chunks не делятся повторно, успешные соседние
+excerpts не повторяются.
 Полный большой target не повторяется в каждом prompt, чтобы critic не терял
 соответствующий фрагмент среди нерелевантных разделов. RED любого excerpt делает
 общий verdict RED, findings

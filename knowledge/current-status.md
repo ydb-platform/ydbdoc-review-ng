@@ -7,10 +7,15 @@ content-filter attempts; the one-shot DeepSeek fallback then returned HTTP 400
 request bounds and round-trip assembly, but did not exercise the alternate
 provider with the critic's nested findings schema. That was the missing check.
 
-The fallback now keeps the same intact source/target pair but uses the flat
-`{corrected_markdown: string}` schema already exercised by the DeepSeek
-translation endpoint. The correction still passes placeholder/structure
-validation and the final Diplodoc build. A separate manual GitHub workflow
+The first isolated consumer probe proved that the flat schema removes HTTP 400,
+but a combined full-excerpt response reached `finish_reason=length`. Fallback
+therefore reuses each exact bounded `translator chunk → validated response`
+pair inside the filtered excerpt rather than asking DeepSeek to repeat the
+combined excerpt. Each unit is attempted once, with no proportional split or
+recursion. The corrections still pass placeholder/structure validation and the
+final Diplodoc build. Regression coverage includes a filtered combined excerpt
+replayed as two exact translator units. The release gate after this change is
+1955 passed tests (3 live deselected), Ruff and mypy green. A separate manual GitHub workflow
 `model-contract-probe.yml` exercises this exact fallback client and response
 shape with real model credentials before another paid translation run. When the
 tool repository has no model secret, the authorized `doc_model_probe` label

@@ -16,7 +16,7 @@ and `ydb_executor`. No separate deployment Python module must be authored.
 | `YANDEX_API_KEY`, `YANDEX_FOLDER_ID` | Native Yandex model credentials. |
 | `YDBDOC_MODEL` | Optional translation model name, default `deepseek-v4-flash`. DeepSeek uses the Yandex Cloud OpenAI-compatible endpoint. |
 | `YDBDOC_MODEL_CRITIC` | Semantic critic-editor, default `yandexgpt-5.1`, independently selected from the translator. |
-| `YDBDOC_MODEL_CRITIC_FALLBACK` | One-shot critic fallback after an exhausted content filter; defaults to `YDBDOC_MODEL`, receives the same intact source/target pair and returns a flat `corrected_markdown` object. |
+| `YDBDOC_MODEL_CRITIC_FALLBACK` | One bounded fallback pass after an exhausted content filter; defaults to `YDBDOC_MODEL`, receives the exact validated translator chunk pairs inside the filtered excerpt and returns flat `corrected_markdown` objects. |
 | `YDBDOC_MAX_CRITIC_REQUEST_CHARACTERS` | Critic-editor request limit, default `48000`; independent from the smaller translator limit. |
 | `YDBDOC_MODEL_FALLBACK` | Optional fallback model name, default `yandexgpt-5.1`. Used when the primary model returns a provider failure or content filter. |
 | `YDB_ENDPOINT`, `YDB_DATABASE`, `YDB_TOKEN` | Optional YDB endpoint, database path and access token. Connection is lazy. |

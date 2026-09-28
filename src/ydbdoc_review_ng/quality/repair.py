@@ -638,28 +638,67 @@ def review_translation(
 
     def process_editor_chunk(chunk: DocumentChunk, request: ModelRequest) -> bool:
         response = invoke_editor(request)
-        used_fallback = False
         if (
             (not response.success or response.text is None)
             and response.failure is AttemptError.CONTENT_FILTER
             and fallback_model is not None
             and fallback_model != request.model
         ):
-            # Keep the exact validated source/target pair intact. Splitting the
-            # translated target proportionally to source block lengths is not a
-            # real alignment and can cut Markdown or placeholders. One other
-            # provider gets the same intact source/target pair with the flat
-            # response contract already used successfully by the translator;
-            # there is no loop.
-            response = invoke_editor(_fallback_editor_request(request, fallback_model))
-            used_fallback = True
+            # Never split translated text proportionally. During doc_translate
+            # we still have the exact validated translator chunk pairs, so the
+            # alternate editor receives those original bounded units. Verify
+            # and continuation have no draft pairs and keep the intact request.
+            fallback_units: tuple[tuple[DocumentChunk, ModelRequest], ...]
+            if draft_request is not None and draft_responses is not None:
+                units = []
+                for original, draft_response in zip(
+                    draft_request.chunks, draft_responses, strict=True
+                ):
+                    if (
+                        chunk.block_start <= original.block_start
+                        and original.block_end <= chunk.block_end
+                    ):
+                        units.append(
+                            (
+                                original,
+                                _editor_request(
+                                    model=fallback_model,
+                                    source_text=original.text,
+                                    target_text=draft_response,
+                                    target_path=target_path,
+                                    source_locale=source_locale,
+                                    target_locale=target_locale,
+                                    requested_ids=critic_field_ids,
+                                    operator_context=operator_context,
+                                    terminology_context=terminology_context,
+                                ),
+                            )
+                        )
+                if (
+                    not units
+                    or units[0][0].block_start != chunk.block_start
+                    or units[-1][0].block_end != chunk.block_end
+                    or "".join(item[0].text for item in units) != chunk.text
+                ):
+                    raise QualityInputError("draft_fallback_alignment_failed")
+                fallback_units = tuple(units)
+            else:
+                fallback_units = ((chunk, request),)
+            for fallback_chunk, fallback_request in fallback_units:
+                fallback_response = invoke_editor(
+                    _fallback_editor_request(fallback_request, fallback_model)
+                )
+                if not fallback_response.success or fallback_response.text is None:
+                    raise QualityExecutionError("critic")
+                try:
+                    accept_fallback_response(fallback_chunk, fallback_response)
+                except DocumentTranslationError:
+                    return False
+            return True
         if not response.success or response.text is None:
             raise QualityExecutionError("critic")
         try:
-            if used_fallback:
-                accept_fallback_response(chunk, response)
-            else:
-                accept_editor_response(chunk, response)
+            accept_editor_response(chunk, response)
         except DocumentTranslationError:
             return False
         return True

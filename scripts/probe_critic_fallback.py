@@ -21,8 +21,15 @@ def main() -> int:
     if not api_key or not folder_id:
         print("critic fallback probe unavailable: model credentials are not configured")
         return 2
-    source = ("Стабильная тестовая строка для проверки контракта модели.\n" * 180).encode()
-    target = ("Stable test line for validating the model contract.\n" * 180).encode()
+    # One probe unit matches a maximum translator chunk, not a combined critic
+    # excerpt: filtered combined excerpts are replayed on these exact units.
+    source = "".join(
+        f"- Параметр {index}: стабильное тестовое значение {index}.\n"
+        for index in range(80)
+    ).encode()
+    target = "".join(
+        f"- Parameter {index}: stable test value {index}.\n" for index in range(80)
+    ).encode()
     primary = build_critic_request(
         model="yandexgpt-5.1",
         source=source,

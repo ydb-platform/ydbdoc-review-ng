@@ -319,6 +319,57 @@ def test_content_filter_keeps_exact_translator_chunk_for_fallback_model() -> Non
     assert current_editor_target(executor.calls[1]) == draft_responses[0]
 
 
+def test_filtered_combined_critic_replays_exact_translator_chunks() -> None:
+    source = (
+        ("## First\n\n" + "first sentence. " * 260 + "\n\n")
+        + ("## Second\n\n" + "second sentence. " * 260 + "\n")
+    ).encode()
+    plan = build_markdown_plan(SNAPSHOT, SOURCE_PATH, source)
+    translation_request = build_translation_request(source, plan)
+    draft_request = prepare_document(source, plan, max_characters=5_000)
+    assert len(draft_request.chunks) == 2
+    draft_responses = tuple(item.text for item in draft_request.chunks)
+
+    class FilterThenFallbackExecutor:
+        def __init__(self) -> None:
+            self.calls: list[ModelRequest] = []
+
+        def invoke(self, model_request: ModelRequest, /) -> ModelCallResult:
+            self.calls.append(model_request)
+            if len(self.calls) == 1:
+                return ModelCallResult(None, AttemptError.CONTENT_FILTER, ())
+            return ModelCallResult(
+                fallback_editor_json(current_editor_target(model_request)), None, ()
+            )
+
+    executor = FilterThenFallbackExecutor()
+    result = review_translation(
+        executor,
+        model="critic-model",
+        fallback_model="translator-model",
+        source=source,
+        source_plan=plan,
+        translation_request=translation_request,
+        target=source,
+        target_path=PATH,
+        source_locale=Locale.EN,
+        target_locale=Locale.RU,
+        max_request_characters=100_000,
+        draft_request=draft_request,
+        draft_responses=draft_responses,
+    )
+
+    assert result.final_candidate == source
+    assert [item.model for item in executor.calls] == [
+        "critic-model",
+        "translator-model",
+        "translator-model",
+    ]
+    assert [current_editor_target(item) for item in executor.calls[1:]] == list(
+        draft_responses
+    )
+
+
 def test_primary_critic_applies_its_own_correction_without_repair_call() -> None:
     plan, request, values, target = prepared()
     field_id = request.fields[1].field_id
