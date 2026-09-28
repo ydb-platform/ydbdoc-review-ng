@@ -120,3 +120,11 @@ verbatim Russian spans of at least 32 letters, ignoring whitespace differences.
 Protected code/URLs/templates are placeholders before this check. The existing
 single translator correction and recursive split handle this validation error.
 Short names/terms and non-verbatim semantic errors still require the critic.
+
+## Decimal prose versus paths (2026-09-28)
+
+The path recognizer previously treated decimal 1.79 as a filename. Russian
+1,79 has no protected path, so normal localization failed protected-fragment
+validation. Bare decimals (including signed/exponent forms) are excluded from
+PATH; explicit/nested numeric paths, filenames with an extension, URLs and
+inline code remain protected. This does not weaken numeric semantic review.

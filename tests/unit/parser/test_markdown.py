@@ -1567,3 +1567,24 @@ def test_scope_projection_uses_only_embedded_eligible_source_in_manifest_order()
         hashlib.sha256(b"Alpha\n").hexdigest(),
         hashlib.sha256(b"Beta\n").hexdigest(),
     ]
+
+
+@pytest.mark.parametrize("number", [b"1.79", b"0.81", b"-0.25", b"1.25e3", b"1.25e-3", b"1.25e+3"])
+def test_decimal_prose_is_not_a_filename(number: bytes) -> None:
+    source = b"Elapsed time: " + number + b" seconds.\n"
+    plan = build(source)
+    assert not [
+        region for field in fields_of(plan) for region in field.protected_regions
+        if region.kind is ProtectedKind.PATH
+    ]
+
+
+@pytest.mark.parametrize("path", [b"./1.79", b"values/1.79", b"1.79.md", b"1.2.3"])
+def test_numeric_paths_and_versions_remain_protected(path: bytes) -> None:
+    source = b"Open " + path + b" now.\n"
+    plan = build(source)
+    assert [
+        source[region.span.start:region.span.end]
+        for field in fields_of(plan) for region in field.protected_regions
+        if region.kind is ProtectedKind.PATH
+    ] == [path]

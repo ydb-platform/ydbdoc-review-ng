@@ -68,6 +68,7 @@ _PATH = re.compile(
     rb"(?:/|\./|\.\./)?[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+"
     rb"|" + _FILENAME.pattern
 )
+_DECIMAL = re.compile(rb"-?[0-9]+\.[0-9]+(?:[eE][+-]?[0-9]+)?")
 _IDENTIFIER = re.compile(rb"[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*")
 _URI_AUTOLINK = re.compile(rb"<[A-Za-z][A-Za-z0-9+.-]{1,31}:[\x21-\x3b\x3d\x3f-\x7e]+>")
 _EMAIL_AUTOLINK = re.compile(
@@ -764,8 +765,10 @@ def _inline_regions(
             explicit = raw_path.startswith((b"/", b"./", b"../"))
             hierarchical = raw_path.count(b"/") >= 2
             filename = _FILENAME.fullmatch(raw_path.rsplit(b"/", 1)[-1]) is not None
+            number = _DECIMAL.match(data, cursor)
             if (
                 raw_path.lower() not in {b"e.g", b"i.e"}
+                and (number is None or number.end() < end)
                 and
                 (explicit or hierarchical or filename)
                 and (before is None or before not in leading_boundary)

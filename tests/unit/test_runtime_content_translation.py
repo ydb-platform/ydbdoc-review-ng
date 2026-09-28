@@ -1431,3 +1431,14 @@ def test_cyrillic_inside_protected_code_does_not_require_translation() -> None:
     source = '# Heading\n\n```text\nРусский абзац внутри кода сохраняется полностью без изменений.\n```\n'
     _, result = content_with(EchoChunkModels())._translate_document(document_for(source.encode()))
     assert result.translated_markdown == source
+
+
+def test_decimal_comma_localization_does_not_invent_protected_paths() -> None:
+    document = document_for("Время [задачи](task.md) — 1,79 с и 0,81 с.\n".encode())
+    prepared = prepare_document(document.source, document.plan, max_characters=10000)
+    response = prepared.chunks[0].text.replace("Время", "Time").replace("задачи", "task")
+    response = response.replace("1,79 с и 0,81 с", "1.79 s and 0.81 s")
+    models = ScriptedModels([response])
+    _, result = content_with(models)._translate_document(document)
+    assert result.translated_markdown == "Time [task](task.md) — 1.79 s and 0.81 s.\n"
+    assert len(models.calls) == 1

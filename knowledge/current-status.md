@@ -1,3 +1,26 @@
+# Decimal localization regression (2026-09-28)
+
+Main/tag `08acc684be17ab15a9f560df9330af34a74e86e6`, tool CI green.
+Run `36392932909` stopped at metrics chunk5/5 with protected_fragments:field=1
+(after source-echo detection/correction). Source SHA
+`c58682cd0ca38990b6ed129a9861d5271db9cbd5`.
+Seven earlier documents accepted; a pending-translation checkpoint was saved
+and activated. Old branch head remains48ab27d, no new PR/result.
+Reproduced a concrete parser defect using the metrics decimal values:
+Russian1,79 has no PATH, English1.79 incorrectly has PATH, so valid translation
+fails with exactly that validation code. Actual private model response was not
+retrieved; this is a matching deterministic regression, not a byte-level replay.
+Parser fix release gate: 1946 passed, 3 deselected (140.22 s), Ruff,
+mypy (49 files), diff-check, wheel/sdist, installed smoke all green. Next: main/tag,
+then a fresh doc_translate on source PR50858. Consumer doc_continue still
+uses ydb-platform/ydbdoc-review@v0.1.0 (legacy), not NG. The old one-time NG
+continue workflow is deleted from main, and the tool repo has no model/YDB
+secrets/variables. Do not trigger the legacy continue workflow or change the
+consumer CI. The checkpoint remains available, but no configured NG continue
+entrypoint is available in this environment.
+
+---
+
 # Critic recovery and untranslated prose (2026-09-28)
 
 Main/tag `9b7ee7c93b6029ebe6bc480a310e6f0fd5a4eaa0` прошёл CI.
