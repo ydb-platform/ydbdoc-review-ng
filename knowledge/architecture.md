@@ -102,6 +102,8 @@ verify и continuation повторно вычисляют этот набор �
 
 GitHubBackend кэширует только успешное чтение bytes/отсутствия по immutable
 snapshot/path (4096 записей, 16 MiB). Ошибки и текущие heads не кэшируются.
+GitHubHTTP ограниченно повторяет только идемпотентные GET при transport error,
+429 и 5xx (две короткие задержки); мутации не повторяются.
 
 ## Copied prose guard (2026-09-28)
 

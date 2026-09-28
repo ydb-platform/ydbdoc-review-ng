@@ -93,6 +93,8 @@ an explicit package dependency, installed by the action with the runtime extra.
 
 GitHub collections are single-page bounded. A next-page Link, incomplete PR
 file inventory or truncated checks fails closed. No pagination subsystem exists.
+Idempotent GitHub GET requests have two short retries for network failures, HTTP
+429 and 5xx. Mutations and non-retryable 4xx are never retried.
 
 ## Schema setup, separately authorized
 

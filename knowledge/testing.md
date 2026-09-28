@@ -5,6 +5,8 @@
 - Разработчик каждой атомарной задачи пишет unit tests её публичного поведения.
 - Model, YDB и GitHub boundaries проверяются fakes без сети и платных calls.
 - Negative test обязан достигать реальной production branch.
+- GitHub GET retry проверяется на transient transport/5xx, а mutation failure —
+  на отсутствие повтора при неопределённом результате.
 - Fixture добавляется для конкретного requirement, а не ради размера матрицы.
 
 ## Независимая приёмка

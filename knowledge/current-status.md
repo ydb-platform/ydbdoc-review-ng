@@ -23,6 +23,20 @@ pending; do not start `doc_translate` before tool CI passes.
 
 ---
 
+# Preflight GitHub transport failure (2026-09-28)
+
+After tool CI passed, run `36474945915` failed during source preparation before
+any model call. One immutable Contents GET failed after hundreds of successful
+reads; the same URL immediately returned HTTP 200 and rate-limit headroom was
+normal. Runtime had no retry for idempotent GitHub reads. GitHubHTTP now retries
+only GET twice for network errors, 429 and 5xx with bounded delays; mutations
+remain single-attempt. Release gate: 1953 tests passed (3 live deselected),
+Ruff, mypy, diff-check, wheel/sdist and installed CLI smoke are green. No
+translation candidate was published and this run incurred no model cost.
+Publication and tool CI are pending.
+
+---
+
 # Second critic chunk planner failed on glossary (2026-09-28)
 
 Run `36461077089` translated all ten documents and reduced the changelog review

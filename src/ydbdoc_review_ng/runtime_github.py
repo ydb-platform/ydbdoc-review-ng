@@ -11,6 +11,7 @@ import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
+from time import sleep
 from typing import Any
 
 from ydbdoc_review_ng.domain import GitSha, RepoPath, SnapshotRef
@@ -22,6 +23,8 @@ from ydbdoc_review_ng.trace import traced
 JsonTransport = Callable[[str, str, object], Any]
 _CONTENT_CACHE_MAX_ENTRIES = 4096
 _CONTENT_CACHE_MAX_BYTES = 16 * 1024 * 1024
+_RETRYABLE_GITHUB_STATUSES = frozenset({429, 500, 502, 503, 504})
+_GITHUB_GET_RETRY_DELAYS = (0.25, 1.0)
 
 
 class RuntimeBoundaryError(SafeDiagnosticError):
@@ -108,9 +111,16 @@ def _translation_provenance(body: str) -> TranslationProvenance | None:
 
 
 class GitHubHTTP:
-    def __init__(self, read_token: str, mutation_token: str) -> None:
+    def __init__(
+        self,
+        read_token: str,
+        mutation_token: str,
+        *,
+        sleeper: Callable[[float], None] = sleep,
+    ) -> None:
         self._read_token = read_token
         self._mutation_token = mutation_token
+        self._sleep = sleeper
 
     def __call__(self, method: str, path: str, payload: object) -> Any:
         endpoint = path.split("?", 1)[0]
@@ -133,18 +143,23 @@ class GitHubHTTP:
                     "Content-Type": "application/json",
                 },
             )
-            try:
-                with urllib.request.urlopen(request, timeout=60) as response:
-                    # Do not silently publish a truncated scope or duplicate a comment.
-                    if 'rel="next"' in response.headers.get("Link", ""):
-                        raise RuntimeBoundaryError("github_result_exceeds_single_page")
-                    return json.loads(response.read())
-            except urllib.error.HTTPError as error:
-                if error.code == 404 and method == "GET":
-                    return None
-                raise RuntimeBoundaryError("github_request_failed") from None
-            except (OSError, ValueError):
-                raise RuntimeBoundaryError("github_request_failed") from None
+            for attempt in range(len(_GITHUB_GET_RETRY_DELAYS) + 1):
+                try:
+                    with urllib.request.urlopen(request, timeout=60) as response:
+                        # Do not silently publish a truncated scope or duplicate a comment.
+                        if 'rel="next"' in response.headers.get("Link", ""):
+                            raise RuntimeBoundaryError("github_result_exceeds_single_page")
+                        return json.loads(response.read())
+                except urllib.error.HTTPError as error:
+                    if error.code == 404 and method == "GET":
+                        return None
+                    retryable = method == "GET" and error.code in _RETRYABLE_GITHUB_STATUSES
+                except (OSError, ValueError):
+                    retryable = method == "GET"
+                if not retryable or attempt == len(_GITHUB_GET_RETRY_DELAYS):
+                    raise RuntimeBoundaryError("github_request_failed") from None
+                self._sleep(_GITHUB_GET_RETRY_DELAYS[attempt])
+            raise AssertionError("bounded GitHub GET retry exhausted")
 
 
 class GitHubBackend:

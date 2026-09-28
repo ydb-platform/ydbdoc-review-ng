@@ -203,6 +203,62 @@ def test_failed_authenticated_read_is_not_retried_without_credentials(monkeypatc
     assert authorizations == ["Bearer read-token"]
 
 
+def test_github_http_retries_transient_get_without_retrying_mutations(monkeypatch) -> None:
+    get_attempts = 0
+    delays: list[float] = []
+
+    def transient_get(request, timeout):
+        nonlocal get_attempts
+        get_attempts += 1
+        if get_attempts < 3:
+            raise OSError("temporary connection failure")
+        return Response()
+
+    monkeypatch.setattr("urllib.request.urlopen", transient_get)
+
+    result = GitHubHTTP(
+        "read-token", "mutation-token", sleeper=delays.append
+    )("GET", "/resource", None)
+
+    assert result == {"ok": True}
+    assert get_attempts == 3
+    assert delays == [0.25, 1.0]
+
+    mutation_attempts = 0
+
+    def transient_mutation(request, timeout):
+        nonlocal mutation_attempts
+        mutation_attempts += 1
+        raise OSError("uncertain mutation result")
+
+    monkeypatch.setattr("urllib.request.urlopen", transient_mutation)
+
+    with pytest.raises(RuntimeBoundaryError, match="^github_request_failed$"):
+        GitHubHTTP("read-token", "mutation-token", sleeper=delays.append)(
+            "POST", "/resource", {"value": 1}
+        )
+
+    assert mutation_attempts == 1
+
+
+def test_github_http_retries_only_retryable_http_statuses(monkeypatch) -> None:
+    attempts = 0
+
+    def unavailable_then_ok(request, timeout):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise urllib.error.HTTPError(request.full_url, 503, "unavailable", {}, None)
+        return Response()
+
+    monkeypatch.setattr("urllib.request.urlopen", unavailable_then_ok)
+
+    assert GitHubHTTP("read-token", "mutation-token", sleeper=lambda _delay: None)(
+        "GET", "/resource", None
+    ) == {"ok": True}
+    assert attempts == 2
+
+
 def test_comment_ownership_uses_mutation_identity_while_comment_list_uses_read_token(
     monkeypatch,
 ) -> None:
