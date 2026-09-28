@@ -258,9 +258,6 @@ def test_runtime_preserves_list_formatting_drift_through_critic() -> None:
                 if self.critic_calls > 1:
                     return super().model(request)
                 schema = schema_wrapper["schema"]
-                field_ids = schema["properties"]["findings"]["items"]["properties"][
-                    "field_ids"
-                ]["items"]["enum"]
                 self.events.append(("MODEL", tuple(schema["properties"])))
                 values = {
                     "verdict": "RED",
@@ -272,7 +269,7 @@ def test_runtime_preserves_list_formatting_drift_through_critic() -> None:
                             "searchable_snippet": "translated item",
                             "target_path": "ydb/docs/en/core/page.md",
                             "target_line": 2,
-                            "field_ids": [field_ids[-1]],
+                            "field_ids": ["document"],
                         }
                     ],
                 }
@@ -1766,10 +1763,6 @@ def test_critic_edit_is_validated_then_published_once_before_pr():
                 return super().model(request)
             schema = schema_wrapper["schema"]
             self.critics += 1
-            field_ids = schema["properties"]["findings"]["items"]["properties"][
-                "field_ids"
-            ]["items"]["enum"]
-            self.field_id = field_ids[0]
             if self.critics > 1:
                 return super().model(request)
             self.events.append(("CRITIC", "first"))
@@ -1783,7 +1776,7 @@ def test_critic_edit_is_validated_then_published_once_before_pr():
                         "searchable_snippet": "Translated",
                         "target_path": "ydb/docs/en/core/page.md",
                         "target_line": 1,
-                        "field_ids": [self.field_id],
+                        "field_ids": ["document"],
                     }
                 ],
             }

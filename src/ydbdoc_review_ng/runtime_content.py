@@ -1541,6 +1541,9 @@ class RuntimeContent:
         /,
     ) -> QualityReviewResult:
         files = unpack(candidate.content)
+        critic_limit = int(
+            self.environment.get("YDBDOC_MAX_CRITIC_REQUEST_CHARACTERS") or "24000"
+        )
         reviews = []
         repaired = False
         attempted = False
@@ -1585,10 +1588,7 @@ class RuntimeContent:
                 operator_context=self.review_operator_context,
                 terminology_context=self._terminology_context(
                     document,
-                    max_characters=int(
-                        self.environment.get("YDBDOC_MAX_MODEL_REQUEST_CHARACTERS")
-                        or "6000"
-                    ),
+                    max_characters=critic_limit,
                 ),
                 before_model_call=check_head if selective else None,
                 before_repaired_map=publish_map if selective else None,
@@ -1598,10 +1598,7 @@ class RuntimeContent:
                     if document.entry.target_content is not None
                     else document.entry.rename_from_target_content,
                 ),
-                max_request_characters=int(
-                    self.environment.get("YDBDOC_MAX_MODEL_REQUEST_CHARACTERS")
-                    or "6000"
-                ),
+                max_request_characters=critic_limit,
             )
             if (
                 document.entry.operation is not FileOperation.RENAME_TARGET

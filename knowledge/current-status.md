@@ -1,3 +1,19 @@
+# Critic request explosion and schema overflow (2026-09-28)
+
+Run `36454018170` confirmed that the editor now runs, but exposed remaining old
+complexity: the translator's 6000-character limit was reused for the critic,
+and the critic schema embedded every field ID. It made 99 successful critic
+calls for only two changelog files (24 + 75), then failed with
+`QualityInputError` before the next document could be packed. No candidate was
+published. The critic now has an independent 24000-character limit and a single
+document sentinel instead of a document-wide field-ID enum; complete corrected Markdown excerpts are the edit
+unit. This removes the schema overflow and packs adjacent blocks into far fewer
+calls without adding retries.
+The full gate is green: 1946 passed, 3 live tests deselected; Ruff, mypy and
+diff-check pass. Publishing and the next real rerun are pending.
+
+---
+
 # Draft build blocked the editor (2026-09-28)
 
 The first real run of the two-stage pipeline, `36445575313`, translated all ten

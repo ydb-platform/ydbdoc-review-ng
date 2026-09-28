@@ -392,6 +392,7 @@ def review_translation(
         if accepted_map is not None or not full_repair
         else ()
     )
+    critic_field_ids = ("document",)
     editor_requests, document_request, source_blocks, target_blocks = _editor_requests(
         model=model,
         source=source,
@@ -400,7 +401,10 @@ def review_translation(
         target_path=target_path,
         source_locale=source_locale,
         target_locale=target_locale,
-        requested_ids=translation_request.requested_ids,
+        # The editor returns complete corrected Markdown. A single document
+        # sentinel preserves the finding contract without embedding every field
+        # ID in the schema (the glossary enum alone exceeded the request budget).
+        requested_ids=critic_field_ids,
         operator_context=operator_context,
         max_characters=max_request_characters,
         link_resolver=link_resolver,
@@ -421,7 +425,7 @@ def review_translation(
             target_path=target_path,
             source_locale=source_locale,
             target_locale=target_locale,
-            requested_ids=translation_request.requested_ids,
+            requested_ids=critic_field_ids,
             operator_context=operator_context,
             terminology_context=terminology_context,
         )
@@ -444,7 +448,7 @@ def review_translation(
         result = parse_critic_response(
             response.text,
             target_path=target_path,
-            requested_ids=translation_request.requested_ids,
+            requested_ids=critic_field_ids,
             editable=True,
             current_target=current_target,
         )
