@@ -16,7 +16,11 @@ from ydbdoc_review_ng.models import (
     YandexOpenAIClient,
 )
 from ydbdoc_review_ng.models.types import FrozenJson, mutable_json
-from ydbdoc_review_ng.quality.critic import build_critic_request, parse_critic_response
+from ydbdoc_review_ng.quality.critic import (
+    CriticResponseError,
+    build_critic_request,
+    parse_critic_response,
+)
 from ydbdoc_review_ng.quality.repair import _fallback_editor_request
 
 
@@ -148,8 +152,8 @@ def main() -> int:
             editable=True,
             current_target=diagnostic_target.decode(),
         )
-    except ValueError:
-        print("structured critic probe failed: response contract")
+    except CriticResponseError as error:
+        print(f"structured critic probe failed: response contract ({error.reason.value})")
         return 1
     primary_usage = primary_result.attempts[-1].usage
     targeted = _targeted_probe_request(diagnostic_primary)

@@ -32,6 +32,12 @@ bounded technical retry for a schema-invalid success response. The consumer
 probe now also runs an actual structured critic response through the strict
 parser before testing targeted edit.
 
+Expanded consumer probe `36498158531` reproduced the strict-parser rejection in
+about 18 seconds without translating documents, even after field IDs were
+removed. The probe now reports only the safe parser reason code, never response
+text, so the next isolated run can distinguish malformed JSON, finding shape,
+or another contract mismatch before any further algorithm change.
+
 Run `36476204527` translated all ten documents and entered review, but stopped
 before publication on `changelog-enterprise.md`. YandexGPT exhausted its two
 content-filter attempts; the one-shot DeepSeek fallback then returned HTTP 400
