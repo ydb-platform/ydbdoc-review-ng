@@ -46,6 +46,90 @@ def test_translation_pr_title_names_the_authoritative_source_pr() -> None:
     assert calls[0][2]["title"] == "PR #51079 translation"
 
 
+def test_rerun_replaces_only_the_captured_translation_head() -> None:
+    old_head = GitSha("a" * 40)
+    base = GitSha("b" * 40)
+    translated = GitSha("c" * 40)
+    calls: list[tuple[str, str, object]] = []
+
+    def transport(method: str, path: str, payload: object) -> object:
+        calls.append((method, path, payload))
+        if "/git/ref/heads/" in path:
+            return {"object": {"sha": old_head.value}}
+        if "/git/refs/heads/" in path:
+            return {}
+        raise AssertionError(path)
+
+    context = PublicationContext(
+        "ydb-platform/ydb",
+        "translation/pr-42",
+        "main",
+        "main",
+        base,
+        expected_branch_head=old_head,
+    )
+
+    GitHubBackend(transport).push(context, translated)
+
+    assert calls[-1][0] == "PATCH"
+    assert calls[-1][2] == {"sha": translated.value, "force": True}
+
+
+def test_rerun_does_not_replace_a_translation_head_that_moved() -> None:
+    old_head = GitSha("a" * 40)
+    calls: list[tuple[str, str, object]] = []
+
+    def transport(method: str, path: str, payload: object) -> object:
+        calls.append((method, path, payload))
+        return {"object": {"sha": "d" * 40}}
+
+    context = PublicationContext(
+        "ydb-platform/ydb",
+        "translation/pr-42",
+        "main",
+        "main",
+        GitSha("b" * 40),
+        expected_branch_head=old_head,
+    )
+
+    with pytest.raises(RuntimeBoundaryError, match="^head_changed$"):
+        GitHubBackend(transport).push(context, GitSha("c" * 40))
+
+    assert not any(method == "PATCH" for method, _path, _payload in calls)
+
+
+def test_existing_pr_body_records_the_new_translation_commit() -> None:
+    calls: list[tuple[str, str, object]] = []
+
+    def transport(method: str, path: str, payload: object) -> object:
+        calls.append((method, path, payload))
+        if method == "GET":
+            return {
+                "body": "<!-- ydbdoc-source-pr:1 -->\n"
+                "<!-- ydbdoc-source-sha:" + "d" * 40 + " -->\n"
+                "Checked translation commit: " + "e" * 40 + "\n"
+                "Operator note\n"
+            }
+        return {}
+
+    backend = GitHubBackend(transport)
+    backend.source_pr = 42
+    backend.source_sha = GitSha("a" * 40)
+    translated = GitSha("c" * 40)
+    context = PublicationContext(
+        "ydb-platform/ydb", "translation/pr-42", "main", "main", GitSha("b" * 40)
+    )
+
+    backend.update_pr(43, context, translated)
+
+    body = calls[-1][2]["body"]
+    assert body.count("ydbdoc-source-pr:") == 1
+    assert body.count("ydbdoc-source-sha:") == 1
+    assert body.count("Checked translation commit:") == 1
+    assert f"Checked translation commit: {translated.value}" in body
+    assert body.endswith("Operator note\n")
+
+
 @pytest.mark.parametrize(
     ("method", "expected_token"),
     [

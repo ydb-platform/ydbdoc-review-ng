@@ -26,6 +26,7 @@ class PublicationContext:
     source_base: str
     current_head: GitSha
     branch_must_exist: bool = False
+    expected_branch_head: GitSha | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,6 +156,10 @@ class GitPublicationAdapter:
             or context.branch != snapshot.branch
             or context.branch == context.base
             or type(context.current_head) is not GitSha
+            or (
+                context.expected_branch_head is not None
+                and type(context.expected_branch_head) is not GitSha
+            )
         ):
             raise PublicationError("repository_or_base_mismatch")
         return replace(
@@ -195,7 +200,12 @@ class GitPublicationAdapter:
             if type(sha) is not GitSha:
                 raise PublicationError("invalid_commit_sha")
             self._backend.push(context, sha)
-            self.context = replace(context, current_head=sha, branch_must_exist=True)
+            self.context = replace(
+                context,
+                current_head=sha,
+                branch_must_exist=True,
+                expected_branch_head=sha,
+            )
             self._published_snapshot = snapshot
             return sha
         except Exception:  # noqa: BLE001 - backend exceptions can contain credentials.

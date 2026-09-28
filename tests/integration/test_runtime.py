@@ -32,6 +32,8 @@ def test_merged_source_uses_workflow_pinned_base_after_branch_advances() -> None
             return response
 
     services = MergedServices()
+    previous_translation_head = GitSha("f" * 40)
+    services.branch_head = previous_translation_head.value
     source = RuntimeSource(
         {"GITHUB_ACTOR": "maintainer", "YDBDOC_ALLOWED_ACTORS": "maintainer"},
         GitHubBackend(services.github),
@@ -57,6 +59,7 @@ def test_merged_source_uses_workflow_pinned_base_after_branch_advances() -> None
         provenance,
     )
     assert source.context.current_head == pinned_base.commit_sha
+    assert source.context.expected_branch_head == previous_translation_head
     merge_base_with = source.snapshots.merge_base_with
     assert merge_base_with is not None
     assert GitSha(services.base) not in {

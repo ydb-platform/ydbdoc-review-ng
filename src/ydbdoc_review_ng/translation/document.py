@@ -412,6 +412,12 @@ def build_document_correction_note(
             "Translate every user-facing paragraph and heading into English, including the "
             "remainder of the chunk. Do not return source prose unchanged."
         )
+    if validation_problem == "document_response:duplicate_emphasized_alias":
+        lines.append(
+            "The translation introduced an identical bold alias more than once in one "
+            "definition or list. Keep one occurrence of each exact target-language alias, "
+            "while preserving every distinct synonym and the complete meaning."
+        )
     lines.append(
         "Never add, remove, rename, reorder, or alter placeholders. Keep the source link count "
         "unchanged. Never create, remove, split, merge, or duplicate links, or reuse a URL token."

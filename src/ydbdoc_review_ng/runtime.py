@@ -254,12 +254,20 @@ class RuntimeSource:
             and head != authorization.current_target_sha
         ):
             raise RuntimeBoundaryError("verification_head_mismatch")
+        publication_parent = (
+            self.snapshots.translation_base_snapshot.commit_sha
+            if authorization.mode is Mode.DOC_TRANSLATE
+            else head
+        )
+        if publication_parent is None:
+            raise RuntimeBoundaryError("translation_head_missing")
         self.context = PublicationContext(
             self.github.repository,
             authorization.branch,
             base.value,
             base.value,
-            head or (source.commit_sha if merged else tip),
+            publication_parent,
+            expected_branch_head=head,
         )
         self.metadata_snapshot = SnapshotRef(repository, self.context.current_head)
         self.source_pr = source_pr
@@ -319,6 +327,7 @@ class RuntimeSource:
             pr.base_branch,
             pr.base_branch,
             checkpoint.target_sha or checkpoint.base_sha,
+            expected_branch_head=head,
         )
         self.source_pr = checkpoint.source_pr
         self.github.source_pr = checkpoint.source_pr

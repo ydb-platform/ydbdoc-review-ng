@@ -1427,6 +1427,34 @@ def test_repeated_source_echo_is_not_accepted_as_english() -> None:
     assert len(models.calls) == 2
 
 
+def test_translated_glossary_aliases_must_not_collapse_to_duplicates() -> None:
+    source = (
+        "**Семейство колонок**, **группа колонок**, **column family** или "
+        "**column group** — это функция хранения данных.\n"
+    )
+    duplicated = (
+        "A **column family**, **column group**, **column family**, or "
+        "**column group** is a data storage feature.\n"
+    )
+    corrected = "A **column family** or **column group** is a data storage feature.\n"
+    models = ScriptedModels([duplicated, corrected])
+
+    _, result = content_with(models)._translate_document(document_for(source.encode()))
+
+    assert result.translated_markdown == corrected
+    assert len(models.calls) == 2
+    assert "duplicate_emphasized_alias" in models.calls[1].prompt
+    assert "Keep one occurrence" in models.calls[1].prompt
+
+
+def test_repeated_emphasis_already_present_in_source_is_not_new_alias_duplication() -> None:
+    source = "**API** is related to **API** compatibility.\n"
+
+    _, result = content_with(EchoChunkModels())._translate_document(document_for(source.encode()))
+
+    assert result.translated_markdown == source
+
+
 def test_cyrillic_inside_protected_code_does_not_require_translation() -> None:
     source = '# Heading\n\n```text\nРусский абзац внутри кода сохраняется полностью без изменений.\n```\n'
     _, result = content_with(EchoChunkModels())._translate_document(document_for(source.encode()))

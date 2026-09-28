@@ -44,6 +44,11 @@ Old merged PRs translate the pinned current base. No checkout, hooks or source
 repository code runs. Branches are `translation/pr-N` in `ydb-platform/ydb`
 using the source PR base. PR body markers bind source PR and source SHA.
 Verify requires those markers and the exact current translation head.
+Each fresh translate run creates its first commit directly on the pinned base
+snapshot. If the translation branch already exists, the runtime replaces only
+the exact head captured during snapshot resolution; a moved head fails closed.
+This one guarded force update prevents old translation commits from accumulating
+across reruns. Critic repairs, verify, and continue remain non-force updates.
 
 Continue accepts only `continue --pr N`, with no source/target SHA or budget
 arguments. An allowed author must post a comment whose first line is
@@ -61,9 +66,10 @@ model calls and audit, never the report. RED exits 1 in every CLI mode.
 The runtime composes pair discovery, one mixed-direction decision, dependency
 scope/preflight, parser, strict translation, protected-fragment checks, critic
 and at most one repair per job. Validated bytes become Git Data blobs/tree/
-commit and a non-force ref update. Byte-identical output cannot create a PR or
+commit and a guarded ref update. Byte-identical output cannot create a PR or
 comment. Final QA follows the last critic; checks are read for the exact head,
-and branch movement blocks stale reporting.
+and branch movement blocks stale reporting. An updated PR body records the exact
+new translation commit rather than retaining a prior run's SHA.
 
 Metadata production is narrow: PyYAML's SafeLoader compose API validates the
 complete node structure of pinned source root/changed TOCs before model calls.

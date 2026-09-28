@@ -304,19 +304,22 @@ class GitHubBackend:
 
     def push(self, context: PublicationContext, sha: GitSha, /) -> None:
         current = self.head(context.branch)
-        if current is None:
+        expected = context.expected_branch_head
+        if expected is None:
             if context.branch_must_exist:
                 raise RuntimeBoundaryError("head_disappeared")
+            if current is not None:
+                raise RuntimeBoundaryError("head_changed")
             self.request(
                 "POST", "/git/refs", {"ref": "refs/heads/" + context.branch, "sha": sha.value}
             )
-        elif current != context.current_head:
+        elif current != expected:
             raise RuntimeBoundaryError("head_changed")
         else:
             self.request(
                 "PATCH",
                 "/git/refs/heads/" + urllib.parse.quote(context.branch, safe="/"),
-                {"sha": sha.value, "force": False},
+                {"sha": sha.value, "force": expected != context.current_head},
             )
 
     def find_pr(self, repository: str, branch: str, base: str, /) -> int | None:
@@ -351,9 +354,23 @@ class GitHubBackend:
         import re
 
         body = re.sub(r"<!-- ydbdoc-source-(?:pr|sha):[^>]* -->\n?", "", body)
-        provenance = f"<!-- ydbdoc-source-pr:{self.source_pr} -->\n<!-- ydbdoc-source-sha:{self.source_sha.value if self.source_sha else ''} -->\n"
+        body = re.sub(
+            r"^Checked translation commit: [0-9a-f]{40}\n?",
+            "",
+            body,
+            flags=re.MULTILINE,
+        )
+        provenance = (
+            f"<!-- ydbdoc-source-pr:{self.source_pr} -->\n"
+            f"<!-- ydbdoc-source-sha:{self.source_sha.value if self.source_sha else ''} -->\n"
+        )
         self.request(
-            "PATCH", f"/pulls/{pr_number}", {"base": context.base, "body": provenance + body}
+            "PATCH",
+            f"/pulls/{pr_number}",
+            {
+                "base": context.base,
+                "body": provenance + "Checked translation commit: " + sha.value + "\n" + body,
+            },
         )
 
     def list_comments(self, pr_number: int, /) -> tuple[Comment, ...]:

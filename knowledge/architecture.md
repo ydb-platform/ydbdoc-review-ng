@@ -147,3 +147,27 @@ A broken base fails prepare with trusted_base_build trace, before model calls
 or publication; it is not a recoverable translation checkpoint. Candidate build
 still runs after translation and before every publication. Verify/continue retain
 their existing candidate validation and do not add this translation preflight.
+
+## Translation branch replacement on reruns (2026-09-28)
+
+A fresh `doc_translate` candidate is based on the pinned translation base, never
+on an older `translation/pr-N` head. Snapshot resolution records the old branch
+head separately. Publication may force-replace that ref only when a fresh read
+still equals the recorded SHA; otherwise it fails closed. After the first push,
+critic repairs use the published commit as both parent and expected head and are
+non-force. Existing PR provenance and `Checked translation commit` are rewritten
+to the exact newly published SHA. This prevents reruns from producing a branch
+that is both behind and ahead of the current base while preserving concurrent
+manual edits.
+
+## Duplicate glossary aliases (2026-09-28)
+
+Bilingual glossary definitions may already contain target-language aliases.
+Translating the source-language aliases can collapse distinct inputs into the
+same bold target term, for example two `column group` entries. Chunk acceptance
+therefore rejects a new exact case-insensitive duplicate `**bold**` term within
+one paragraph when its count exceeds the maximum already present in a source
+paragraph. The normal single translator correction receives a specific request
+to deduplicate exact aliases while retaining distinct synonyms. Existing source
+repetition remains valid, and broader semantic synonym handling stays with the
+critic.

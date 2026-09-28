@@ -1,3 +1,34 @@
+# Translation PR RED and rerun publication repair (2026-09-28)
+
+After the two upstream links were fixed, `doc_translate` run `36420817068`
+completed translation and created `ydb-platform/ydb#54352`, head
+`6f926402d8e12d9b53a5eaec5bfbf700a7311d50`. The semantic critic returned RED
+with two findings in `ydb/docs/en/core/concepts/glossary.md`; the visible
+duplicate `column group` is confirmed in the candidate.
+
+The PR also exposed an independent rerun-publication defect. The new commit was
+a child of old translation head `48ab27d`, so the branch accumulated three
+translation commits, fell 34 commits behind base, and became dirty. Fresh
+translate now commits directly on the pinned base and uses the captured old
+branch head only as an optimistic-concurrency guard. A controlled force update
+is allowed only while that exact SHA remains current; branch movement blocks
+publication. Existing PR provenance and `Checked translation commit` are also
+rewritten to the newly published SHA.
+
+Candidate inspection found a systematic glossary issue rather than a single
+typo: bilingual source aliases sometimes collapsed to identical English bold
+aliases, including `database nodes`, `storage group`, `column group`,
+`primary index`, and `actor system interconnect`. Chunk validation now rejects
+new exact bold duplicates within one paragraph and requests the existing single
+translator correction; repetition already present in source remains allowed.
+
+Local release gate for these changes: 1955 passed, 3 deselected in 134.32 s;
+focused publication/E2E/git tests: 270 passed. Ruff, mypy, and diff-check are
+green. Wheel/sdist build and installed translate/verify/continue smoke also
+passed. Next: publish main/tag and start the next real translation run.
+
+---
+
 # Upstream build blocker fixed; translation restart (2026-09-28)
 
 The user merged the two changelog link corrections into YDB main. Verified both
