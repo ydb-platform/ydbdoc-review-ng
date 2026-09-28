@@ -1033,18 +1033,12 @@ def build_document_critic_prompt(
         "untranslated user-facing prose using YDB terminology. Preserve the Markdown structure. "
         "Protected placeholders are opaque source fragments: copy every one exactly once, "
         "unchanged, in the same top-level source block and order. Never invent, delete, rename, "
-        "duplicate, split, or reorder placeholders. Keep leading and trailing newline counts "
-        "exactly as stated. The authoritative source is the only content authority.\n\n"
-        f"Boundary contract: source starts with exactly "
-        f"{len(chunk.text) - len(chunk.text.lstrip(chr(10)))} newline(s) and ends with exactly "
-        f"{len(chunk.text) - len(chunk.text.rstrip(chr(10)))} newline(s).\n"
+        "duplicate, split, or reorder placeholders. The authoritative source is the only "
+        "content authority. Do not add explanations or normalize boundary whitespace.\n\n"
         f"<AUTHORITATIVE_SOURCE_{source_locale.upper()}>\n{chunk.text}"
         f"</AUTHORITATIVE_SOURCE_{source_locale.upper()}>\n"
         f"<TRANSLATION_DRAFT_{target_locale.upper()}>\n{draft}"
-        f"</TRANSLATION_DRAFT_{target_locale.upper()}>\n"
-        "<PREVIOUS_RESPONSE>\n"
-        + draft
-        + "\n</PREVIOUS_RESPONSE>"
+        f"</TRANSLATION_DRAFT_{target_locale.upper()}>"
     )
     if diagnostic:
         prompt += (

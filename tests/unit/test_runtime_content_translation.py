@@ -370,8 +370,7 @@ def test_translator_draft_is_repaired_by_full_markdown_critic() -> None:
         target=None,
     )
     draft = (
-        "# Translated heading\n\nText with [link]([[YDBDOC_URL_0001]]).\n\n"
-        "### Jitter\nExtra glossary text\n"
+        "# Translated heading\n\nText with [link](guide.md).\n"
     )
     corrected = "# Translated heading\n\nText with [link]([[YDBDOC_URL_0001]]).\n"
     models = TranslatorThenCriticModels(draft, corrected)
@@ -385,6 +384,23 @@ def test_translator_draft_is_repaired_by_full_markdown_critic() -> None:
     assert accepted_document.translated_markdown == (
         "# Translated heading\n\nText with [link](guide.md).\n"
     )
+
+
+def test_critic_prompt_has_one_draft_and_leaves_boundary_newlines_to_code() -> None:
+    document = document_for(
+        "# Заголовок\n\nТекст со [ссылкой](guide.md).\n".encode(), target=None
+    )
+    models = TranslatorThenCriticModels(
+        "# Heading\n\nText with [link](guide.md).\n",
+        "# Heading\n\nText with [link]([[YDBDOC_URL_0001]]).\n",
+    )
+
+    content_with(models)._translate_document(document)
+
+    critic_prompt = models.calls[1].prompt
+    assert critic_prompt.count("<TRANSLATION_DRAFT_EN>") == 1
+    assert critic_prompt.count("# Heading\n\nText with [link](guide.md).\n") == 1
+    assert "Boundary contract:" not in critic_prompt
 
 
 def test_translation_uses_glossary_context_for_each_chunk(monkeypatch) -> None:
@@ -1003,7 +1019,7 @@ def test_complete_markdown_response_gets_exactly_one_technical_correction() -> N
     correction = models.calls[1].prompt
     assert "Important correction" in correction
     assert prepared.chunks[0].text in correction
-    assert f"<PREVIOUS_RESPONSE>\n{invalid}\n</PREVIOUS_RESPONSE>" in correction
+    assert f"<TRANSLATION_DRAFT_EN>\n{invalid}</TRANSLATION_DRAFT_EN>" in correction
     assert "Rejected translation:" not in correction
     assert placeholder.token in correction
     assert "reorder" in correction
