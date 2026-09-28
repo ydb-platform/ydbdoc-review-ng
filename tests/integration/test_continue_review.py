@@ -17,17 +17,11 @@ from _runtime_services import (
 from test_continue_translation import CONTEXT, EN, RU, LifecycleServices
 
 from ydbdoc_review_ng import application
-from ydbdoc_review_ng.continuation import (
-    ContinuationStage,
-    candidate_sha256,
-    decode_state,
-    encode_state,
-)
+from ydbdoc_review_ng.continuation import decode_state, encode_state
 from ydbdoc_review_ng.domain import GitSha
 from ydbdoc_review_ng.models import HttpResponse
 from ydbdoc_review_ng.persistence import PersistenceError
 from ydbdoc_review_ng.quality import Verdict
-from ydbdoc_review_ng.runtime_content import pack
 
 
 class ReviewServices(LifecycleServices):
@@ -213,60 +207,37 @@ def test_green_review_only_updates_current_verdict_and_consumes_without_commit(c
     assert services.roles == ["critic"]
 
 
-def test_repair_merges_complete_document_before_final_critic():
+def test_critic_editor_merges_complete_document_and_finishes_green():
     services = ReviewServices(names=("a", "b"))
     saved = services.start_review()
     green = services.files[EN + "a.md"]
-    services.outcomes = {EN + "b.md": ["repair", "red"]}
+    services.outcomes = {EN + "b.md": ["repair"]}
     services.rows[saved.continuation_id]["created_at"] -= timedelta(days=5)
     saved = services.checkpoint()
     result = services.resume()
-    following = services.checkpoint()
-    assert result.verdict is Verdict.RED and result.repair_applied
-    assert services.roles == ["critic", "critic"]
+    assert result.verdict is Verdict.GREEN and result.repair_applied
+    assert services.roles == ["critic"]
     assert services.timeline == [
         "critic",
         "commit",
         "push",
-        "critic",
         "report",
-        "checkpoint",
     ]
     assert services.files[EN + "a.md"] == green
     assert services.files[EN + "b.md"] == b"# Repaired b\n\nTranslated\n"
-    assert following.state.accepted_documents[0] == saved.state.accepted_documents[0]
-    assert (
-        following.state.accepted_documents[1].translated_markdown
-        == "# Repaired b\n\nTranslated\n"
-    )
     repair_prompt = services.prompts[0][1]
     assert services.calls[0][2] is not None
     assert "Source b" in raw_repair_context(repair_prompt, "authoritative-source")
     assert "Translated" in raw_repair_context(repair_prompt, "final-target")
     assert "Source detail b" in repair_prompt
-    assert following.target_sha == result.final_commit_sha
-    assert following.state.candidate_sha256 == candidate_sha256(
-        pack(
-            {
-                EN + "a.md": green,
-                EN + "b.md": b"# Repaired b\n\nTranslated\n",
-            }
-        )
-    )
-    assert following.created_at == saved.created_at and following.expires_at == saved.expires_at
-    assert following.job_id == result.job_id
-    assert following.state.stage is ContinuationStage.REVIEW
-    assert following.state.review_paths == saved.state.review_paths
     assert services.rows[saved.continuation_id]["status"] == "closed"
     assert services.parents == [[saved.target_sha.value]]
     assert all(CONTEXT in prompt for _, prompt in services.prompts)
     assert all(CONTEXT.encode() not in value for value in services.files.values())
-    assert len(services.comments) == 1 and services.comments[0]["body"].startswith("🔴 RED\n")
-    second = services.resume()
-    assert second.verdict is Verdict.GREEN and second.final_commit_sha == result.final_commit_sha
+    assert len(services.comments) == 1 and services.comments[0]["body"].startswith("🟢 GREEN\n")
     assert services.commits == services.initial_commits + 1
-    assert services.roles == ["critic", "critic", "critic"]
-    assert services.rows[following.continuation_id]["status"] == "closed"
+    with pytest.raises(application.WorkflowError):
+        services.resume()
 
 
 def test_continuation_repair_publishes_exact_model_markdown():
@@ -299,36 +270,36 @@ def test_continuation_repair_publishes_exact_model_markdown():
         tree[RU + "b.md"] = source
 
     services.start_review()
-    services.outcomes = {EN + "b.md": ["repair", "green"]}
+    services.outcomes = {EN + "b.md": ["repair"]}
 
     result = services.resume()
 
     expected = b"* Parent corrected\n* Nested translated item\n"
     assert result.verdict is Verdict.GREEN and result.repair_applied
-    assert services.roles == ["critic", "critic"]
+    assert services.roles == ["critic"]
     assert services.files[EN + "b.md"] == expected
     assert services.snapshots[result.final_commit_sha.value][EN + "b.md"] == expected
 
 
-def test_saved_order_and_single_repair_across_unresolved_documents():
+def test_saved_order_and_one_critic_edit_per_unresolved_document():
     services = ReviewServices()
     saved = services.start_review()
     row = services.rows[saved.continuation_id]
     state = json.loads(row["state"])
     state["review_paths"] = [EN + "c.md", EN + "b.md"]
     row["state"] = encode_state(decode_state(json.dumps(state))).encode()
-    services.outcomes = {EN + "c.md": ["repair", "green"], EN + "b.md": ["repair"]}
+    services.outcomes = {EN + "c.md": ["repair"], EN + "b.md": ["repair"]}
     result = services.resume()
-    assert result.verdict is Verdict.RED
+    assert result.verdict is Verdict.GREEN
     assert [(role, path) for role, path, _ in services.calls] == [
-        ("critic", EN + "c.md"),
         ("critic", EN + "c.md"),
         ("critic", EN + "b.md"),
     ]
-    following = services.checkpoint()
-    assert [p.value for p in following.state.review_paths] == [EN + "b.md"]
-    assert following.state.accepted_documents[:2] == saved.state.accepted_documents[:2]
-    assert services.files[EN + "b.md"] == b"# Translated\n\nTranslated\n"
+    assert services.files[EN + "c.md"] == b"# Repaired c\n"
+    assert services.files[EN + "b.md"] == b"# Repaired b\n\nTranslated\n"
+    assert services.commits == services.initial_commits + 1
+    with pytest.raises(PersistenceError):
+        services.checkpoint()
 
 
 def test_repeated_red_preserves_unresolved_path_order_for_the_next_continue():
@@ -392,10 +363,8 @@ def test_pinned_rename_review_never_derives_maps_from_target_and_replays_metadat
     )
     services.outcomes = {EN + "a.md": ["repair", "red"] if repair else ["red"]}
     result = services.resume()
-    assert result.verdict is Verdict.RED
-    assert services.roles == (
-        ["critic", "critic", "critic"] if repair else ["critic", "critic"]
-    )
+    assert result.verdict is (Verdict.GREEN if repair else Verdict.RED)
+    assert services.roles == ["critic", "critic"]
     if repair:
         repair_prompt = services.prompts[0][1]
         assert services.calls[0][2] is not None
@@ -405,8 +374,6 @@ def test_pinned_rename_review_never_derives_maps_from_target_and_replays_metadat
         assert "Whole pinned detail" in raw_repair_context(
             repair_prompt, "final-target"
         )
-    following = services.checkpoint()
-    assert following.state.review_paths == saved.state.review_paths[:1]
     assert services.files[EN + "a.md"] == (
         b"# Repaired a\n\nRepaired detail a\n\n```sql\nSELECT 1;\n```\n" if repair else pinned
     )
@@ -414,9 +381,15 @@ def test_pinned_rename_review_never_derives_maps_from_target_and_replays_metadat
         path: value for path, value in services.files.items() if path.endswith(".yaml")
     } == metadata
     assert EN + "old.md" not in services.files
-    assert len(following.state.accepted_documents) == 2
-    assert services.resume().verdict is Verdict.GREEN
     assert services.commits == services.initial_commits + int(repair)
+    if repair:
+        with pytest.raises(PersistenceError):
+            services.checkpoint()
+    else:
+        following = services.checkpoint()
+        assert following.state.review_paths == saved.state.review_paths[:1]
+        assert len(following.state.accepted_documents) == 2
+        assert services.resume().verdict is Verdict.GREEN
 
 
 @pytest.mark.parametrize("fault", ["head", "hash", "document", "candidate", "path"])
@@ -462,7 +435,7 @@ def test_infrastructure_failure_preserves_old_checkpoint(failure):
             "critic": ["critic"],
             "repair": ["critic"],
             "publish": ["critic"],
-            "report": ["critic", "critic"],
+            "report": ["critic"],
             "attempt": ["critic"],
         }[failure]
     )

@@ -1,3 +1,31 @@
+# Two-stage semantic pipeline rewrite (2026-09-28)
+
+The RED translation PR showed that the previous control flow was conceptually
+wrong: it published the translator draft, allowed only one critic correction
+for the whole job, published that correction separately, and then asked a
+stochastic final critic to judge it again. The critic had already identified
+and described defects such as the duplicated `column group`, but the orchestration
+prevented the same response from becoming the accepted text reliably.
+
+The pipeline is now deliberately two-stage. The translator produces a draft;
+deterministic validation rejects malformed structure. Each document or aligned
+excerpt then receives one critic-editor response containing findings and complete
+corrected Markdown. A valid changed correction with only repairable findings is
+the final semantic result. Missing, invalid, unchanged or explicitly unrepairable
+edits remain RED. There is no final critic and no model ping-pong. All document
+edits are assembled, validated with the full Diplodoc build, and published in at
+most one commit. The local duplicate-bold-alias heuristic was removed; glossary
+semantics belong to the critic-editor rather than an expanding set of brittle
+special cases.
+
+Coverage confirms one critic call for a corrected chunk and one critic call per
+each of two corrected documents, with a single publication. The full local gate
+is green: 1944 passed, 3 live tests deselected; Ruff, mypy and diff-check pass.
+Wheel/sdist build and installed CLI smoke for translate/verify/continue pass.
+Publishing and the real rerun are still pending.
+
+---
+
 # Translation PR RED and rerun publication repair (2026-09-28)
 
 After the two upstream links were fixed, `doc_translate` run `36420817068`
@@ -15,12 +43,13 @@ is allowed only while that exact SHA remains current; branch movement blocks
 publication. Existing PR provenance and `Checked translation commit` are also
 rewritten to the newly published SHA.
 
-Candidate inspection found a systematic glossary issue rather than a single
+Candidate inspection initially suggested a systematic glossary issue rather than a single
 typo: bilingual source aliases sometimes collapsed to identical English bold
 aliases, including `database nodes`, `storage group`, `column group`,
-`primary index`, and `actor system interconnect`. Chunk validation now rejects
-new exact bold duplicates within one paragraph and requests the existing single
-translator correction; repetition already present in source remains allowed.
+`primary index`, and `actor system interconnect`. The temporary local
+duplicate-alias validator described here was later removed by the two-stage
+rewrite above because it encoded semantics incompletely and blocked useful
+critic correction.
 
 Local release gate for these changes: 1955 passed, 3 deselected in 134.32 s;
 focused publication/E2E/git tests: 270 passed. Ruff, mypy, and diff-check are
@@ -224,15 +253,15 @@ subreaper из-за контейнерного PID 1. Внешний запус�
    расширяется только для парного `glossary.md`; это позволяет синхронизировать
    определения `operator`/`cardinality`, не затягивая весь legacy-граф ссылок.
 6. Внешние URL неизменны, кроме уже реализованного Wikipedia `langlinks`.
-7. Critic-editor делает не более одного исправления полного candidate, после
-   чего идут validators, final critic и официальный docs build.
+7. Critic-editor делает один pass на документ/excerpt; все валидные исправления
+   собираются, после чего идут validators, официальный docs build и один commit.
 
 Канонический полный текст находится в `REQUIREMENTS_RU.md`.
 
 ## Реализовано и опубликовано
 
 - `terminology.py`: выбирает релевантные парные glossary-секции по терминам.
-- glossary context передаётся в translation prompt, critic-editor и final critic.
+- glossary context передаётся в translation prompt и critic-editor.
 - `anchors.py`: извлекает explicit и безопасные implicit EN anchors.
 - `DependencyLink.fragment` и состояние
   `TARGET_MISSING_ANCHOR_SOURCE_EXISTS`.

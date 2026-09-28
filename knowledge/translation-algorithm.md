@@ -143,8 +143,9 @@ fence и любой неизвестный язык целиком protected.
 
 ## Проверка качества
 
-После первой валидной публикации critic-editor сравнивает protected authoritative
-source и protected final target целиком или крупными осмысленными блоками. При превышении provider limit
+После детерминированной проверки черновика critic-editor сравнивает protected
+authoritative source и protected target целиком или крупными осмысленными блоками.
+При превышении provider limit
 source и target сразу делятся на соответствующие упорядоченные excerpt-пары.
 Явный content-filter на critic-editor excerpt вызывает такое же рекурсивное
 деление по top-level block boundary; успешные соседние excerpts не повторяются.
@@ -153,12 +154,13 @@ source и target сразу делятся на соответствующие �
 общий verdict RED, findings
 объединяются без повторов. В том же ответе critic-editor возвращает полный
 `corrected_markdown`; при GREEN он обязан точно повторить target. Отдельного
-model repair call нет. Для одного RED разрешено применить одно такое исправление.
-Затем обязательны восстановление protected fragments и локальные validators.
-Только валидный и действительно изменённый candidate проходит полный Diplodoc
-build, публикацию и независимый read-only final critic. Для отсутствующего,
-невалидного или побайтно неизменного исправления остаётся первичный RED без
-нового commit и final critic. Следующих repair attempts нет.
+model repair call нет. Каждый документ/excerpt получает один успешный
+critic-editor response. Валидное изменённое исправление с только repairable
+findings считается финальным; unrepairable, отсутствующее, невалидное или
+побайтно неизменное исправление оставляет RED. Затем обязательны восстановление
+protected fragments, локальные validators и полный Diplodoc build изменённого
+candidate. Все документы публикуются одним commit. Final critic и следующие
+semantic repair attempts отсутствуют.
 
 Технический transport retry может быть bounded, но не превращается в
 сохраняемую state machine или механизм продолжения.
@@ -175,6 +177,6 @@ Operator context обрамляется отдельно от authoritative Mark
 невалидный chunk не публикуется. Каждый отказ пишет безопасный код валидации
 без model response и source prose; успешные соседние chunks не повторяются.
 
-Смысловая проверка остаётся отдельным этапом после публикационной валидации.
-По умолчанию переводчик — DeepSeek V4 Flash, critic-editor/final critic —
+Смысловая проверка остаётся отдельным этапом между предвалидацией черновика и
+единственной публикацией. По умолчанию переводчик — DeepSeek V4 Flash, critic-editor —
 YandexGPT 5.1 (`YDBDOC_MODEL_CRITIC` позволяет явно выбрать модель).

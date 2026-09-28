@@ -19,13 +19,13 @@
 
 `doc_translate` идёт линейно: create job audit → authorize → snapshot →
 budget → direction/scope → parse → translate → validate/assemble/reparse →
-commit/push → critic-editor → optional revalidate/new commit/final critic
+critic-editor → optional revalidate → one commit/push
 → PR verdict → terminal job status.
 
 `doc_verify` создаёт job audit, берёт текущую translation branch и authoritative
 source, запускает те же validators и critic-editor, при необходимости применяет
-его единственное валидное изменённое исправление в ту же branch и только для
-него запускает независимый final critic, затем обновляет verdict и terminal job status. Budget
+его валидные изменённые исправления одним commit в ту же branch, затем обновляет
+verdict и terminal job status. Budget
 gate у него отсутствует.
 
 `doc_continue` в `1.1.0` создаёт audit, проверяет label actor и последний допустимый
@@ -79,7 +79,7 @@ semantic stop наследует первоначальный expiry. Infrastruc
   выводятся.
 - Budget gate выполняется только перед новым `doc_translate`. Его дневной `SUM`
   включает все известные costs трёх workflow и ролей, в том числе
-  `doc_verify` critic-editor/final critic; unknown cost не подменяется нулём. Gate идёт после
+  `doc_verify` critic-editor; unknown cost не подменяется нулём. Gate идёт после
   authorization/snapshot и до любого model call, включая mixed-locale
   direction call.
 
@@ -102,14 +102,6 @@ verify и continuation повторно вычисляют этот набор �
 
 GitHubBackend кэширует только успешное чтение bytes/отсутствия по immutable
 snapshot/path (4096 записей, 16 MiB). Ошибки и текущие heads не кэшируются.
-
-## Read-only critic filter recovery (2026-09-28)
-
-Read-only primary/final review retains source/target pairs with pending requests.
-An explicit provider content-filter splits only that pair (four levels maximum),
-using the same ordered text boundaries as size splitting. Successful neighbours
-are retained. Transport failures and exhausted/indivisible pairs fail closed.
-This is distinct from the existing block-aligned critic-editor recovery.
 
 ## Copied prose guard (2026-09-28)
 
@@ -153,21 +145,18 @@ their existing candidate validation and do not add this translation preflight.
 A fresh `doc_translate` candidate is based on the pinned translation base, never
 on an older `translation/pr-N` head. Snapshot resolution records the old branch
 head separately. Publication may force-replace that ref only when a fresh read
-still equals the recorded SHA; otherwise it fails closed. After the first push,
-critic repairs use the published commit as both parent and expected head and are
-non-force. Existing PR provenance and `Checked translation commit` are rewritten
+still equals the recorded SHA; otherwise it fails closed. Critic edits happen
+before this single push. Existing PR provenance and `Checked translation commit` are rewritten
 to the exact newly published SHA. This prevents reruns from producing a branch
 that is both behind and ahead of the current base while preserving concurrent
 manual edits.
 
-## Duplicate glossary aliases (2026-09-28)
+## Critic-editor as final semantic writer (2026-09-28)
 
-Bilingual glossary definitions may already contain target-language aliases.
-Translating the source-language aliases can collapse distinct inputs into the
-same bold target term, for example two `column group` entries. Chunk acceptance
-therefore rejects a new exact case-insensitive duplicate `**bold**` term within
-one paragraph when its count exceeds the maximum already present in a source
-paragraph. The normal single translator correction receives a specific request
-to deduplicate exact aliases while retaining distinct synonyms. Existing source
-repetition remains valid, and broader semantic synonym handling stays with the
-critic.
+Semantic defects such as duplicated glossary aliases are intentionally not
+encoded as growing local heuristics. The translator creates a structurally valid
+draft. For every document or aligned excerpt the critic-editor returns findings
+and the complete corrected Markdown in one response. A valid changed edit with
+only repairable findings resolves those draft findings. Unrepairable, missing,
+invalid or unchanged edits remain RED. There is no final-critic loop. All edits
+are assembled, validated, built and published once.

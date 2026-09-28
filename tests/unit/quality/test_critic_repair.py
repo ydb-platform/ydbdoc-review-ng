@@ -211,7 +211,7 @@ def test_primary_critic_applies_its_own_correction_without_repair_call() -> None
 
     assert result.final_candidate == corrected
     assert result.repair_applied
-    assert [call.role.value for call in executor.calls] == ["critic", "final_critic"]
+    assert [call.role.value for call in executor.calls] == ["critic"]
     assert executor.calls[0].schema is not None
 
 
@@ -243,40 +243,6 @@ def test_green_critic_editor_change_is_ignored() -> None:
     assert result.final_candidate == target
     assert not result.repair_applied
     assert [call.role.value for call in executor.calls] == ["critic"]
-
-
-def test_large_critic_reviews_corresponding_source_and_target_excerpts() -> None:
-    sections = [
-        f"## Раздел {index}\n\n" + (f"Исходный текст {index}. " * 30) + "\n\n"
-        for index in range(80)
-    ]
-    source = "".join(sections).encode()
-    target = "".join(
-        section.replace("Исходный текст", "Translated text") for section in sections
-    ).encode()
-    plan = build_markdown_plan(SNAPSHOT, SOURCE_PATH, source)
-    request = build_translation_request(source, plan)
-    executor = FakeExecutor(*(critic_json("GREEN", []) for _ in range(16)))
-
-    result = review_translation(
-        executor,
-        model="model",
-        source=source,
-        source_plan=plan,
-        translation_request=request,
-        target=target,
-        target_path=PATH,
-        source_locale=Locale.RU,
-        target_locale=Locale.EN,
-        allow_repair=False,
-        max_request_characters=250_000,
-    )
-
-    assert result.primary.verdict is Verdict.GREEN
-    assert len(executor.calls) > 1
-    assert all(len(call.prompt) <= 80_000 for call in executor.calls)
-    assert all(target.decode() not in call.prompt for call in executor.calls)
-    assert all("corresponding ordered excerpts" in call.prompt for call in executor.calls)
 
 
 def test_formatting_drift_reaches_critic_without_deterministic_repair() -> None:
@@ -389,7 +355,7 @@ def test_full_document_repair_restores_source_fragments_before_exposing_map(inva
     assert "<authoritative-source>" in editor_prompt
     assert "<final-target>" in editor_prompt
     assert "/docs/guide" not in editor_prompt
-    expected_roles = ["critic"] if invalid_placeholder else ["critic", "final_critic"]
+    expected_roles = ["critic"]
     assert [call.role.value for call in executor.calls] == expected_roles
     assert all(call.target_path == PATH for call in executor.calls)
     assert all("Private guidance" in call.prompt for call in executor.calls)
@@ -461,7 +427,7 @@ def test_raw_repair_accepts_field_local_inline_code_grammar_order() -> None:
 
     assert result.repair_applied
     assert result.final_candidate == repaired
-    assert [call.role.value for call in executor.calls] == ["critic", "final_critic"]
+    assert [call.role.value for call in executor.calls] == ["critic"]
     assert "protected placeholder" in executor.calls[0].prompt
 
 
@@ -511,7 +477,7 @@ def test_raw_repair_rejects_link_groups_that_exchange_source_endpoints() -> None
     assert published_maps == []
 
 
-def test_repair_transport_failure_is_terminal_before_final_critic() -> None:
+def test_critic_editor_transport_failure_is_terminal() -> None:
     _plan, request, _values, _target = prepared()
     executor = FakeExecutor(
         critic_json(
@@ -552,31 +518,7 @@ def test_quality_returns_final_validated_map_including_repaired_values() -> None
     )
 
 
-def test_exhausted_job_repair_allowance_still_reports_other_document_findings() -> None:
-    plan, request, _values, target = prepared()
-    problem = finding(
-        repairable=True, snippet="Установка YDB", line=1, field_ids=[request.requested_ids[0]]
-    )
-    executor = FakeExecutor(critic_json("RED", [problem]))
-    result = review_translation(
-        executor,
-        model="yandexgpt-5.1/latest",
-        source=SOURCE,
-        source_plan=plan,
-        translation_request=request,
-        target=target,
-        target_path=PATH,
-        source_locale=Locale.EN,
-        target_locale=Locale.RU,
-        allow_repair=False,
-    )
-    assert result.final.verdict is Verdict.RED
-    assert len(result.final.findings) == 1
-    assert not result.repair_attempted
-    assert [call.role.value for call in executor.calls] == ["critic"]
-
-
-def test_repairable_red_repairs_once_and_critics_actual_repaired_candidate() -> None:
+def test_repairable_red_accepts_actual_validated_critic_edit() -> None:
     plan, request, values, target = prepared()
     field_id = request.fields[1].field_id
     primary = critic_json(
@@ -604,9 +546,9 @@ def test_repairable_red_repairs_once_and_critics_actual_repaired_candidate() -> 
         events=events,
     )
 
-    def before_final_critic(candidate: bytes) -> None:
+    def after_critic_edit(candidate: bytes) -> None:
         assert candidate == expected
-        events.append("repair_validated_and_published")
+        events.append("critic_edit_validated")
 
     result = review_translation(
         executor,
@@ -618,7 +560,7 @@ def test_repairable_red_repairs_once_and_critics_actual_repaired_candidate() -> 
         target_path=PATH,
         source_locale=Locale.EN,
         target_locale=Locale.RU,
-        before_final_critic=before_final_critic,
+        on_validated_edit=after_critic_edit,
     )
 
     assert result.original_candidate == target
@@ -628,14 +570,12 @@ def test_repairable_red_repairs_once_and_critics_actual_repaired_candidate() -> 
     assert result.repair_error is None
     assert result.primary.verdict is Verdict.RED
     assert result.final.verdict is Verdict.GREEN
-    assert [call.role.value for call in executor.calls] == ["critic", "final_critic"]
+    assert [call.role.value for call in executor.calls] == ["critic"]
     assert executor.calls[0].schema is not None
     assert field_id not in executor.calls[0].prompt
     assert "<authoritative-source>" in executor.calls[0].prompt
     assert "<final-target>" in executor.calls[0].prompt
-    assert events == ["critic", "repair_validated_and_published", "final_critic"]
-    assert expected.decode() in executor.calls[1].prompt
-    assert target.decode() not in executor.calls[1].prompt
+    assert events == ["critic", "critic_edit_validated"]
 
 
 @pytest.mark.parametrize(
@@ -692,7 +632,7 @@ def test_raw_repair_prompt_uses_actual_translation_direction(
     )
 
     assert result.final_candidate == repaired
-    assert direction in executor.calls[1].prompt
+    assert direction in executor.calls[0].prompt
 
 
 def test_oversized_repair_uses_minimum_ordered_structural_chunks_within_limit() -> None:
@@ -843,7 +783,7 @@ def test_large_repair_uses_response_safe_chunks_and_restores_exact_target() -> N
     assert result.final_candidate == target
 
 
-def test_exhausted_content_filter_splits_aligned_repair_and_runs_final_critic() -> None:
+def test_exhausted_content_filter_splits_aligned_critic_edit() -> None:
     lengths = [157] * 49 + [177] + [130] * 60 + [131]
     parts = []
     for number, length in enumerate(lengths):
@@ -1190,7 +1130,7 @@ def test_cosmetic_block_merge_still_gets_one_critic_repair() -> None:
 
     assert result.repair_applied
     assert result.final_candidate == repaired
-    assert [call.role.value for call in executor.calls] == ["critic", "final_critic"]
+    assert [call.role.value for call in executor.calls] == ["critic"]
 
 
 def test_large_cosmetic_block_merge_keeps_repair_chunked() -> None:
@@ -1237,11 +1177,7 @@ def test_large_cosmetic_block_merge_keeps_repair_chunked() -> None:
     # assembly preserves that document boundary while keeping each repair chunk
     # independently model-sized.
     assert result.final_candidate == (first_repair + "\n" + second_repair).encode()
-    assert [call.role.value for call in executor.calls] == [
-        "critic",
-        "critic",
-        "final_critic",
-    ]
+    assert [call.role.value for call in executor.calls] == ["critic", "critic"]
 
 
 def test_t017_n04_repair_preserves_logical_escaped_title_in_untouched_field() -> None:
@@ -1296,7 +1232,7 @@ def test_t017_n04_repair_preserves_logical_escaped_title_in_untouched_field() ->
         request,
         {title_id: 'A "quoted" title', description_id: "Corrected description"},
     )
-    assert [call.role.value for call in executor.calls] == ["critic", "final_critic"]
+    assert [call.role.value for call in executor.calls] == ["critic"]
 
 
 def test_unrepairable_red_uses_one_critic() -> None:
@@ -1356,7 +1292,7 @@ def test_mixed_findings_repair_only_locally_safe_mapped_fields() -> None:
     assert result.final.verdict is Verdict.RED
 
 
-def test_invalid_repair_retains_original_and_still_runs_one_final_critic() -> None:
+def test_invalid_critic_edit_retains_original_and_red_verdict() -> None:
     _plan, request, _values, target = prepared()
     field_id = request.fields[1].field_id
     executor = FakeExecutor(
@@ -1380,7 +1316,7 @@ def test_invalid_repair_retains_original_and_still_runs_one_final_critic() -> No
         target_path=PATH,
         source_locale=Locale.EN,
         target_locale=Locale.RU,
-        before_final_critic=callback_candidates.append,
+        on_validated_edit=callback_candidates.append,
     )
 
     assert result.repair_attempted and not result.repair_applied
@@ -1395,7 +1331,7 @@ def test_invalid_repair_retains_original_and_still_runs_one_final_critic() -> No
     assert "/docs/guide" not in executor.calls[0].prompt
 
 
-def test_repair_callback_failure_prevents_final_critic() -> None:
+def test_critic_edit_callback_failure_is_terminal() -> None:
     plan, request, values, target = prepared()
     field_id = request.fields[1].field_id
     repaired_text = (
@@ -1429,7 +1365,7 @@ def test_repair_callback_failure_prevents_final_critic() -> None:
             target_path=PATH,
             source_locale=Locale.EN,
             target_locale=Locale.RU,
-            before_final_critic=fail_publication,
+            on_validated_edit=fail_publication,
         )
 
     assert [call.role.value for call in executor.calls] == ["critic"]
@@ -1454,7 +1390,7 @@ def test_invalid_placeholder_repair_retains_original_and_reports_invalid_respons
     assert len(executor.calls) == 1
 
 
-def test_lone_surrogate_repair_retains_original_and_runs_final_critic() -> None:
+def test_lone_surrogate_critic_edit_retains_original() -> None:
     source = b"# Install YDB\n"
     plan = build_markdown_plan(SNAPSHOT, SOURCE_PATH, source)
     request = build_translation_request(source, plan)

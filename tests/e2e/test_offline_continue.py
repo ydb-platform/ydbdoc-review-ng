@@ -64,24 +64,19 @@ def test_review_cli_repairs_only_unresolved_path_then_updates_one_verdict(capsys
     green = services.files[EN + "a.md"]
     services.rows[old.continuation_id]["created_at"] -= timedelta(days=5)
     old = services.checkpoint()
-    services.outcomes = {EN + "b.md": ["repair", "red"]}
-    assert invoke(services, 43) == 1
-    following = services.checkpoint()
-    assert services.roles == ["critic", "critic"]
+    services.outcomes = {EN + "b.md": ["repair"]}
+    assert invoke(services, 43) == 0
+    assert services.roles == ["critic"]
     assert {path for _, path, _ in services.calls} == {EN + "b.md"}
     assert services.files[EN + "a.md"] == green
     assert services.files[EN + "b.md"] == b"# Repaired b\n\nTranslated\n"
-    assert following.expires_at == old.expires_at
     assert services.timeline == [
         "critic",
         "commit",
         "push",
-        "critic",
         "report",
-        "checkpoint",
     ]
-    assert invoke(services, 43) == 0
-    assert services.rows[following.continuation_id]["status"] == "closed"
+    assert services.rows[old.continuation_id]["status"] == "closed"
     assert len(services.comments) == 1
     assert services.comments[0]["body"].startswith("🟢 GREEN\n")
     assert CONTEXT not in services.comments[0]["body"]

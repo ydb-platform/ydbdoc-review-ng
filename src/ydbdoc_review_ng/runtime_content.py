@@ -1489,7 +1489,9 @@ class RuntimeContent:
     def publication_plan(
         self, snapshot: ImmutableRunSnapshot, candidate: WorkflowCandidate
     ) -> PublicationPlan:
-        context = self.publisher.context or self.source.context
+        # Every workflow now publishes at most once. Build the only plan from
+        # the immutable run context instead of state left by an earlier run.
+        context = self.source.context
         target = SnapshotRef(self.source.snapshots.source_snapshot.repository, context.current_head)
         return PublicationPlan(
             tuple(
@@ -1525,14 +1527,11 @@ class RuntimeContent:
     def validate_candidate(
         self, snapshot: ImmutableRunSnapshot, candidate: WorkflowCandidate, /
     ) -> None:
-        if snapshot.mode is Mode.DOC_CONTINUE:
-            expected = (
-                snapshot.target_sha
-                if self.publisher.context is None
-                else self.publisher.context.current_head
-            )
-            if self.source.github.head(snapshot.branch) != expected:
-                raise RuntimeBoundaryError("continue_translation_head_mismatch")
+        if (
+            snapshot.mode is Mode.DOC_CONTINUE
+            and self.source.github.head(snapshot.branch) != snapshot.target_sha
+        ):
+            raise RuntimeBoundaryError("continue_translation_head_mismatch")
         self.publisher.validate_candidate(snapshot, candidate)
 
     def review(
@@ -1540,8 +1539,6 @@ class RuntimeContent:
         snapshot: ImmutableRunSnapshot,
         candidate: WorkflowCandidate,
         /,
-        *,
-        before_final_critic: Callable[[bytes], None] | None = None,
     ) -> QualityReviewResult:
         files = unpack(candidate.content)
         reviews = []
@@ -1557,8 +1554,7 @@ class RuntimeContent:
             documents = tuple(by_path[path] for path in self.review_paths)
 
         def check_head() -> None:
-            context = self.publisher.context
-            if context is None or self.source.github.head(snapshot.branch) != context.current_head:
+            if self.source.github.head(snapshot.branch) != snapshot.target_sha:
                 raise RuntimeBoundaryError("continue_translation_head_mismatch")
 
         for document in documents:
@@ -1567,10 +1563,8 @@ class RuntimeContent:
             target = files[path.value]
             assert target is not None
 
-            def publish(value: bytes, path: RepoPath = path) -> None:
+            def apply_correction(value: bytes, path: RepoPath = path) -> None:
                 files[path.value] = value
-                if before_final_critic is not None:
-                    before_final_critic(pack(files))
 
             def publish_map(value: AcceptedMap) -> None:
                 accepted[value.target_path] = value
@@ -1585,8 +1579,7 @@ class RuntimeContent:
                 target_path=path,
                 source_locale=document.entry.pair.source_locale,
                 target_locale=document.entry.pair.target_locale,
-                before_final_critic=publish,
-                allow_repair=not attempted,
+                on_validated_edit=apply_correction,
                 accepted_map=restored_map,
                 full_repair=selective and restored_map is None,
                 operator_context=self.review_operator_context,

@@ -1,4 +1,4 @@
-"""Bounded quality orchestration: one critic-editor and one final critic."""
+"""Bounded quality orchestration: one critic-editor pass per document unit."""
 
 from __future__ import annotations
 
@@ -55,9 +55,6 @@ class QualityExecutionError(RuntimeError):
     def __init__(self, stage: str, /) -> None:
         self.stage = stage
         super().__init__(f"quality_execution:{stage}")
-
-
-_CRITIC_REQUEST_MAX_CHARACTERS = 80_000
 
 
 def _derive_target_translations(
@@ -144,97 +141,6 @@ def _derive_target_translations(
         except UnicodeDecodeError:
             raise QualityInputError from None
     return values
-
-
-def _invoke_critic(
-    executor: ModelExecutor,
-    *,
-    model: str,
-    source: bytes,
-    target: bytes,
-    target_path: RepoPath,
-    source_locale: Locale,
-    target_locale: Locale,
-    requested_ids: tuple[str, ...],
-    final: bool,
-    operator_context: str | None = None,
-    before_model_call: Callable[[], None] | None = None,
-    terminology_context: str | None = None,
-) -> CriticResult:
-    def request_for(
-        source_part: bytes,
-        target_part: bytes = target,
-        *,
-        source_excerpt: bool,
-        target_excerpt: bool = False,
-    ) -> ModelRequest:
-        return build_critic_request(
-            model=model,
-            source=source_part,
-            target=target_part,
-            target_path=target_path,
-            source_locale=source_locale,
-            target_locale=target_locale,
-            requested_ids=requested_ids,
-            final=final,
-            source_is_excerpt=source_excerpt,
-            target_is_excerpt=target_excerpt,
-            operator_context=operator_context,
-            terminology_context=terminology_context,
-        )
-
-    def split_text(text: str) -> tuple[str, str]:
-        if len(text) < 2:
-            raise QualityExecutionError("final_critic" if final else "critic")
-        midpoint = len(text) // 2
-        boundaries = [
-            boundary
-            for marker in ("\n\n", "\n")
-            for boundary in (text.rfind(marker, 0, midpoint), text.find(marker, midpoint))
-            if 0 < boundary < len(text)
-        ]
-        boundary = min(boundaries, key=lambda item: abs(item - midpoint), default=midpoint)
-        return text[:boundary], text[boundary:]
-
-    # Keep the excerpts alongside requests so provider-filter failures can be
-    # split without replaying already accepted neighbours. This applies to both
-    # read-only primary review and the fresh final critic.
-    pending = [(source.decode("utf-8"), target.decode("utf-8"), False, 0)]
-    results: list[CriticResult] = []
-    while pending:
-        source_text, target_text, excerpt, filter_depth = pending.pop()
-        request = request_for(
-            source_text.encode(),
-            target_text.encode(),
-            source_excerpt=excerpt,
-            target_excerpt=excerpt,
-        )
-        oversized = len(request.prompt) > _CRITIC_REQUEST_MAX_CHARACTERS
-        if not oversized:
-            if before_model_call is not None:
-                before_model_call()
-            response = executor.invoke(request)
-            if response.success and response.text is not None:
-                results.append(
-                    parse_critic_response(
-                        response.text, target_path=target_path, requested_ids=requested_ids
-                    )
-                )
-                continue
-            if response.failure is not AttemptError.CONTENT_FILTER or filter_depth >= 4:
-                raise QualityExecutionError("final_critic" if final else "critic")
-            filter_depth += 1
-        source_left, source_right = split_text(source_text)
-        target_left, target_right = split_text(target_text)
-        pending.append((source_right, target_right, True, filter_depth))
-        pending.append((source_left, target_left, True, filter_depth))
-    findings: list[Finding] = []
-    for result in results:
-        for finding in result.findings:
-            if finding not in findings:
-                findings.append(finding)
-    verdict = Verdict.RED if any(result.verdict is Verdict.RED for result in results) else Verdict.GREEN
-    return CriticResult(verdict, tuple(findings))
 
 
 def _editor_request(
@@ -451,8 +357,7 @@ def review_translation(
     target_path: RepoPath,
     source_locale: Locale,
     target_locale: Locale,
-    before_final_critic: Callable[[bytes], None] | None = None,
-    allow_repair: bool = True,
+    on_validated_edit: Callable[[bytes], None] | None = None,
     accepted_map: AcceptedMap | None = None,
     full_repair: bool = False,
     operator_context: str | None = None,
@@ -462,7 +367,7 @@ def review_translation(
     link_resolver: LinkResolver | None = None,
     terminology_context: str | None = None,
 ) -> QualityReviewResult:
-    """Let one critic edit the candidate, then independently review any correction."""
+    """Let the critic turn the translator draft into the final validated candidate."""
     if accepted_map is None and not full_repair:
         try:
             target_translations = _derive_target_translations(
@@ -487,32 +392,6 @@ def review_translation(
         if accepted_map is not None or not full_repair
         else ()
     )
-    if not allow_repair:
-        primary = _invoke_critic(
-            executor,
-            model=model,
-            source=source,
-            target=target,
-            target_path=target_path,
-            source_locale=source_locale,
-            target_locale=target_locale,
-            requested_ids=translation_request.requested_ids,
-            final=False,
-            operator_context=operator_context,
-            before_model_call=before_model_call,
-            terminology_context=terminology_context,
-        )
-        return QualityReviewResult(
-            target,
-            None,
-            target,
-            primary,
-            primary,
-            False,
-            False,
-            None,
-            accepted_maps,
-        )
     editor_requests, document_request, source_blocks, target_blocks = _editor_requests(
         model=model,
         source=source,
@@ -688,22 +567,13 @@ def review_translation(
         )
     if repaired_candidate is not None and before_repaired_map is not None:
         before_repaired_map(accepted_maps[0])
-    if repaired_candidate is not None and before_final_critic is not None:
-        before_final_critic(repaired_candidate)
-    final = _invoke_critic(
-        executor,
-        model=model,
-        source=source,
-        target=final_candidate,
-        target_path=target_path,
-        source_locale=source_locale,
-        target_locale=target_locale,
-        requested_ids=translation_request.requested_ids,
-        final=True,
-        operator_context=operator_context,
-        before_model_call=before_model_call,
-        terminology_context=terminology_context,
-    )
+    if on_validated_edit is not None:
+        on_validated_edit(final_candidate)
+    # The critic-editor is the final semantic writer. A valid correction resolves
+    # every finding it marked repairable. Findings it explicitly marked
+    # unrepairable remain visible and keep the result RED; no model loop is used.
+    unresolved = tuple(finding for finding in findings if not finding.repairable)
+    final = CriticResult(Verdict.RED if unresolved else Verdict.GREEN, unresolved)
     return QualityReviewResult(
         target,
         repaired_candidate,

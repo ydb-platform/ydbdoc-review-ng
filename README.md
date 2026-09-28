@@ -9,8 +9,9 @@
 `pr_translation_smoke/` является исследовательским прототипом, а не законченной
 реализацией production-конвейера.
 
-Реализованы parser, проверка ответов моделей и protected fragments, critic с
-одной repair-попыткой, audit/budget adapters, линейная оркестрация и публикация
+Реализованы parser, проверка ответов моделей и protected fragments,
+critic-editor с одним проходом на документ, audit/budget adapters, линейная
+оркестрация и единственная публикация финального candidate
 через внедряемые backend-ы. Поставляемый production factory
 `ydbdoc_review_ng.runtime:create_runtime` соединяет GitHub REST/Git Data через
 stdlib, Yandex transport, YDB query executor и реальные workflow stages.

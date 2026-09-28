@@ -508,8 +508,6 @@ class ReviewAdapter:
         snapshot: ImmutableRunSnapshot,
         candidate: WorkflowCandidate,
         /,
-        *,
-        before_final_critic: Callable[[bytes], None] | None = None,
     ) -> QualityReviewResult:
         del snapshot
         context = candidate.review_context
@@ -524,7 +522,6 @@ class ReviewAdapter:
             target_path=context.target_path,
             source_locale=context.source_locale,
             target_locale=context.target_locale,
-            before_final_critic=before_final_critic,
         )
 
 
@@ -668,7 +665,10 @@ def test_offline_translate_runs_real_pipeline_in_both_directions(
         assert b"```" + language in target
     assert case.calls == ["translate", "critic"]
     assert (
-        case.events.index("publish") < case.events.index("critic") < case.events.index("create_pr")
+        case.events.index("validate")
+        < case.events.index("critic")
+        < case.events.index("publish")
+        < case.events.index("create_pr")
     )
     assert ydb.terminal_rows[-1]["status"] == JobStatus.SUCCEEDED.value
 
@@ -716,7 +716,7 @@ def test_malformed_translation_blocks_publication_and_terminalizes_job(tmp_path:
 
 
 @pytest.mark.parametrize("existing_pr", [False, True])
-def test_repair_is_validated_and_published_before_final_critic(
+def test_critic_edit_is_validated_and_published_once(
     tmp_path: Path, existing_pr: bool
 ) -> None:
     case = make_case(
@@ -731,17 +731,16 @@ def test_repair_is_validated_and_published_before_final_critic(
     result = workflows.doc_translate(translate_input(case))
 
     assert result.repair_applied
-    assert case.backend.commit_count == 2
+    assert case.backend.commit_count == 1
     editor_index = case.events.index("critic")
-    assert case.events[editor_index : editor_index + 4] == [
+    assert case.events[editor_index : editor_index + 3] == [
         "critic",
         "validate",
         "publish",
-        "final_critic",
     ]
     pr_event = "update_pr" if existing_pr else "create_pr"
     assert [event for event in case.events if event.endswith("_pr")] == [pr_event]
-    assert case.events.index("final_critic") < case.events.index(pr_event)
+    assert case.events.index("publish") < case.events.index(pr_event)
     repaired = case.backend.read(result.final_commit_sha, case.target_path)
     assert repaired is not None and repaired.startswith(b"# Repaired:")
 

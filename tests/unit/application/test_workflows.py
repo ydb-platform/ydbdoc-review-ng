@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -196,12 +195,10 @@ class FakeReviewer:
         snapshot: ImmutableRunSnapshot,
         candidate: WorkflowCandidate,
         /,
-        *,
-        before_final_critic: Callable[[bytes], None] | None = None,
     ) -> QualityReviewResult:
         del snapshot
         self.scenario.hit("review:t011")
-        self.scenario.hit("review:primary-critic")
+        self.scenario.hit("review:critic-editor")
         self.scenario.model_calls.append("critic")
         green = CriticResult(Verdict.GREEN, ())
         if not self.scenario.repair and not self.scenario.invalid_repair:
@@ -215,25 +212,18 @@ class FakeReviewer:
                 False,
                 None,
             )
-        self.scenario.hit("review:repair")
-        self.scenario.model_calls.append("repair")
         if self.scenario.invalid_repair:
-            self.scenario.hit("review:final-critic")
-            self.scenario.model_calls.append("final_critic")
+            red = CriticResult(Verdict.RED, ())
             return QualityReviewResult(
                 candidate.content,
                 None,
                 candidate.content,
-                CriticResult(Verdict.RED, ()),
-                green,
+                red,
+                red,
                 True,
                 False,
                 RepairErrorReason.INVALID_RESPONSE,
             )
-        if before_final_critic is not None:
-            before_final_critic(b"repaired-candidate")
-        self.scenario.hit("review:final-critic")
-        self.scenario.model_calls.append("final_critic")
         return QualityReviewResult(
             candidate.content,
             b"repaired-candidate",
@@ -279,7 +269,6 @@ class FakeReporter:
         assert pr_number == 42
         assert branch == "translation/pr-42"
         assert commit_sha in {TARGET_SHA, INITIAL_SHA, REPAIRED_SHA}
-        assert review.final.verdict is Verdict.GREEN
         self.scenario.hit("report:current-pr-verdict")
 
 
@@ -360,7 +349,7 @@ def test_binding_failure_terminalizes_started_audit_without_other_effects() -> N
     assert scenario.events == ["job:start", "job:finish:failed"]
 
 
-def test_translate_success_publishes_once_then_reviews_and_terminalizes() -> None:
+def test_translate_success_reviews_then_publishes_once_and_terminalizes() -> None:
     scenario = Scenario()
     workflows, persistence = build_workflows(scenario)
 
@@ -374,9 +363,9 @@ def test_translate_success_publishes_once_then_reviews_and_terminalizes() -> Non
         "budget",
         "prepare:direction-scope-translate-assemble-reparse",
         "validate:initial",
-        "publish:initial",
         "review:t011",
-        "review:primary-critic",
+        "review:critic-editor",
+        "publish:initial",
         "report:current-pr-verdict",
         "job:finish:succeeded",
     ]
@@ -386,29 +375,7 @@ def test_translate_success_publishes_once_then_reviews_and_terminalizes() -> Non
     assert SECRET not in repr(result)
 
 
-@pytest.mark.parametrize("mode", ["translate", "verify"])
-def test_review_cannot_report_a_candidate_that_was_not_published(mode: str) -> None:
-    from dataclasses import replace
-
-    scenario = Scenario()
-    workflows, persistence = build_workflows(scenario)
-
-    class UnpublishedReviewer(FakeReviewer):
-        def review(self, snapshot, candidate, /, *, before_final_critic=None):
-            review = super().review(snapshot, candidate, before_final_critic=before_final_critic)
-            return replace(review, final_candidate=b"unpublished bytes")
-
-    workflows._reviewer = UnpublishedReviewer(scenario)
-    with pytest.raises(WorkflowError):
-        if mode == "translate":
-            workflows.doc_translate(translate_input())
-        else:
-            workflows.doc_verify(verify_input())
-    assert "report:current-pr-verdict" not in scenario.events
-    assert persistence.finished_errors == ["review_failed"]
-
-
-def test_translate_applies_one_t011_repair_and_publishes_exactly_twice() -> None:
+def test_translate_applies_critic_edit_and_publishes_exactly_once() -> None:
     scenario = Scenario(repair=True)
     workflows, _ = build_workflows(scenario)
 
@@ -423,27 +390,24 @@ def test_translate_applies_one_t011_repair_and_publishes_exactly_twice() -> None
         "budget",
         "prepare:direction-scope-translate-assemble-reparse",
         "validate:initial",
-        "publish:initial",
         "review:t011",
-        "review:primary-critic",
-        "review:repair",
+        "review:critic-editor",
         "validate:repair",
         "publish:repair",
-        "review:final-critic",
         "report:current-pr-verdict",
         "job:finish:succeeded",
     ]
-    assert scenario.model_calls == ["translate", "critic", "repair", "final_critic"]
-    assert scenario.published_branches == ["translation/pr-42", "translation/pr-42"]
+    assert scenario.model_calls == ["translate", "critic"]
+    assert scenario.published_branches == ["translation/pr-42"]
 
 
-def test_verify_success_never_checks_budget_or_translates_or_publishes() -> None:
+def test_verify_success_never_checks_budget_or_translates_and_publishes_once() -> None:
     scenario = Scenario()
     workflows, _ = build_workflows(scenario)
 
     result = workflows.doc_verify(verify_input())
 
-    assert result == WorkflowResult("job-42", Mode.DOC_VERIFY, TARGET_SHA, Verdict.GREEN, False)
+    assert result == WorkflowResult("job-42", Mode.DOC_VERIFY, INITIAL_SHA, Verdict.GREEN, False)
     assert scenario.events == [
         "job:start",
         "authorize:verify",
@@ -451,12 +415,13 @@ def test_verify_success_never_checks_budget_or_translates_or_publishes() -> None
         "load:verify-candidate",
         "validate:initial",
         "review:t011",
-        "review:primary-critic",
+        "review:critic-editor",
+        "publish:initial",
         "report:current-pr-verdict",
         "job:finish:succeeded",
     ]
     assert scenario.model_calls == ["critic"]
-    assert scenario.published_branches == []
+    assert scenario.published_branches == ["translation/pr-42"]
 
 
 def test_verify_repair_validates_and_commits_once_to_same_branch() -> None:
@@ -473,15 +438,13 @@ def test_verify_repair_validates_and_commits_once_to_same_branch() -> None:
         "load:verify-candidate",
         "validate:initial",
         "review:t011",
-        "review:primary-critic",
-        "review:repair",
+        "review:critic-editor",
         "validate:repair",
         "publish:repair",
-        "review:final-critic",
         "report:current-pr-verdict",
         "job:finish:succeeded",
     ]
-    assert scenario.model_calls == ["critic", "repair", "final_critic"]
+    assert scenario.model_calls == ["critic"]
     assert scenario.published_branches == ["translation/pr-42"]
 
 
@@ -498,18 +461,18 @@ def test_t017_f10_success_terminal_audit_receives_final_translate_and_repair_sha
     assert verify_persistence.finished_target_shas == [REPAIRED_SHA.value]
 
 
-def test_t017_r08_failed_after_initial_publication_audits_published_sha() -> None:
+def test_t017_r08_failed_during_review_audits_no_published_sha() -> None:
     scenario = Scenario(fail_once_at={"review:t011"})
     workflows, persistence = build_workflows(scenario)
 
     with pytest.raises(WorkflowError):
         workflows.doc_translate(translate_input())
 
-    assert persistence.finished_target_shas == [INITIAL_SHA.value]
+    assert persistence.finished_target_shas == [None]
 
 
 def test_t017_r08_failed_after_repair_publication_audits_repaired_sha() -> None:
-    scenario = Scenario(repair=True, fail_once_at={"review:final-critic"})
+    scenario = Scenario(repair=True, fail_once_at={"report:current-pr-verdict"})
     workflows, persistence = build_workflows(scenario)
 
     with pytest.raises(WorkflowError):
@@ -568,6 +531,8 @@ def test_fixed_boundary_diagnostic_survives_workflow_redaction() -> None:
                 "budget",
                 "prepare:direction-scope-translate-assemble-reparse",
                 "validate:initial",
+                "review:t011",
+                "review:critic-editor",
                 "publish:initial",
             ],
         ),
@@ -580,7 +545,6 @@ def test_fixed_boundary_diagnostic_survives_workflow_redaction() -> None:
                 "budget",
                 "prepare:direction-scope-translate-assemble-reparse",
                 "validate:initial",
-                "publish:initial",
                 "review:t011",
             ],
         ),
@@ -593,9 +557,9 @@ def test_fixed_boundary_diagnostic_survives_workflow_redaction() -> None:
                 "budget",
                 "prepare:direction-scope-translate-assemble-reparse",
                 "validate:initial",
-                "publish:initial",
                 "review:t011",
-                "review:primary-critic",
+                "review:critic-editor",
+                "publish:initial",
                 "report:current-pr-verdict",
             ],
         ),
@@ -617,7 +581,7 @@ def test_translate_phase_failure_terminalizes_and_stops_later_effects(
     assert SECRET not in persistence.finished_errors[-1]
 
 
-def test_verify_validation_failure_has_no_model_publish_or_report_effects() -> None:
+def test_verify_validation_failure_occurs_before_editor_publish_or_report() -> None:
     scenario = Scenario(fail_once_at={"validate:initial"})
     workflows, _ = build_workflows(scenario)
 
@@ -638,7 +602,7 @@ def test_verify_validation_failure_has_no_model_publish_or_report_effects() -> N
 
 
 @pytest.mark.parametrize("failed_event", ["validate:repair", "publish:repair"])
-def test_repair_callback_failure_prevents_final_critic_and_report(failed_event: str) -> None:
+def test_corrected_candidate_failure_prevents_report(failed_event: str) -> None:
     scenario = Scenario(repair=True, fail_once_at={failed_event})
     workflows, persistence = build_workflows(scenario)
 
@@ -652,20 +616,18 @@ def test_repair_callback_failure_prevents_final_critic_and_report(failed_event: 
         "load:verify-candidate",
         "validate:initial",
         "review:t011",
-        "review:primary-critic",
-        "review:repair",
+        "review:critic-editor",
         "validate:repair",
     ]
     if failed_event == "publish:repair":
         expected_before_failure.append("publish:repair")
     assert scenario.events == [*expected_before_failure, "job:finish:failed"]
-    assert scenario.model_calls == ["critic", "repair"]
-    assert "review:final-critic" not in scenario.events
+    assert scenario.model_calls == ["critic"]
     assert "report:current-pr-verdict" not in scenario.events
     assert persistence.finished_errors[-1] == f"{captured.value.stage.value}_failed"
 
 
-def test_invalid_repair_final_critics_original_without_second_publication() -> None:
+def test_invalid_critic_edit_keeps_draft_and_publishes_once_with_red_verdict() -> None:
     scenario = Scenario(invalid_repair=True)
     workflows, _ = build_workflows(scenario)
 
@@ -680,15 +642,13 @@ def test_invalid_repair_final_critics_original_without_second_publication() -> N
         "budget",
         "prepare:direction-scope-translate-assemble-reparse",
         "validate:initial",
-        "publish:initial",
         "review:t011",
-        "review:primary-critic",
-        "review:repair",
-        "review:final-critic",
+        "review:critic-editor",
+        "publish:initial",
         "report:current-pr-verdict",
         "job:finish:succeeded",
     ]
-    assert scenario.model_calls == ["translate", "critic", "repair", "final_critic"]
+    assert scenario.model_calls == ["translate", "critic"]
     assert scenario.published_branches == ["translation/pr-42"]
 
 

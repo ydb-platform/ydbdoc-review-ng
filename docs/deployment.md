@@ -15,7 +15,7 @@ and `ydb_executor`. No separate deployment Python module must be authored.
 | `YDB_GH_TOKEN`, fallback `GH_TOKEN` | Project token takes precedence. Contents/PR write and checks read in `ydb-platform/ydb`. |
 | `YANDEX_API_KEY`, `YANDEX_FOLDER_ID` | Native Yandex model credentials. |
 | `YDBDOC_MODEL` | Optional translation model name, default `deepseek-v4-flash`. DeepSeek uses the Yandex Cloud OpenAI-compatible endpoint. |
-| `YDBDOC_MODEL_CRITIC` | Semantic critic-editor and final critic, default `yandexgpt-5.1`, independently selected from the translator. |
+| `YDBDOC_MODEL_CRITIC` | Semantic critic-editor, default `yandexgpt-5.1`, independently selected from the translator. |
 | `YDBDOC_MODEL_FALLBACK` | Optional fallback model name, default `yandexgpt-5.1`. Used when the primary model returns a provider failure or content filter. |
 | `YDB_ENDPOINT`, `YDB_DATABASE`, `YDB_TOKEN` | Optional YDB endpoint, database path and access token. Connection is lazy. |
 | `YDB_SA_KEY` | Existing inline Yandex Cloud service-account JSON. Used when `YDB_TOKEN` is absent; endpoint/database default to the deployed documentation database and remain overridable by `YDB_ENDPOINT`/`YDB_DATABASE`. |
@@ -31,7 +31,7 @@ printed or included in comments. Every model attempt is persisted. Explicit
 billable cost is retained; unavailable cost is NULL, not fabricated zero.
 Current-job cost is unknown if any attempt cost is unknown. The daily budget
 uses all known costs across all three modes and all roles.
-Translate, critic, final-critic and repair attempts also retain their article
+Translate and critic-editor attempts also retain their article
 `target_path`; direction remains PR-wide. The QA comment reads cumulative costs
 for the pinned `source_sha`, breaks them down by article and role, and lists old
 rows without a path as unattributed. Unknown and not-called costs are never
@@ -48,7 +48,7 @@ Each fresh translate run creates its first commit directly on the pinned base
 snapshot. If the translation branch already exists, the runtime replaces only
 the exact head captured during snapshot resolution; a moved head fails closed.
 This one guarded force update prevents old translation commits from accumulating
-across reruns. Critic repairs, verify, and continue remain non-force updates.
+across reruns. Verify and continue remain non-force updates.
 
 Continue accepts only `continue --pr N`, with no source/target SHA or budget
 arguments. An allowed author must post a comment whose first line is
@@ -64,10 +64,11 @@ and persistence failures require a new run. Context remains private to new
 model calls and audit, never the report. RED exits 1 in every CLI mode.
 
 The runtime composes pair discovery, one mixed-direction decision, dependency
-scope/preflight, parser, strict translation, protected-fragment checks, critic
-and at most one repair per job. Validated bytes become Git Data blobs/tree/
-commit and a guarded ref update. Byte-identical output cannot create a PR or
-comment. Final QA follows the last critic; checks are read for the exact head,
+scope/preflight, parser, strict translation, protected-fragment checks, and one
+critic-editor pass per document or excerpt. All valid edits are collected before
+one guarded publication. Validated bytes become Git Data blobs/tree/commit and a
+guarded ref update. Byte-identical output cannot create a PR or comment. Final QA
+follows publication; checks are read for the exact head,
 and branch movement blocks stale reporting. An updated PR body records the exact
 new translation commit rather than retaining a prior run's SHA.
 

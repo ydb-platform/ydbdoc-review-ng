@@ -419,7 +419,6 @@ def test_pending_success_uses_full_review_single_repair_and_captures_red():
         "critic",
         "critic",
         "critic",
-        "critic",
     ]
     assert following.state.stage is ContinuationStage.REVIEW
     assert following.target_sha == result.final_commit_sha
@@ -428,7 +427,7 @@ def test_pending_success_uses_full_review_single_repair_and_captures_red():
     assert following.created_at == saved.created_at
     assert services.rows[saved.continuation_id]["status"] == "closed"
     assert services.comments[-1]["body"].startswith("🔴 RED\n")
-    assert services.commits == 2
+    assert services.commits == 1
 
 
 @pytest.mark.parametrize(

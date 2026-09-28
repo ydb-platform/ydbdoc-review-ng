@@ -36,7 +36,7 @@ JSON Schema. В интеграционном прогоне PR 51079 все 361 
 `reasoningTokens = 0`. Канонический текущий model URI:
 `gpt://<folder>/yandexgpt-5.1`; суффикс `/latest` не используется в default,
 но явный `YDBDOC_MODEL` сохраняет возможность выбрать другой URI. В runtime это
-fallback-модель для перевода и отдельная модель critic-editor/final critic
+fallback-модель для перевода и отдельная модель critic-editor
 по умолчанию (`YDBDOC_MODEL_CRITIC`).
 
 ### DeepSeek V4 Flash

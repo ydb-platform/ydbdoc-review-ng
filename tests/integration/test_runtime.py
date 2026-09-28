@@ -113,12 +113,12 @@ def test_shipped_composition_translates_then_verifies_current_pr_without_retrans
         next(
             i
             for i, event in enumerate(events)
-            if event == ("POST", "/repos/ydb-platform/ydb/git/refs")
+            if event == ("MODEL", ("verdict", "findings", "corrected_markdown"))
         )
         < next(
             i
             for i, event in enumerate(events)
-            if event == ("MODEL", ("verdict", "findings", "corrected_markdown"))
+            if event == ("POST", "/repos/ydb-platform/ydb/git/refs")
         )
         < next(
             i
@@ -354,7 +354,7 @@ def test_runtime_preserves_list_formatting_drift_through_critic() -> None:
     assert services.events.count(
         ("MODEL", ("verdict", "findings", "corrected_markdown"))
     ) == 1
-    assert services.events.count(("MODEL", ("verdict", "findings"))) == 1
+    assert services.events.count(("MODEL", ("verdict", "findings"))) == 0
     assert services.events.count(("REPAIR", "markdown")) == 0
 
 
@@ -1721,7 +1721,7 @@ def test_runtime_uses_deployed_ydb_service_account_and_defaults(monkeypatch):
     assert shutdowns == ["executor"]
 
 
-def test_model_repair_is_published_before_final_critic_and_only_then_pr():
+def test_critic_edit_is_validated_then_published_once_before_pr():
     from ydbdoc_review_ng.application import TranslateWorkflowInput
     from ydbdoc_review_ng.domain import GitSha
     from ydbdoc_review_ng.models import HttpResponse
@@ -1833,8 +1833,8 @@ def test_model_repair_is_published_before_final_critic_and_only_then_pr():
         if method in {"CRITIC", "REPAIR", "MODEL"}
         or (method == "POST" and path.endswith(("/git/commits", "/pulls")))
     ]
-    assert significant == ["MODEL", "commits", "CRITIC", "commits", "MODEL", "pulls"]
-    assert "Стоимость запуска: 0.04 RUB" in services.comments[0]["body"]
+    assert significant == ["MODEL", "CRITIC", "commits", "pulls"]
+    assert "Стоимость запуска: 0.03 RUB" in services.comments[0]["body"]
 
 
 def test_runtime_never_reports_green_after_branch_moves_during_critic():

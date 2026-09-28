@@ -318,8 +318,6 @@ class QualityReviewPort(Protocol):
         snapshot: ImmutableRunSnapshot,
         candidate: WorkflowCandidate,
         /,
-        *,
-        before_final_critic: Callable[[bytes], None] | None = None,
     ) -> QualityReviewResult: ...
 
 
@@ -416,30 +414,14 @@ class LinearWorkflows:
             )
             stage = WorkflowStage.VALIDATE
             self._content.validate_candidate(snapshot, candidate)
-            stage = WorkflowStage.PUBLISH
-            final_sha = self._publisher.publish(snapshot, candidate)
-            published_content = candidate.content
-            repair_published = False
             stage = WorkflowStage.REVIEW
-
-            def publish_repair(repaired_content: bytes) -> None:
-                nonlocal final_sha, repair_published, stage, published_content
-                if repair_published:
-                    raise ValueError("T011 review invoked the repair callback more than once")
-                repaired = WorkflowCandidate(repaired_content, candidate.review_context)
+            review = self._reviewer.review(snapshot, candidate)
+            reviewed = WorkflowCandidate(review.final_candidate, candidate.review_context)
+            if reviewed.content != candidate.content:
                 stage = WorkflowStage.VALIDATE
-                self._content.validate_candidate(snapshot, repaired)
-                stage = WorkflowStage.PUBLISH
-                final_sha = self._publisher.publish(snapshot, repaired)
-                published_content = repaired_content
-                repair_published = True
-                stage = WorkflowStage.REVIEW
-
-            review = self._reviewer.review(snapshot, candidate, before_final_critic=publish_repair)
-            if review.repair_applied is not repair_published:
-                raise ValueError("T011 review returned an inconsistent repair result")
-            if review.final_candidate != published_content:
-                raise ValueError("review candidate differs from the published candidate")
+                self._content.validate_candidate(snapshot, reviewed)
+            stage = WorkflowStage.PUBLISH
+            final_sha = self._publisher.publish(snapshot, reviewed)
             stage = WorkflowStage.REPORT
             self._reporter.update_current_pr(
                 mode=mode,
@@ -475,7 +457,9 @@ class LinearWorkflows:
                 )
                 with suppress(Exception):
                     self._persistence.close_checkpoint(checkpoint.continuation_id)
-            return WorkflowResult(job_id, mode, final_sha, review.final.verdict, repair_published)
+            return WorkflowResult(
+                job_id, mode, final_sha, review.final.verdict, review.repair_applied
+            )
         except SemanticCheckpointStop as stop:
             assert checkpoint is not None
             self._complete_semantic_handoff(
@@ -521,34 +505,14 @@ class LinearWorkflows:
             candidate = self._content.prepare_translation(snapshot)
             stage = WorkflowStage.VALIDATE
             self._content.validate_candidate(snapshot, candidate)
-            stage = WorkflowStage.PUBLISH
-            final_sha = self._publisher.publish(snapshot, candidate)
-            published_content = candidate.content
             stage = WorkflowStage.REVIEW
-            repair_published = False
-
-            def publish_repair(repaired_content: bytes) -> None:
-                nonlocal final_sha, repair_published, stage, published_content
-                if repair_published:
-                    raise ValueError("T011 review invoked the repair callback more than once")
-                repaired = WorkflowCandidate(repaired_content, candidate.review_context)
+            review = self._reviewer.review(snapshot, candidate)
+            reviewed = WorkflowCandidate(review.final_candidate, candidate.review_context)
+            if reviewed.content != candidate.content:
                 stage = WorkflowStage.VALIDATE
-                self._content.validate_candidate(snapshot, repaired)
-                stage = WorkflowStage.PUBLISH
-                final_sha = self._publisher.publish(snapshot, repaired)
-                published_content = repaired_content
-                repair_published = True
-                stage = WorkflowStage.REVIEW
-
-            review = self._reviewer.review(
-                snapshot,
-                candidate,
-                before_final_critic=publish_repair,
-            )
-            if review.repair_applied is not repair_published:
-                raise ValueError("T011 review returned an inconsistent repair result")
-            if review.final_candidate != published_content:
-                raise ValueError("review candidate differs from the published candidate")
+                self._content.validate_candidate(snapshot, reviewed)
+            stage = WorkflowStage.PUBLISH
+            final_sha = self._publisher.publish(snapshot, reviewed)
             stage = WorkflowStage.REPORT
             self._reporter.update_current_pr(
                 mode=mode,
@@ -604,31 +568,13 @@ class LinearWorkflows:
             final_sha = snapshot.target_sha
             if final_sha is None:
                 raise ValueError("doc_verify snapshot has no target SHA")
-            published_content = candidate.content
-            repair_published = False
-
-            def publish_repair(repaired_content: bytes) -> None:
-                nonlocal final_sha, repair_published, stage, published_content
-                if repair_published:
-                    raise ValueError("T011 review invoked the repair callback more than once")
-                repaired = WorkflowCandidate(repaired_content, candidate.review_context)
+            review = self._reviewer.review(snapshot, candidate)
+            reviewed = WorkflowCandidate(review.final_candidate, candidate.review_context)
+            if reviewed.content != candidate.content:
                 stage = WorkflowStage.VALIDATE
-                self._content.validate_candidate(snapshot, repaired)
-                stage = WorkflowStage.PUBLISH
-                final_sha = self._publisher.publish(snapshot, repaired)
-                published_content = repaired_content
-                repair_published = True
-                stage = WorkflowStage.REVIEW
-
-            review = self._reviewer.review(
-                snapshot,
-                candidate,
-                before_final_critic=publish_repair,
-            )
-            if review.repair_applied is not repair_published:
-                raise ValueError("T011 review returned an inconsistent repair result")
-            if review.final_candidate != published_content:
-                raise ValueError("review candidate differs from the published candidate")
+                self._content.validate_candidate(snapshot, reviewed)
+            stage = WorkflowStage.PUBLISH
+            final_sha = self._publisher.publish(snapshot, reviewed)
             stage = WorkflowStage.REPORT
             self._reporter.update_current_pr(
                 mode=mode,
