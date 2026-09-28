@@ -20,6 +20,8 @@ from ydbdoc_review_ng.reporting import CheckResult, Comment
 from ydbdoc_review_ng.trace import traced
 
 JsonTransport = Callable[[str, str, object], Any]
+_CONTENT_CACHE_MAX_ENTRIES = 4096
+_CONTENT_CACHE_MAX_BYTES = 16 * 1024 * 1024
 
 
 class RuntimeBoundaryError(SafeDiagnosticError):
@@ -153,6 +155,8 @@ class GitHubBackend:
         self.transport = transport
         self.source_pr: int | None = None
         self.source_sha: GitSha | None = None
+        self._content_cache: dict[tuple[SnapshotRef, RepoPath], bytes | None] = {}
+        self._content_cache_bytes = 0
 
     def request(self, method: str, path: str, payload: object = None) -> Any:
         return self.transport(method, self.prefix + path, payload)
@@ -230,6 +234,9 @@ class GitHubBackend:
     def read_bytes(self, snapshot: SnapshotRef, path: RepoPath, /) -> bytes | None:
         if snapshot.repository.value != self.repository:
             raise RuntimeBoundaryError("repository_mismatch")
+        key = (snapshot, path)
+        if key in self._content_cache:
+            return self._content_cache[key]
         data = self.request(
             "GET",
             "/contents/"
@@ -238,14 +245,25 @@ class GitHubBackend:
             + snapshot.commit_sha.value,
         )
         if data is None:
-            return None
-        if (
+            content = None
+        elif (
             not isinstance(data, dict)
             or data.get("type") != "file"
             or data.get("encoding") != "base64"
         ):
             raise RuntimeBoundaryError("unsupported_repository_object")
-        return base64.b64decode(data["content"])
+        else:
+            content = base64.b64decode(data["content"])
+        size = 0 if content is None else len(content)
+        # Scope/link/terminology reads repeatedly address the same immutable files.
+        # Do not cache branch heads, mutable API records, or failed requests.
+        if (
+            len(self._content_cache) < _CONTENT_CACHE_MAX_ENTRIES
+            and self._content_cache_bytes + size <= _CONTENT_CACHE_MAX_BYTES
+        ):
+            self._content_cache[key] = content
+            self._content_cache_bytes += size
+        return content
 
     def head(self, branch: str) -> GitSha | None:
         data = self.request("GET", "/git/ref/heads/" + urllib.parse.quote(branch, safe="/"))

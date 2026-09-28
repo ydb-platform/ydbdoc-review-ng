@@ -75,6 +75,7 @@ from ydbdoc_review_ng.quality import (
 from ydbdoc_review_ng.quality.repair import _derive_target_translations
 from ydbdoc_review_ng.reporting import ProbableDuplicate
 from ydbdoc_review_ng.repository import ResolvedRepositorySnapshots
+from ydbdoc_review_ng.runtime_assets import missing_assets
 from ydbdoc_review_ng.runtime_github import RuntimeBoundaryError
 from ydbdoc_review_ng.runtime_metadata import MetadataProducer, read_redirects
 from ydbdoc_review_ng.scope import (
@@ -892,6 +893,21 @@ class RuntimeContent:
                 )
             assert source is not None
             plan = build_markdown_plan(snapshots.source_snapshot, entry.pair.source_path, source)
+            for asset in missing_assets(
+                self.source.github,
+                snapshots.source_snapshot,
+                snapshots.translation_base_snapshot,
+                entry.pair.source_path,
+                entry.pair.target_path,
+                source,
+                plan,
+                files,
+            ):
+                if not translate and self.source.github.read_bytes(
+                    target_snapshot, asset.path
+                ) != asset.after:
+                    raise RuntimeBoundaryError("verification_asset_mismatch")
+                files[asset.path.value] = asset.after
             request = build_translation_request(source, plan)
             document = Document(entry, source, plan, request)
             documents.append(document)

@@ -1,3 +1,22 @@
+# Следующий дефект: ресурсы статей (2026-09-28)
+
+Commit `a45326e317163ab689e6837149a9c0d9f0bd551f` опубликован в main и v1.0.1.
+CI инструмента зелёный. Run `36383420279` перевёл все 10 документов, включая
+все 33 чанка glossary; коррекции и рекурсивное деление успешно восстановили
+невалидные ответы. После перевода build остановил публикацию: новые статьи
+optimization ссылаются на отсутствующие target SVG/PNG. Translation PR/branch
+не создан. Фактический source SHA: `0de6b19c1a686300cf556c58966ad39631ba6b44`.
+
+Read-only probe четырёх статей выявил 25 отсутствующих ресурсов суммарно
+1 287 445 bytes. Добавлен общий перенос parser-owned локальных image/download
+зависимостей из frozen source и проверки verify/continue. Для сокращения
+повторных GET добавлен ограниченный кэш immutable snapshot bytes.
+Требования обновлены. Release gate: 1922 passed, 3 deselected (130.01 s);
+Ruff, mypy (48 source files), diff-check, wheel/sdist и installed smoke
+translate/verify/continue прошли. Следующий шаг: main/tag и новый doc_translate.
+
+---
+
 # Отладка 2026-09-28 (в работе)
 
 Исходный main/tag v1.0.1: `0a64e34ba57c93968c1525ae3e3a039edb724e5a`.

@@ -148,3 +148,70 @@ def test_comment_ownership_uses_mutation_identity_while_comment_list_uses_read_t
             "Bearer read-token",
         ),
     ]
+
+
+def test_immutable_content_reads_are_cached_but_new_snapshots_are_read():
+    import base64
+
+    from ydbdoc_review_ng.domain import RepoPath, RepositoryId, SnapshotRef
+
+    calls = []
+    def transport(method, path, payload):
+        calls.append(path)
+        return {'type': 'file', 'encoding': 'base64', 'content': base64.b64encode(path.encode()).decode()}
+    backend = GitHubBackend(transport)
+    first = SnapshotRef(RepositoryId('ydb-platform/ydb'), GitSha('a' * 40))
+    second = SnapshotRef(first.repository, GitSha('b' * 40))
+    path = RepoPath('ydb/docs/ru/core/page.md')
+    before = backend.read_bytes(first, path)
+    assert backend.read_bytes(first, path) == before
+    assert len(calls) == 1
+    assert backend.read_bytes(second, path) != before
+    assert len(calls) == 2
+
+
+def test_immutable_missing_content_is_cached_but_transport_errors_are_not():
+    from ydbdoc_review_ng.domain import RepoPath, RepositoryId, SnapshotRef
+
+    calls = []
+    def transport(method, path, payload):
+        calls.append(path)
+        if len(calls) == 1:
+            raise RuntimeBoundaryError('temporary_failure')
+    backend = GitHubBackend(transport)
+    snapshot = SnapshotRef(RepositoryId('ydb-platform/ydb'), GitSha('a' * 40))
+    path = RepoPath('ydb/docs/ru/core/missing.md')
+    with pytest.raises(RuntimeBoundaryError):
+        backend.read_bytes(snapshot, path)
+    assert backend.read_bytes(snapshot, path) is None
+    assert backend.read_bytes(snapshot, path) is None
+    assert len(calls) == 2
+
+
+def test_branch_heads_are_never_cached():
+    calls = []
+    def transport(method, path, payload):
+        calls.append(path)
+        return {'object': {'sha': ('a' if len(calls) == 1 else 'b') * 40}}
+    backend = GitHubBackend(transport)
+    assert backend.head('translation/pr-42') != backend.head('translation/pr-42')
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize('budget', ['_CONTENT_CACHE_MAX_ENTRIES', '_CONTENT_CACHE_MAX_BYTES'])
+def test_content_cache_stops_admitting_entries_at_budget(monkeypatch, budget):
+    import base64
+
+    from ydbdoc_review_ng import runtime_github
+    from ydbdoc_review_ng.domain import RepoPath, RepositoryId, SnapshotRef
+    monkeypatch.setattr(runtime_github, budget, 0)
+    calls = []
+    def transport(method, path, payload):
+        calls.append(path)
+        return {'type': 'file', 'encoding': 'base64', 'content': base64.b64encode(b'content').decode()}
+    backend = GitHubBackend(transport)
+    snapshot = SnapshotRef(RepositoryId('ydb-platform/ydb'), GitSha('a' * 40))
+    path = RepoPath('page.md')
+    assert backend.read_bytes(snapshot, path) == b'content'
+    assert backend.read_bytes(snapshot, path) == b'content'
+    assert len(calls) == 2

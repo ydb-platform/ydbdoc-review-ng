@@ -91,3 +91,14 @@ semantic stop наследует первоначальный expiry. Infrastruc
 находится в `docs/examples/doc_continue.yml`; repo-local dispatch workflows
 не подписаны на labels чужого репозитория. Реальное подключение consumer и
 публикация release tag выполняются отдельно после финальной приёмки.
+
+## Зависимые ресурсы и чтение snapshot
+
+`runtime_assets.missing_assets` использует parser-owned link/image destinations,
+добавляет отсутствующие симметричные изображения/PDF в fixed_files и сохраняет
+существующую target-локализацию. Новые bytes берутся только из source snapshot;
+verify и continuation повторно вычисляют этот набор от pinned base. Модель не
+обрабатывает бинарные ресурсы. Лимит: 100 файлов и 20 MiB на candidate.
+
+GitHubBackend кэширует только успешное чтение bytes/отсутствия по immutable
+snapshot/path (4096 записей, 16 MiB). Ошибки и текущие heads не кэшируются.
