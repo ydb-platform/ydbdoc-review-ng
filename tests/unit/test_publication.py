@@ -793,4 +793,31 @@ def test_readiness_requires_both_success_on_exact_current_head(checks, status, w
     report = render_report(review(), COMMIT, ReportContext(SOURCE, TARGET, None), checks)
     assert report.startswith(f"{icon} {status}")
     if status == "YELLOW":
-        assert "После завершения проверок повторно запустите `doc_verify`" in report
+        assert "### Почему YELLOW" in report
+        assert "Арбитр не нашёл блокирующих ошибок" in report
+        assert "поставьте label `doc_verify`" in report
+        assert "`doc_continue` сейчас не требуется" in report
+        assert "не запускалась" not in report
+
+
+def test_readiness_yellow_explains_quality_and_next_action_instead_of_raw_snapshot():
+    report = render_report(
+        review(),
+        COMMIT,
+        ReportContext(SOURCE, TARGET, Decimal("41.5072"), source_pr_number=50839),
+        (),
+    )
+
+    assert report == (
+        "🟡 YELLOW\n"
+        "Стоимость запуска: 41.5072 RUB\n"
+        "Перевод PR #50839\n"
+        "### Почему YELLOW\n"
+        "Арбитр не нашёл блокирующих ошибок в переводе, но обязательные "
+        "CI-проверки текущего коммита ещё не подтвердили готовность к слиянию.\n"
+        "### Что делать\n"
+        "Дождитесь завершения `build-docs`, затем поставьте label `doc_verify`. "
+        "Он проверит текущий коммит и обновит этот вердикт.\n"
+        "`doc_continue` сейчас не требуется: он используется только когда "
+        "в отчёте перечислены замечания арбитра и сохранён checkpoint."
+    )

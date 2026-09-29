@@ -190,3 +190,13 @@ critic pass reuses each exact validated translator chunk pair contained in that
 excerpt through a flat `corrected_markdown`-only schema. The translated target
 is never split proportionally to source block lengths and fallback units are
 never split recursively.
+
+## Public readiness report (2026-09-29)
+
+A readiness `YELLOW` is not an arbiter finding. The public report explicitly
+states that semantic review found no blocking translation defects and that
+required CI has not yet confirmed merge readiness. It does not expose a raw
+snapshot such as `check not started`. The actionable next step is to wait for
+`build-docs` and apply the `doc_verify` label. `doc_continue` is offered only
+for a semantic RED that has a durable continuation checkpoint; it cannot be
+truthfully offered for a readiness-only YELLOW.
