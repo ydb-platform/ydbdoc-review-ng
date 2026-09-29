@@ -47,12 +47,18 @@ def test_pending_cli_continuation_reuses_green_map_and_source_only_protected_byt
         tree[EN + "a.md"] = b"# Poison\n```sql\nDROP TABLE t;\n```\n"
     old = services.stop_and_continue()
     assert invoke(services) == 0
-    assert services.roles == ["translate", "critic", "critic"]
+    assert services.roles == [
+        "translate", "critic", "arbiter", "critic", "arbiter"
+    ]
     assert services.files[EN + "a.md"] == b"# Translated\n" + protected
     assert services.files[EN + "b.md"] == b"# Resumed b\n"
     assert services.rows[old.continuation_id]["status"] == "closed"
     assert CONTEXT in services.prompts[0][1]
-    assert all(CONTEXT not in prompt for role, prompt in services.prompts if role == "critic")
+    assert all(
+        CONTEXT not in prompt
+        for role, prompt in services.prompts
+        if role in {"critic", "arbiter"}
+    )
     assert not any("SUM" in query for query, _ in services.operations)
     job = list(services.jobs.values())[-1]
     assert job["mode"] == "doc_continue" and job["status"] == "succeeded"
@@ -66,12 +72,13 @@ def test_review_cli_repairs_only_unresolved_path_then_updates_one_verdict(capsys
     old = services.checkpoint()
     services.outcomes = {EN + "b.md": ["repair"]}
     assert invoke(services, 43) == 0
-    assert services.roles == ["critic"]
+    assert services.roles == ["critic", "arbiter"]
     assert {path for _, path, _ in services.calls} == {EN + "b.md"}
     assert services.files[EN + "a.md"] == green
     assert services.files[EN + "b.md"] == b"# Repaired b\n\nTranslated\n"
     assert services.timeline == [
         "critic",
+        "arbiter",
         "commit",
         "push",
         "report",

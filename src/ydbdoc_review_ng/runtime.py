@@ -59,6 +59,9 @@ from ydbdoc_review_ng.runtime_ydb import DEFAULT_YDB_DATABASE, DEFAULT_YDB_ENDPO
 from ydbdoc_review_ng.trace import traced, write_trace
 
 _YANDEXGPT_5_1_TOKEN_RUB = Decimal("0.0012")
+_DEEPSEEK_V4_INPUT_TOKEN_RUB = Decimal("0.0003")
+_DEEPSEEK_V4_CACHED_INPUT_TOKEN_RUB = Decimal("0.000075")
+_DEEPSEEK_V4_OUTPUT_TOKEN_RUB = Decimal("0.0005")
 _PRODUCTION_PRICING = PerModelPricing(
     {
         "yandexgpt-5.1": ModelTokenPrice(
@@ -70,6 +73,18 @@ _PRODUCTION_PRICING = PerModelPricing(
             _YANDEXGPT_5_1_TOKEN_RUB,
             _YANDEXGPT_5_1_TOKEN_RUB,
             _YANDEXGPT_5_1_TOKEN_RUB,
+        ),
+        "deepseek-v4-flash": ModelTokenPrice(
+            _DEEPSEEK_V4_INPUT_TOKEN_RUB,
+            _DEEPSEEK_V4_OUTPUT_TOKEN_RUB,
+            Decimal(0),
+            _DEEPSEEK_V4_CACHED_INPUT_TOKEN_RUB,
+        ),
+        "deepseek-v4-flash/latest": ModelTokenPrice(
+            _DEEPSEEK_V4_INPUT_TOKEN_RUB,
+            _DEEPSEEK_V4_OUTPUT_TOKEN_RUB,
+            Decimal(0),
+            _DEEPSEEK_V4_CACHED_INPUT_TOKEN_RUB,
         ),
     }
 )

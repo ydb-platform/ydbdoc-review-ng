@@ -13,9 +13,10 @@
   `.github/workflows/model-contract-probe.yml`; если model secrets доступны
   только consumer-репозиторию, на исходный PR временно ставится
   `doc_model_probe`, после чего штатный `doc_translate` выполняет лишь probe.
-  Он проверяет синтетическим, не содержащим документацию запросом реальный
-  alternate provider и плоский ответ `corrected_markdown`; offline suite не
-  доказывает cross-provider совместимость.
+  Он проверяет синтетическими, не содержащими документацию запросами реальный
+  alternate provider и плоский ответ `corrected_markdown`, основной
+  critic-editor с фактической коррекцией и независимый read-only arbiter;
+  offline suite не доказывает cross-provider совместимость.
 
 ## Независимая приёмка
 

@@ -1,3 +1,36 @@
+# Three-stage translation, editor and arbiter contract (2026-09-29)
+
+The quality path is exactly translator → critic-editor → independent read-only
+arbiter. The editor returns the complete ready Markdown excerpt in one semantic
+call; its findings are audit diagnostics and are never sent back for another
+edit. The arbiter uses the translator model by default, sees the same source,
+edited target and protected-fragment mapping, and alone returns the public
+GREEN/RED findings. RED never starts model ping-pong. Public reporting lists all
+arbiter findings for every shown file instead of hiding all but the first.
+`YDBDOC_MODEL_ARBITER` can explicitly select a third model. No paid translation
+run is allowed before the complete offline gate and real-provider contract probe.
+
+The 146,078-byte production glossary was independently replayed through this
+exact orchestration without network calls: 24 bounded translator chunks were
+packed into 7 critic-editor calls and then 7 arbiter calls; the largest prompt
+was 41,736 characters under the 48,000-character limit, all 14 review calls saw
+the protected-fragment mapping, round-trip assembly was byte-identical, and the
+final verdict was GREEN. A dedicated regression reproduces the observed
+`compute nodes and compute nodes` defect and proves that the editor removes the
+duplicate before the arbiter receives the corrected chunk. The live model
+contract probe now checks the alternate editor, the primary critic-editor's
+actual correction, and the independent arbiter's read-only GREEN response; the
+obsolete targeted second edit call was removed from the probe as well as the
+runtime.
+
+The earlier unknown total was caused by a concrete pricing gap: production had
+token prices only for YandexGPT, so every otherwise successful DeepSeek attempt
+stored `cost_rub = NULL` and poisoned the current-job total. DeepSeek V4 Flash
+now uses the published 2026-09-29 rates (0.3 RUB/1000 input, 0.075 RUB/1000
+cached input, 0.5 RUB/1000 output), with cached tokens read from provider usage.
+An ordinary response is therefore fully accumulated; unknown remains honest
+only for an attempt with neither billable cost nor sufficient usage.
+
 # Live fallback contract failure after independent replay (2026-09-28)
 
 Full run `36485186895` proved the fallback repair in production: YandexGPT

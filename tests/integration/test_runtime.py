@@ -149,15 +149,16 @@ def test_shipped_composition_translates_then_verifies_current_pr_without_retrans
         == 0
     )
     assert [event for event in services.events if event[0] == "MODEL"] == [
-        ("MODEL", ("findings", "corrected_markdown"))
+        ("MODEL", ("findings", "corrected_markdown")),
+        ("MODEL", ("verdict", "findings")),
     ]
     assert not any(
         "/git/" in path and method in {"POST", "PATCH"} for method, path in services.events
     )
     assert len(services.comments) == 1
     assert (
-        sum(row.get("status") == "succeeded" for row in services.audit) == 5
-    )  # two jobs, three model attempts
+        sum(row.get("status") == "succeeded" for row in services.audit) == 7
+    )  # two jobs plus five model attempts
 
 
 def test_runtime_publishes_field_local_inline_code_grammar_order_once() -> None:
@@ -350,7 +351,7 @@ def test_runtime_preserves_list_formatting_drift_through_critic() -> None:
     assert services.events.count(
         ("MODEL", ("findings", "corrected_markdown"))
     ) == 1
-    assert services.events.count(("MODEL", ("verdict", "findings"))) == 0
+    assert services.events.count(("MODEL", ("verdict", "findings"))) == 1
     assert services.events.count(("REPAIR", "markdown")) == 0
 
 
@@ -1173,6 +1174,8 @@ class _T017N04Services(RuntimeServices):
             values = {"page.md": "ru_to_en"}
         elif "findings" in properties:
             values = {"findings": []}
+            if "verdict" in properties:
+                values["verdict"] = "GREEN"
             if "corrected_markdown" in properties:
                 prompt = request_prompt(body)
                 values["corrected_markdown"] = prompt.split(
@@ -1284,7 +1287,8 @@ def test_t017_n04_real_verify_reviews_escaped_quoted_frontmatter() -> None:
 
     assert result == 0
     assert [event for event in services.events if event[0] == "MODEL"] == [
-        ("MODEL", ("findings", "corrected_markdown"))
+        ("MODEL", ("findings", "corrected_markdown")),
+        ("MODEL", ("verdict", "findings")),
     ]
     assert services.comments[0]["body"].startswith("🟢 GREEN\n")
 
@@ -1596,7 +1600,7 @@ def test_runtime_canonical_file_operations_have_shipped_producer(operation):
     result = runtime.doc_translate(TranslateWorkflowInput(42, GitSha(services.source), Decimal(10)))
     assert result.final_commit_sha == GitSha(services.translated)
     model_calls = [event for event in services.events if event[0] == "MODEL"]
-    assert len(model_calls) == {"added": 2, "removed": 0, "renamed": 1}[operation]
+    assert len(model_calls) == {"added": 3, "removed": 0, "renamed": 2}[operation]
     assert len(services.comments) == 1
 
 
@@ -1824,8 +1828,8 @@ def test_critic_edit_is_validated_then_published_once_before_pr():
         if method in {"CRITIC", "REPAIR", "MODEL"}
         or (method == "POST" and path.endswith(("/git/commits", "/pulls")))
     ]
-    assert significant == ["MODEL", "CRITIC", "commits", "pulls"]
-    assert "Стоимость запуска: 0.03 RUB" in services.comments[0]["body"]
+    assert significant == ["MODEL", "CRITIC", "MODEL", "commits", "pulls"]
+    assert "Стоимость запуска: 0.04 RUB" in services.comments[0]["body"]
 
 
 def test_runtime_never_reports_green_after_branch_moves_during_critic():

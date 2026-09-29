@@ -168,17 +168,15 @@ excerpt. Packing набирает максимально крупные excerpts
 не режется эвристически, fallback chunks не делятся повторно, успешные соседние
 excerpts не повторяются.
 Полный большой target не повторяется в каждом prompt, чтобы critic не терял
-соответствующий фрагмент среди нерелевантных разделов. RED любого excerpt делает
-общий verdict RED, findings
-объединяются без повторов. В том же ответе critic-editor возвращает полный
+соответствующий фрагмент среди нерелевантных разделов. В том же ответе
+critic-editor возвращает полный
 `corrected_markdown`; при отсутствии findings он обязан точно повторить target.
 Контракт намеренно минимален: finding содержит только `reason`,
 `searchable_snippet` и `expected_correction`. Verdict выводится из наличия
 findings, path известен локально, line вычисляется по snippet; `repairable` и
-field IDs отсутствуют. Валидное изменённое исправление закрывает findings. Если
-при findings текст не изменился, тот же critic получает один адресный edit-call
-со своими диагнозами, без новой критики; отсутствующее, невалидное или снова
-неизменное исправление оставляет RED. Schema-invalid ответ с
+field IDs отсутствуют. Findings редактора являются audit-диагностикой, но не
+пользовательским verdict. Редактор получает ровно один semantic call и обязан в
+нём вернуть готовый чанк; его findings не отправляются ему повторно. Schema-invalid ответ с
 HTTP 200 получает один технический повтор с причиной parser-а, без semantic loop.
 Provider `non_final`/truncated также повторяется ровно один раз тем же запросом;
 это bounded transport recovery, а не новая критика.
@@ -186,8 +184,15 @@ Provider `non_final`/truncated также повторяется ровно од
 protected fragments, локальные validators и полный Diplodoc build итогового
 candidate, даже если critic не изменил bytes. Лишние пробелы после list marker
 нормализуются детерминированно вне fenced/indented code, без model call. Все
-документы публикуются одним commit. Final critic и следующие
-semantic repair attempts отсутствуют.
+документы публикуются одним commit. После редактора независимый read-only
+arbiter на модели переводчика получает ту же пару authoritative source → готовый
+target. Только findings arbiter формируют пользовательский GREEN/RED. RED не
+запускает новый semantic repair.
+
+Защищённые фрагменты остаются placeholders в редактируемом тексте, но редактор и
+arbiter получают точное отображение каждого token на исходный код, команду, URL
+или идентификатор. Они видят полное техническое содержание, не получая права
+изменить source-owned bytes.
 
 Технический transport retry может быть bounded, но не превращается в
 сохраняемую state machine или механизм продолжения.

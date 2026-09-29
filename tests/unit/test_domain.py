@@ -74,6 +74,7 @@ ENUM_EXPECTATIONS = {
         "CRITIC": "critic",
         "REPAIR": "repair",
         "FINAL_CRITIC": "final_critic",
+        "ARBITER": "arbiter",
     },
     Severity: {"GREEN": "green", "YELLOW": "yellow", "RED": "red"},
     PublicationDecision: {

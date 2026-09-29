@@ -212,14 +212,18 @@ class CaptureServices(RuntimeServices):
                 "corrected_markdown": raw_repair_context(prompt, "final-target")
             }
         elif "findings" in schema["properties"]:
-            role = "critic"
-            self.critics += 1
             editable = "corrected_markdown" in schema["properties"]
+            role = "critic" if editable else "arbiter"
+            if editable:
+                self.critics += 1
             path = prompt.split("Target path: ", 1)[1].split("\n", 1)[0]
             red = (
                 self.stop == "rename_red"
                 or self.stop == "review"
-                and (path.endswith("/b.md") or self.critics == 1)
+                and (
+                    editable and (path.endswith("/b.md") or self.critics == 1)
+                    or not editable and path.endswith("/b.md")
+                )
             )
             values = {"findings": []}
             if red:
@@ -241,6 +245,16 @@ class CaptureServices(RuntimeServices):
                 if self.failure == "repair" and red and repairable:
                     self.roles.append(role)
                     raise TimeoutError("transport failed")
+            else:
+                values["verdict"] = "RED" if red else "GREEN"
+                for finding in values["findings"]:
+                    finding.update(
+                        {
+                            "repairable": False,
+                            "target_path": path,
+                            "target_line": 1,
+                        }
+                    )
         elif prompt.startswith("Compare"):
             role = "direction"
             schema = schema_wrapper["schema"]
@@ -248,7 +262,7 @@ class CaptureServices(RuntimeServices):
         else:
             raise AssertionError("unexpected structured model role")
         self.roles.append(role)
-        if self.failure == role or self.failure == "final_critic" and self.critics == 2:
+        if self.failure == role:
             raise TimeoutError("transport failed")
         if role not in {"translate", "repair"} and schema_wrapper is not None:
             text = json.dumps(values)
@@ -431,7 +445,7 @@ def test_red_pure_rename_replays_whole_counterpart_as_a_complete_document():
     content = RuntimeContent(source, None, ENV)
     replay = replay_continue(content, checkpoint)
     assert replay.accepted_documents == checkpoint.state.accepted_documents
-    assert services.roles == ["critic", "critic"]
+    assert services.roles == ["critic", "arbiter"]
     with pytest.raises(PersistenceError, match="scope selection"):
         replay_continue(
             content,
@@ -566,7 +580,7 @@ def test_red_without_a_published_current_verdict_never_opens_checkpoint():
         "direction",
         "translate",
         "critic",
-        "final_critic",
+        "arbiter",
         "repair",
         "attempt",
         "validation",

@@ -135,6 +135,7 @@ def build_critic_request(
     operator_context: str | None = None,
     editable: bool = False,
     terminology_context: str | None = None,
+    protected_fragments: tuple[tuple[str, str], ...] = (),
 ) -> ModelRequest:
     if type(source) is not bytes or type(target) is not bytes:
         raise TypeError("source and target must be exact bytes")
@@ -211,7 +212,12 @@ def build_critic_request(
         "Check full meaning and accuracy, completeness, terminology, untranslated user-facing "
         "prose, and the purpose and workability of links in context. Do not rewrite URLs or "
         "paths, and do not implement or request a navigation resolver. Return only the strict "
-        "JSON result. Write reason and expected_correction in Russian so the public PR comment "
+        "JSON result. In glossary alias lists, a source-language term and an already supplied "
+        "target-language alias may translate to the same target term: keep that term once, do "
+        "not require one target occurrence per source alias, and treat a repeated identical "
+        "target alias as a defect. Never claim that an alias is missing when its exact term is "
+        "already present in the current target. "
+        "Write reason and expected_correction in Russian so the public PR comment "
         "is immediately understandable to the documentation author. "
         f"{field_list_instruction}"
         f"{field_ids_instruction}"
@@ -224,6 +230,15 @@ def build_critic_request(
         f"{target_text}"
         "</final-target>"
     )
+    if protected_fragments:
+        prompt += (
+            "\n<protected-fragments>\n"
+            + json.dumps(dict(protected_fragments), ensure_ascii=False)
+            + "\n</protected-fragments>\n"
+            + "The mapping restores the exact code, commands, links, and identifiers behind "
+            + "every placeholder. Use it while reviewing meaning, but preserve the placeholder "
+            + "tokens unchanged in corrected_markdown."
+        )
     if operator_context is not None:
         prompt += "\n<operator-context>\n" + operator_context + "</operator-context>"
     if terminology_context:
@@ -232,7 +247,7 @@ def build_critic_request(
             + terminology_context
             + "\n</project-glossary>\nUse these target-language terms when judging or correcting."
         )
-    role = ModelRole.FINAL_CRITIC if final else ModelRole.CRITIC
+    role = ModelRole.ARBITER if final else ModelRole.CRITIC
     schema = cast(FrozenJson, critic_schema(target_path, requested_ids, editable=editable))
     return ModelRequest(
         role,

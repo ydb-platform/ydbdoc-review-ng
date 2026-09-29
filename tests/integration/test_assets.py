@@ -19,7 +19,7 @@ def test_translate_publishes_asset_and_verify_checks_source_owned_bytes(damage):
     services.translate()
     assert services.files[target_asset] == content
     assert target_asset in services.snapshots[services.translated]
-    assert services.roles == ['translate', 'critic']
+    assert services.roles == ['translate', 'critic', 'arbiter']
     services.roles.clear()
     if damage is not None:
         if damage == 'delete':
@@ -29,7 +29,7 @@ def test_translate_publishes_asset_and_verify_checks_source_owned_bytes(damage):
     request = VerifyWorkflowInput(43, GitSha(services.source), GitSha(services.translated))
     if damage is None:
         services.runtime().doc_verify(request)
-        assert services.roles == ['critic']
+        assert services.roles == ['critic', 'arbiter']
     else:
         with pytest.raises(WorkflowError):
             services.runtime().doc_verify(request)

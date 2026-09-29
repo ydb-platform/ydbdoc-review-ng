@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-from typing import cast
 
 from ydbdoc_review_ng.domain import Locale, RepoPath
 from ydbdoc_review_ng.models import (
@@ -16,13 +15,13 @@ from ydbdoc_review_ng.models import (
     YandexCredentials,
     YandexOpenAIClient,
 )
-from ydbdoc_review_ng.models.types import FrozenJson, mutable_json
 from ydbdoc_review_ng.quality.critic import (
     CriticResponseError,
     build_critic_request,
     parse_critic_response,
 )
 from ydbdoc_review_ng.quality.repair import _fallback_editor_request
+from ydbdoc_review_ng.quality.types import CriticResult
 
 _DIAGNOSTIC_SOURCE = (
     "**Группа хранения**, **группа распределённого хранилища** или "
@@ -32,32 +31,6 @@ _DIAGNOSTIC_TARGET = (
     b"**Storage group**, **distributed storage group**, **storage group**, or "
     b"**Blob storage group** is a place for reliable data storage."
 )
-
-
-def _targeted_probe_request(primary: ModelRequest) -> ModelRequest:
-    targeted = _fallback_editor_request(primary, primary.model)
-    return ModelRequest(
-        targeted.role,
-        targeted.model,
-        targeted.prompt
-        + "\n\nMandatory unresolved edits:\n"
-        + json.dumps(
-            [
-                {
-                    "reason": "The alias storage group is duplicated.",
-                    "searchable_snippet": "Storage group, distributed storage group, "
-                    "storage group, or Blob storage group",
-                    "expected_correction": "Remove the duplicate storage group alias.",
-                }
-            ]
-        )
-        + "\nApply every expected_correction and return changed corrected_markdown.",
-        None
-        if targeted.schema is None
-        else cast(FrozenJson, mutable_json(targeted.schema)),
-        targeted.max_tokens,
-        targeted.target_path,
-    )
 
 
 def _diagnostic_probe_request(model: str) -> ModelRequest:
@@ -75,14 +48,38 @@ def _diagnostic_probe_request(model: str) -> ModelRequest:
     )
 
 
-def _parse_diagnostic_probe_response(raw: str) -> None:
-    parse_critic_response(
+def _parse_diagnostic_probe_response(raw: str) -> CriticResult:
+    return parse_critic_response(
         raw,
         target_path=RepoPath("ydb/docs/en/probe.md"),
         requested_ids=(),
         editable=True,
         current_target=_DIAGNOSTIC_TARGET.decode(),
     )
+
+
+def _arbiter_probe_request(model: str, corrected: str) -> ModelRequest:
+    return build_critic_request(
+        model=model,
+        source=_DIAGNOSTIC_SOURCE,
+        target=corrected.encode(),
+        target_path=RepoPath("ydb/docs/en/probe.md"),
+        source_locale=Locale.RU,
+        target_locale=Locale.EN,
+        requested_ids=(),
+        final=True,
+        source_is_excerpt=True,
+        target_is_excerpt=True,
+    )
+
+
+def _client(
+    model: str,
+    credentials: YandexCredentials,
+    attempts: list[AttemptResult],
+) -> NativeYandexClient | YandexOpenAIClient:
+    client_type = YandexOpenAIClient if "deepseek" in model.lower() else NativeYandexClient
+    return client_type(credentials, UrllibTransport(), attempts.append)
 
 
 def _failure_summary(result: ModelCallResult) -> str:
@@ -169,41 +166,57 @@ def main() -> int:
         print("structured critic probe failed: model call;", _failure_summary(primary_result))
         return 1
     try:
-        _parse_diagnostic_probe_response(primary_result.text)
+        editor_result = _parse_diagnostic_probe_response(primary_result.text)
     except CriticResponseError as error:
         print(f"structured critic probe failed: response contract ({error.reason.value})")
         return 1
-    print("structured critic probe passed")
+    corrected = editor_result.corrected_markdown
+    if (
+        corrected is None
+        or corrected == _DIAGNOSTIC_TARGET.decode()
+        or corrected.lower().count("**storage group**") != 1
+    ):
+        print("structured critic probe failed: editor did not correct the duplicate alias")
+        return 1
+    print("structured critic-editor probe passed")
     primary_usage = primary_result.attempts[-1].usage
-    targeted = _targeted_probe_request(diagnostic_primary)
-    targeted_attempts: list[AttemptResult] = []
-    targeted_result = NativeYandexClient(
+    arbiter_model = os.environ.get("YDBDOC_MODEL_ARBITER") or os.environ.get(
+        "YDBDOC_MODEL"
+    ) or "deepseek-v4-flash"
+    arbiter = _arbiter_probe_request(arbiter_model, corrected)
+    arbiter_attempts: list[AttemptResult] = []
+    arbiter_result = _client(
+        arbiter_model,
         YandexCredentials(api_key, folder_id),
-        UrllibTransport(),
-        targeted_attempts.append,
-    ).invoke(targeted)
-    if not targeted_result.success or targeted_result.text is None:
-        print("targeted editor probe failed: model call;", _failure_summary(targeted_result))
+        arbiter_attempts,
+    ).invoke(arbiter)
+    if not arbiter_result.success or arbiter_result.text is None:
+        print("arbiter probe failed: model call;", _failure_summary(arbiter_result))
         return 1
     try:
-        targeted_payload = json.loads(targeted_result.text)
-    except json.JSONDecodeError:
-        print("targeted editor probe failed: malformed JSON")
+        arbiter_review = parse_critic_response(
+            arbiter_result.text,
+            target_path=RepoPath("ydb/docs/en/probe.md"),
+            requested_ids=(),
+            editable=False,
+            current_target=corrected,
+        )
+    except CriticResponseError as error:
+        print(f"arbiter probe failed: response contract ({error.reason.value})")
         return 1
-    corrected = targeted_payload.get("corrected_markdown")
-    if type(corrected) is not str or corrected == _DIAGNOSTIC_TARGET.decode():
-        print("targeted editor probe failed: unchanged correction")
+    if arbiter_review.verdict.value != "GREEN":
+        print("arbiter probe failed: corrected translation was rejected")
         return 1
-    targeted_usage = targeted_result.attempts[-1].usage
+    arbiter_usage = arbiter_result.attempts[-1].usage
     print(
-        "critic fallback and targeted editor probes passed;",
+        "critic fallback, critic-editor, and independent arbiter probes passed;",
         f"prompt_characters={len(request.prompt)};",
         f"input_tokens={usage.input_tokens};",
         f"output_tokens={usage.output_tokens};",
         f"primary_input_tokens={primary_usage.input_tokens};",
         f"primary_output_tokens={primary_usage.output_tokens};",
-        f"targeted_input_tokens={targeted_usage.input_tokens};",
-        f"targeted_output_tokens={targeted_usage.output_tokens}",
+        f"arbiter_input_tokens={arbiter_usage.input_tokens};",
+        f"arbiter_output_tokens={arbiter_usage.output_tokens}",
     )
     return 0
 

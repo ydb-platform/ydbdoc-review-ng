@@ -215,7 +215,7 @@ def test_translation_uses_deepseek_primary_and_yandex_fallback() -> None:
     ]
 
 
-def test_critic_fallback_defaults_to_translator_and_is_overridable() -> None:
+def test_critic_fallback_and_arbiter_models_are_independently_overridable() -> None:
     default = content_with(EchoChunkModels())
     explicit = content_with(
         EchoChunkModels(),
@@ -223,12 +223,15 @@ def test_critic_fallback_defaults_to_translator_and_is_overridable() -> None:
             "YDBDOC_MODEL": "translator-model",
             "YDBDOC_MODEL_CRITIC": "critic-model",
             "YDBDOC_MODEL_CRITIC_FALLBACK": "other-critic-model",
+            "YDBDOC_MODEL_ARBITER": "arbiter-model",
         },
     )
 
     assert default.critic_fallback_model == default.model
+    assert default.arbiter_model == default.model
     assert explicit.critic_model == "critic-model"
     assert explicit.critic_fallback_model == "other-critic-model"
+    assert explicit.arbiter_model == "arbiter-model"
 
 
 def test_document_assembly_trace_contains_failing_stage_and_reason(monkeypatch) -> None:

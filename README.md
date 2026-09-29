@@ -10,7 +10,8 @@
 реализацией production-конвейера.
 
 Реализованы parser, проверка ответов моделей и protected fragments,
-critic-editor с одним проходом на документ, полный build только после редактора,
+critic-editor с одним проходом на документ, независимый read-only arbiter,
+полный build только после редактора и арбитра,
 audit/budget adapters, линейная
 оркестрация и единственная публикация финального candidate
 через внедряемые backend-ы. Поставляемый production factory

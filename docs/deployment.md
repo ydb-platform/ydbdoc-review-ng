@@ -16,6 +16,7 @@ and `ydb_executor`. No separate deployment Python module must be authored.
 | `YANDEX_API_KEY`, `YANDEX_FOLDER_ID` | Native Yandex model credentials. |
 | `YDBDOC_MODEL` | Optional translation model name, default `deepseek-v4-flash`. DeepSeek uses the Yandex Cloud OpenAI-compatible endpoint. |
 | `YDBDOC_MODEL_CRITIC` | Semantic critic-editor, default `yandexgpt-5.1`, independently selected from the translator. |
+| `YDBDOC_MODEL_ARBITER` | Independent read-only arbiter, default `YDBDOC_MODEL`. Only its findings define GREEN/RED. |
 | `YDBDOC_MODEL_CRITIC_FALLBACK` | One bounded fallback pass after an exhausted content filter; defaults to `YDBDOC_MODEL`, receives the exact validated translator chunk pairs inside the filtered excerpt and returns flat `corrected_markdown` objects. |
 | `YDBDOC_MAX_CRITIC_REQUEST_CHARACTERS` | Critic-editor request limit, default `48000`; independent from the smaller translator limit. |
 | `YDBDOC_MODEL_FALLBACK` | Optional fallback model name, default `yandexgpt-5.1`. Used when the primary model returns a provider failure or content filter. |
@@ -33,7 +34,10 @@ printed or included in comments. Every model attempt is persisted. Explicit
 billable cost is retained; unavailable cost is NULL, not fabricated zero.
 Current-job cost is unknown if any attempt cost is unknown. The daily budget
 uses all known costs across all three modes and all roles.
-Translate and critic-editor attempts also retain their article
+DeepSeek V4 Flash responses are priced from provider usage at the published
+rates (0.3 RUB/1000 input, 0.075 RUB/1000 cached input, 0.5 RUB/1000 output),
+so an ordinary DeepSeek response has a numeric cost. Translate, critic-editor,
+and arbiter attempts also retain their article
 `target_path`; direction remains PR-wide. The QA comment reads cumulative costs
 for the pinned `source_sha`, breaks them down by article and role, and lists old
 rows without a path as unattributed. Unknown and not-called costs are never
@@ -67,7 +71,8 @@ model calls and audit, never the report. RED exits 1 in every CLI mode.
 
 The runtime composes pair discovery, one mixed-direction decision, dependency
 scope/preflight, parser, strict translation, protected-fragment checks, and one
-critic-editor pass per document or excerpt. All valid edits are collected before
+critic-editor pass and one independent arbiter pass per document or excerpt.
+The arbiter never edits or starts another semantic loop. All valid edits are collected before
 one strict candidate build and one guarded publication. The draft is not fully
 built before the critic-editor; only local structural checks and safe Markdown
 normalization run there. Validated bytes become Git Data blobs/tree/commit and a

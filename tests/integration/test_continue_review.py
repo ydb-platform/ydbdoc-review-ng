@@ -35,6 +35,7 @@ class ReviewServices(LifecycleServices):
         self.move_after = None
         self.waiting_ci = False
         self.move_during_report = False
+        self.arbiter_outcomes = {}
         for tree in [self.files, *self.snapshots.values()]:
             tree[RU + "a.md"] += b"\n```sql\nSELECT 1;\n```\n"
             tree[RU + "b.md"] += b"\nSource detail b\n"
@@ -85,7 +86,15 @@ class ReviewServices(LifecycleServices):
         schema = schema_wrapper["schema"] if schema_wrapper is not None else None
         prompt = request_prompt(body)
         path = prompt.split("Target path: ", 1)[1].split("\n", 1)[0]
-        role = "repair" if schema is None else "critic"
+        role = (
+            "repair"
+            if schema is None
+            else (
+                "critic"
+                if "corrected_markdown" in schema["properties"]
+                else "arbiter"
+            )
+        )
         flat_editor = schema is not None and set(schema["properties"]) == {
             "corrected_markdown"
         }
@@ -100,17 +109,29 @@ class ReviewServices(LifecycleServices):
             values = {
                 "corrected_markdown": raw_repair_context(prompt, "final-target")
             }
-        elif role == "critic":
+        elif role in {"critic", "arbiter"}:
             outcomes = self.outcomes.get(path, [])
-            outcome = outcomes.pop(0) if outcomes else "green"
+            if role == "critic":
+                outcome = outcomes.pop(0) if outcomes else "green"
+                self.arbiter_outcomes[path] = outcome
+            else:
+                outcome = self.arbiter_outcomes.get(path, "green")
             values = {"findings": []}
-            if outcome != "green":
+            if outcome == "red" or role == "critic" and outcome == "repair":
                 target = self.snapshots[self.branch_head][path].decode()
                 finding = {
                     "reason": "Missing meaning in the heading.",
                     "expected_correction": "Restore the full meaning.",
                     "searchable_snippet": target.splitlines()[0].removeprefix("# "),
                 }
+                if role == "arbiter":
+                    finding.update(
+                        {
+                            "repairable": False,
+                            "target_path": path,
+                            "target_line": 1,
+                        }
+                    )
                 values["findings"].append(finding)
             if editable:
                 current = raw_repair_context(prompt, "final-target")
@@ -134,6 +155,8 @@ class ReviewServices(LifecycleServices):
                 if self.move_after == "repair" and outcome == "repair":
                     self.branch_head = "f" * 40
                     self.snapshots[self.branch_head] = dict(self.files)
+            else:
+                values["verdict"] = "RED" if values["findings"] else "GREEN"
         else:
             current = raw_repair_context(prompt, "current-target")
             source = raw_repair_context(prompt, "authoritative-source")
@@ -149,7 +172,7 @@ class ReviewServices(LifecycleServices):
         if self.move_after == role:
             self.branch_head = "f" * 40
             self.snapshots[self.branch_head] = dict(self.files)
-        if role == "critic":
+        if role in {"critic", "arbiter"}:
             raw = json.dumps(values)
         elif self.repair_payload is not None:
             raw = self.repair_payload
@@ -182,13 +205,13 @@ def test_green_review_only_updates_current_verdict_and_consumes_without_commit(c
     saved_state = services.rows[saved.continuation_id]["state"]
     result = services.resume(43)
     assert result.verdict is Verdict.GREEN and result.final_commit_sha == saved.target_sha
-    assert services.roles == ["critic"]
-    assert [path for _, path, _ in services.calls] == [EN + "b.md"]
+    assert services.roles == ["critic", "arbiter"]
+    assert [path for _, path, _ in services.calls] == [EN + "b.md", EN + "b.md"]
     assert services.files == before
     assert services.files[EN + "a.md"] == b"# Corrected\n\n```sql\nSELECT 1;\n```\n"
     assert services.rows[saved.continuation_id]["state"] == saved_state
     assert services.commits == services.initial_commits
-    assert services.timeline == ["critic", "report"]
+    assert services.timeline == ["critic", "arbiter", "report"]
     assert services.rows[saved.continuation_id]["status"] == "closed"
     assert services.rows[saved.continuation_id]["consumed_by_job_id"] == result.job_id
     assert services.jobs[result.job_id]["status"] == "succeeded"
@@ -200,12 +223,12 @@ def test_green_review_only_updates_current_verdict_and_consumes_without_commit(c
     assert CONTEXT not in services.comments[0]["body"]
     assert CONTEXT not in capsys.readouterr().out
     attempts = [params for _, params in services.operations if "attempt_id" in params]
-    assert len(attempts) == 1 and attempts[0]["job_id"] == result.job_id
+    assert len(attempts) == 2 and all(item["job_id"] == result.job_id for item in attempts)
     assert attempts[0]["cost_rub"] == Decimal("0.01")
     assert not any("SUM" in query for query, _ in services.operations)
     with pytest.raises(application.WorkflowError):
         services.resume()
-    assert services.roles == ["critic"]
+    assert services.roles == ["critic", "arbiter"]
 
 
 def test_critic_editor_merges_complete_document_and_finishes_green():
@@ -217,9 +240,10 @@ def test_critic_editor_merges_complete_document_and_finishes_green():
     saved = services.checkpoint()
     result = services.resume()
     assert result.verdict is Verdict.GREEN and result.repair_applied
-    assert services.roles == ["critic"]
+    assert services.roles == ["critic", "arbiter"]
     assert services.timeline == [
         "critic",
+        "arbiter",
         "commit",
         "push",
         "report",
@@ -277,7 +301,7 @@ def test_continuation_repair_publishes_exact_model_markdown():
 
     expected = b"* Parent corrected\n* Nested translated item\n"
     assert result.verdict is Verdict.GREEN and result.repair_applied
-    assert services.roles == ["critic"]
+    assert services.roles == ["critic", "arbiter"]
     assert services.files[EN + "b.md"] == expected
     assert services.snapshots[result.final_commit_sha.value][EN + "b.md"] == expected
 
@@ -294,7 +318,9 @@ def test_saved_order_and_one_critic_edit_per_unresolved_document():
     assert result.verdict is Verdict.GREEN
     assert [(role, path) for role, path, _ in services.calls] == [
         ("critic", EN + "c.md"),
+        ("arbiter", EN + "c.md"),
         ("critic", EN + "b.md"),
+        ("arbiter", EN + "b.md"),
     ]
     assert services.files[EN + "c.md"] == b"# Repaired c\n"
     assert services.files[EN + "b.md"] == b"# Repaired b\n\nTranslated\n"
@@ -325,6 +351,8 @@ def test_repeated_red_preserves_unresolved_path_order_for_the_next_continue():
         EN + "b.md",
         EN + "b.md",
         EN + "c.md",
+        EN + "c.md",
+        EN + "b.md",
         EN + "b.md",
     ]
 
@@ -367,9 +395,9 @@ def test_pinned_rename_review_never_derives_maps_from_target_and_replays_metadat
     services.outcomes = {EN + "a.md": ["repair", "red"] if repair else ["red"]}
     result = services.resume()
     assert result.verdict is (Verdict.GREEN if repair else Verdict.RED)
-    assert services.roles == (
-        ["critic", "critic"] if repair else ["critic", "critic", "critic"]
-    )
+    assert services.roles == [
+        "critic", "arbiter", "critic", "arbiter"
+    ]
     if repair:
         repair_prompt = services.prompts[0][1]
         assert services.calls[0][2] is not None
@@ -439,8 +467,8 @@ def test_infrastructure_failure_preserves_old_checkpoint(failure):
         == {
             "critic": ["critic"],
             "repair": ["critic"],
-            "publish": ["critic"],
-            "report": ["critic"],
+            "publish": ["critic", "arbiter"],
+            "report": ["critic", "arbiter"],
             "attempt": ["critic"],
         }[failure]
     )
@@ -459,7 +487,7 @@ def test_head_movement_blocks_later_models_publication_and_verdict(move_after):
     assert services.rows[saved.continuation_id]["status"] == "open"
 
 
-def test_invalid_critic_edit_keeps_candidate_without_final_critic():
+def test_invalid_critic_edit_keeps_candidate_without_arbiter():
     services = ReviewServices(names=("a", "b"))
     saved = services.start_review()
     before = dict(services.files)
@@ -478,11 +506,11 @@ def test_byte_identical_selected_repair_reports_existing_sha_without_empty_commi
     services.outcomes = {EN + "b.md": ["repair", "green"]}
     services.repair_uses_current_values = True
     result = services.resume()
-    assert result.verdict is Verdict.RED and not result.repair_applied
+    assert result.verdict is Verdict.GREEN and not result.repair_applied
     assert result.final_commit_sha == saved.target_sha
-    assert services.roles == ["critic", "critic"]
+    assert services.roles == ["critic", "arbiter"]
     assert services.commits == services.initial_commits
-    assert services.timeline == ["critic", "critic", "report", "checkpoint"]
+    assert services.timeline == ["critic", "arbiter", "report"]
     assert services.rows[saved.continuation_id]["status"] == "closed"
 
 
@@ -492,7 +520,7 @@ def test_head_movement_while_loading_comment_blocks_stale_verdict_and_close():
     services.move_during_report = True
     with pytest.raises(application.WorkflowError, match="report"):
         services.resume()
-    assert services.roles == ["critic"]
+    assert services.roles == ["critic", "arbiter"]
     assert "report" not in services.timeline
     assert services.rows[saved.continuation_id]["status"] == "open"
     assert set(services.rows) == {saved.continuation_id}
@@ -527,7 +555,7 @@ def test_head_change_during_comment_write_fails_without_consuming_checkpoint(
         services.resume()
     failed = list(services.jobs.values())[-1]
     assert failed["status"] == "failed" and failed["error"] == "report_failed"
-    expected = ["critic"] if verdict == "green" else ["critic", "critic"]
+    expected = ["critic", "arbiter"]
     assert services.roles == expected and services.timeline == [*expected, "report"]
     assert services.branch_head == new_head
     assert set(services.rows) == {saved.continuation_id}
@@ -551,11 +579,9 @@ def test_head_change_during_comment_write_fails_without_consuming_checkpoint(
     assert services.rows[saved.continuation_id]["status"] == "closed"
     assert len(services.comments) == 1 and services.comments[0]["id"] == comment_id
     assert services.comments[0]["body"].startswith("🟢 GREEN\n")
-    assert services.roles == (
-        ["critic", "critic"]
-        if verdict == "green"
-        else ["critic", "critic", "critic"]
-    )
+    assert services.roles == [
+        "critic", "arbiter", "critic", "arbiter"
+    ]
 
 
 @pytest.mark.parametrize("mode", ["continue", "verify"])
@@ -583,7 +609,9 @@ def test_pinned_branch_change_during_repair_commit_cannot_create_or_update_ref(m
                 )
             )
     assert services.roles == (
-        ["critic"] if mode == "continue" else ["critic", "critic"]
+        ["critic", "arbiter"]
+        if mode == "continue"
+        else ["critic", "arbiter", "critic", "arbiter"]
     )
     assert services.timeline[-1] == "commit"
     assert services.commits == services.initial_commits + 1
@@ -604,7 +632,9 @@ def test_initial_translate_without_target_still_creates_branch():
     result = services.translate()
     assert result.verdict is Verdict.GREEN
     assert services.branch_head == result.final_commit_sha.value
-    assert services.roles == ["translate", "translate", "critic", "critic"]
+    assert services.roles == [
+        "translate", "translate", "critic", "arbiter", "critic", "arbiter"
+    ]
     assert (
         sum(method == "POST" and path.endswith("/git/refs") for method, path in services.events)
         == 1
@@ -634,7 +664,7 @@ def test_review_green_consumption_survives_lost_lifecycle_acknowledgements(fault
         services.checkpoint()
     with pytest.raises(application.WorkflowError):
         services.resume()
-    assert services.roles == ["critic"]
+    assert services.roles == ["critic", "arbiter"]
 
 
 @pytest.mark.parametrize("fault", ["activate_before", "activate_after", "close_before"])
@@ -657,8 +687,10 @@ def test_review_red_handoff_preserves_one_logical_checkpoint_after_boundary_faul
     assert eligible.target_sha == saved.target_sha
     assert eligible.expires_at == saved.expires_at
     assert eligible.state.accepted_documents == saved.state.accepted_documents
-    assert services.roles == ["critic", "critic"]
+    assert services.roles == ["critic", "arbiter"]
     assert services.resume().verdict is Verdict.GREEN
     with pytest.raises(application.WorkflowError):
         services.resume()
-    assert services.roles == ["critic", "critic", "critic"]
+    assert services.roles == [
+        "critic", "arbiter", "critic", "arbiter"
+    ]

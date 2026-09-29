@@ -882,6 +882,7 @@ def test_a023_no_serialization_transport_or_future_policy_leak() -> None:
         "CRITIC",
         "REPAIR",
         "FINAL_CRITIC",
+        "ARBITER",
     }
     names = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
     attributes = {node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)}

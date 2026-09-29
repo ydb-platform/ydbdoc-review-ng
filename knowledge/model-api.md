@@ -5,7 +5,7 @@
 - `temperature = 0`.
 - Reasoning полностью отключён.
 - Translate возвращает raw Markdown и проходит локальную проверку protected fragments.
-- Direction и semantic critic возвращают structured output по JSON Schema;
+- Direction, critic-editor и read-only arbiter возвращают structured output по JSON Schema;
   raw JSON повторно проверяется локально независимо от гарантий провайдера.
 - Каждая начатая attempt сохраняется в durable state с параметрами, входом,
   status/error, сырым ответом и usage при их наличии.
@@ -43,12 +43,20 @@ JSON Schema. В интеграционном прогоне PR 51079 все 361 
 но явный `YDBDOC_MODEL` сохраняет возможность выбрать другой URI. В runtime это
 fallback-модель для перевода и отдельная модель critic-editor
 по умолчанию (`YDBDOC_MODEL_CRITIC`).
+DeepSeek также является независимым arbiter по умолчанию после YandexGPT
+critic-editor; `YDBDOC_MODEL_ARBITER` позволяет выбрать третью модель явно.
 
 ### DeepSeek V4 Flash
 
 OpenAI-compatible endpoint принимает `reasoning_effort = none`, temperature 0 и
 JSON Schema. В runtime модель используется как основная модель перевода; при
 ошибке провайдера или content filter запрос повторяется через YandexGPT.
+Runtime извлекает обычные и кешированные входящие токены из OpenAI usage и
+считает стоимость DeepSeek V4 Flash по опубликованному тарифу на 2026-09-29:
+0,3 руб./1000 входящих, 0,075 руб./1000 кешированных входящих и
+0,5 руб./1000 исходящих токенов. Поэтому успешный ответ модели имеет числовую
+стоимость; unknown остаётся только при отсутствии usage и provider billable cost.
+Источник тарифа: <https://aistudio.yandex.ru/ru/docs/ai-studio/pricing>.
 
 ### gpt-oss-120b
 

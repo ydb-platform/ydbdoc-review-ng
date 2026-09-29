@@ -488,7 +488,7 @@ def test_red_report_is_short_russian_and_actionable_without_internal_details():
     assert SECRET not in report
 
 
-def test_red_report_summarizes_each_file_instead_of_dumping_findings() -> None:
+def test_red_report_renders_every_finding_for_each_file() -> None:
     other = "ydb/docs/en/core/other.md"
     findings = tuple(
         Finding(
@@ -509,12 +509,12 @@ def test_red_report_summarizes_each_file_instead_of_dumping_findings() -> None:
         (),
     )
 
-    assert report.count("- строка ") == 2
-    assert "ещё 12 замечаний в этом файле" in report
-    assert "problem 24" not in report
+    assert report.count("- строка ") == 25
+    assert "ещё" not in report
+    assert "problem 24" in report
     assert PATH.value in report
     assert other in report
-    assert len(report) < 3_000
+    assert len(report) < 8_000
 
 
 def test_report_never_renders_unknown_cost_as_zero() -> None:

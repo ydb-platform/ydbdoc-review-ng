@@ -24,6 +24,7 @@ the standard `ValueError`.
 | `ModelRole` | `CRITIC` | `"critic"` |
 | `ModelRole` | `REPAIR` | `"repair"` |
 | `ModelRole` | `FINAL_CRITIC` | `"final_critic"` |
+| `ModelRole` | `ARBITER` | `"arbiter"` |
 | `Severity` | `GREEN` | `"green"` |
 | `Severity` | `YELLOW` | `"yellow"` |
 | `Severity` | `RED` | `"red"` |

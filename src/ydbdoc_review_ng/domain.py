@@ -60,6 +60,7 @@ class ModelRole(str, Enum):
     CRITIC = "critic"
     REPAIR = "repair"
     FINAL_CRITIC = "final_critic"
+    ARBITER = "arbiter"
 
 
 class Severity(str, Enum):

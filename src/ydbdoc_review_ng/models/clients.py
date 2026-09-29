@@ -126,11 +126,13 @@ def _usage_openai(document: Mapping[str, object]) -> ModelUsage:
     if usage is None:
         return ModelUsage()
     details = _mapping(usage.get("completion_tokens_details"))
+    prompt_details = _mapping(usage.get("prompt_tokens_details"))
     return ModelUsage(
         _token(usage.get("prompt_tokens")),
         _token(usage.get("completion_tokens")),
         _token(usage.get("total_tokens")),
         _token(details.get("reasoning_tokens")) if details is not None else None,
+        _token(prompt_details.get("cached_tokens")) if prompt_details is not None else None,
     )
 
 

@@ -107,17 +107,14 @@ def _finding_lines(review: QualityReviewResult) -> list[str]:
     shown_paths = tuple(by_path)[:_MAX_REPORTED_FILES]
     for path in shown_paths:
         grouped = by_path[path]
-        finding = grouped[0]
         lines.append(f"**`{path}`**")
-        lines.append(
-            f"- строка {finding.target_line}, `"
-            f"{_line(finding.searchable_snippet)[:80]}`: "
-            f"{_line(finding.reason)[:160]} Исправление: "
-            f"{_line(finding.expected_correction)[:160]}"
-        )
-        omitted_in_file = len(grouped) - 1
-        if omitted_in_file:
-            lines.append(f"- И ещё {omitted_in_file} замечаний в этом файле.")
+        for finding in grouped:
+            lines.append(
+                f"- строка {finding.target_line}, `"
+                f"{_line(finding.searchable_snippet)[:80]}`: "
+                f"{_line(finding.reason)[:160]} Исправление: "
+                f"{_line(finding.expected_correction)[:160]}"
+            )
     omitted_files = len(by_path) - len(shown_paths)
     if omitted_files:
         lines.append(f"Ещё {omitted_files} затронутых файлов не показаны.")

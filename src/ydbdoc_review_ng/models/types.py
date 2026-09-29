@@ -109,6 +109,7 @@ class ModelUsage:
     output_tokens: int | None = None
     total_tokens: int | None = None
     reasoning_tokens: int | None = None
+    cached_input_tokens: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,6 +158,7 @@ class ModelTokenPrice:
     input_token_rub: Decimal
     output_token_rub: Decimal
     reasoning_token_rub: Decimal
+    cached_input_token_rub: Decimal | None = None
 
     def __post_init__(self) -> None:
         if any(
@@ -165,6 +167,7 @@ class ModelTokenPrice:
                 self.input_token_rub,
                 self.output_token_rub,
                 self.reasoning_token_rub,
+                *(() if self.cached_input_token_rub is None else (self.cached_input_token_rub,)),
             )
         ):
             raise ValueError("token prices must be non-negative Decimal values")
@@ -186,7 +189,15 @@ class PerModelPricing:
         price = self._prices.get(model)
         if price is None or usage.input_tokens is None or usage.output_tokens is None:
             return None
-        cost = Decimal(usage.input_tokens) * price.input_token_rub
+        cached = usage.cached_input_tokens
+        if cached is not None and (cached < 0 or cached > usage.input_tokens):
+            return None
+        ordinary_input = usage.input_tokens - (cached or 0)
+        cost = Decimal(ordinary_input) * price.input_token_rub
+        if cached:
+            cost += Decimal(cached) * (
+                price.cached_input_token_rub or price.input_token_rub
+            )
         cost += Decimal(usage.output_tokens) * price.output_token_rub
         if usage.reasoning_tokens is not None:
             cost += Decimal(usage.reasoning_tokens) * price.reasoning_token_rub

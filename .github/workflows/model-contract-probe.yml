@@ -16,6 +16,7 @@ jobs:
       YANDEX_API_KEY: ${{ secrets.YANDEX_API_KEY }}
       YANDEX_FOLDER_ID: ${{ vars.YANDEX_FOLDER_ID }}
       YDBDOC_MODEL: ${{ vars.YDBDOC_MODEL }}
+      YDBDOC_MODEL_ARBITER: ${{ vars.YDBDOC_MODEL_ARBITER }}
       YDBDOC_MODEL_CRITIC_FALLBACK: ${{ vars.YDBDOC_MODEL_CRITIC_FALLBACK }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -25,5 +26,5 @@ jobs:
           cache: pip
       - name: Install runtime
         run: python scripts/run_with_timeout.py 120 python -m pip install .
-      - name: Probe alternate critic-editor contract
+      - name: Probe critic-editor and independent arbiter contracts
         run: python scripts/run_with_timeout.py 180 python scripts/probe_critic_fallback.py

@@ -249,6 +249,8 @@ class RuntimeServices:
             self.events.append(("MODEL", tuple(properties)))
             if "findings" in properties:
                 values = {"findings": []}
+                if "verdict" in properties:
+                    values["verdict"] = "GREEN"
                 if "corrected_markdown" in properties:
                     prompt = request_prompt(body)
                     values["corrected_markdown"] = raw_repair_context(

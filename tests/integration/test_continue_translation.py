@@ -132,7 +132,9 @@ def test_pending_only_preserves_accepted_source_fragments_and_records_current_co
     accepted = services.rows[saved.continuation_id]["state"]
     result = services.resume()
     assert result.verdict is Verdict.GREEN
-    assert services.roles == ["translate", "critic", "critic"]
+    assert services.roles == [
+        "translate", "critic", "arbiter", "critic", "arbiter"
+    ]
     assert services.files[EN + "a.md"] == b"# Translated\n" + protected
     assert services.files[EN + "b.md"] == b"# Resumed b\n"
     assert services.parents == [[services.base]]
@@ -140,9 +142,9 @@ def test_pending_only_preserves_accepted_source_fragments_and_records_current_co
     assert services.rows[saved.continuation_id]["state"] == accepted
     assert not any("SUM" in statement for statement, _ in services.operations)
     attempts = [params for _, params in services.operations if "attempt_id" in params]
-    assert len(attempts) == 3
+    assert len(attempts) == 5
     assert {params["job_id"] for params in attempts} == {result.job_id}
-    assert sum(params["cost_rub"] for params in attempts) == Decimal("0.03")
+    assert sum(params["cost_rub"] for params in attempts) == Decimal("0.05")
     assert services.jobs[result.job_id]["source_sha"] == saved.source_sha.value
     assert services.jobs[result.job_id]["mode"] == "doc_continue"
     assert services.jobs[result.job_id]["status"] == "succeeded"
@@ -186,7 +188,9 @@ def test_translation_pr_uses_saved_head_after_source_base_and_inventory_move():
     result = services.resume(43)
     assert result.verdict is Verdict.GREEN
     assert services.parents == [[saved.target_sha.value]]
-    assert services.roles == ["translate", "critic", "critic"]
+    assert services.roles == [
+        "translate", "critic", "arbiter", "critic", "arbiter"
+    ]
     assert services.files[EN + "a.md"] == b"# Translated\n"
     assert services.files[EN + "b.md"] == b"# Resumed b\n"
     assert all("ref=" + services.source in path for path in services.reads if "/ru/core/" in path)
@@ -227,7 +231,12 @@ def test_public_continue_restores_protected_link_delete_rename_and_pinned_metada
     services.snapshots[services.translated][EN + "old.md"] = b"# Wrong current counterpart\n"
     result = services.resume()
     assert result.verdict is Verdict.GREEN
-    assert services.roles == ["translate", "critic", "critic", "critic"]
+    assert services.roles == [
+        "translate",
+        "critic", "arbiter",
+        "critic", "arbiter",
+        "critic", "arbiter",
+    ]
     assert services.files[EN + "b.md"] == source_b.replace(b"Source", b"Resumed")
     assert services.files[EN + "moved.md"] == b"# Whole pinned translation\n"
     assert EN + "old.md" not in services.files and EN + "deleted.md" not in services.files
@@ -349,11 +358,15 @@ def test_direction_selection_excludes_complete_pair_before_translation():
     services.direction_values = {"a.md": "complete_pair", "b.md": "ru_to_en"}
     result = services.resume()
     assert result.verdict is Verdict.GREEN
-    assert services.roles == ["direction", "translate", "critic"]
+    assert services.roles == ["direction", "translate", "critic", "arbiter"]
     assert services.files[EN + "a.md"] == b"# Old a\n"
     assert services.files[EN + "b.md"] == b"# Resumed b\n"
     assert services.rows[saved.continuation_id]["status"] == "closed"
-    assert all(CONTEXT in prompt for role, prompt in services.prompts if role != "critic")
+    assert all(
+        CONTEXT in prompt
+        for role, prompt in services.prompts
+        if role not in {"critic", "arbiter"}
+    )
 
 
 def test_all_complete_direction_finishes_noop_without_pr_or_other_models():
@@ -416,10 +429,9 @@ def test_pending_success_uses_full_review_single_repair_and_captures_red():
     assert services.roles == [
         "translate",
         "translate",
-        "critic",
-        "critic",
-        "critic",
-        "critic",
+        "critic", "arbiter",
+        "critic", "arbiter",
+        "critic", "arbiter",
     ]
     assert following.state.stage is ContinuationStage.REVIEW
     assert following.target_sha == result.final_commit_sha
@@ -574,7 +586,11 @@ def test_green_consumption_prevents_paid_replay_despite_lost_acknowledgements(ki
     assert services.jobs[result.job_id]["status"] == "succeeded"
     assert services.rows[saved.continuation_id]["consumed_by_job_id"] == result.job_id
     assert services.commits == 0
-    calls = ["direction"] if kind == "direction" else ["translate", "critic", "critic"]
+    calls = (
+        ["direction"]
+        if kind == "direction"
+        else ["translate", "critic", "arbiter", "critic", "arbiter"]
+    )
     assert services.roles == calls
     with pytest.raises(PersistenceError):
         services.checkpoint()

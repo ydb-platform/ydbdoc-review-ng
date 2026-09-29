@@ -212,6 +212,163 @@ def test_critic_reuses_exact_validated_translator_chunks() -> None:
     assert "<authoritative-source>\n" + draft_request.chunks[0].text in executor.calls[0].prompt
 
 
+def test_editor_returns_final_chunk_and_independent_arbiter_owns_verdict() -> None:
+    plan, request, _values, target = prepared()
+    draft_request = prepare_document(SOURCE, plan, max_characters=100_000)
+    draft_target = raw_document(target)
+    corrected = draft_target.replace("Прочитайте", "Изучите")
+    editor_finding = {
+        "reason": "Формулировка неточна.",
+        "expected_correction": "Использовать точный глагол.",
+        "searchable_snippet": "Прочитайте",
+    }
+    executor = FakeExecutor(
+        critic_editor_json("RED", [editor_finding], corrected),
+        critic_json("GREEN", []),
+    )
+
+    result = review_translation(
+        executor,
+        model="editor-model",
+        arbiter_model="arbiter-model",
+        source=SOURCE,
+        source_plan=plan,
+        translation_request=request,
+        target=target,
+        target_path=PATH,
+        source_locale=Locale.EN,
+        target_locale=Locale.RU,
+        draft_request=draft_request,
+        draft_responses=(draft_target,),
+    )
+
+    assert result.primary.verdict is Verdict.RED
+    assert result.final.verdict is Verdict.GREEN
+    assert b"\xd0\x98\xd0\xb7\xd1\x83\xd1\x87\xd0\xb8\xd1\x82\xd0\xb5" in result.final_candidate
+    assert [call.role.value for call in executor.calls] == ["critic", "arbiter"]
+    assert [call.model for call in executor.calls] == ["editor-model", "arbiter-model"]
+
+
+def test_editor_removes_duplicate_compute_nodes_before_arbiter_verdict() -> None:
+    source = "Выполнение запроса обеспечивают вычислительные узлы.\n".encode()
+    source_path = RepoPath("ydb/docs/ru/example.md")
+    target_path = RepoPath("ydb/docs/en/example.md")
+    plan = build_markdown_plan(SNAPSHOT, source_path, source)
+    request = build_translation_request(source, plan)
+    draft = "Query execution is handled by compute nodes and compute nodes.\n"
+    corrected = "Query execution is handled by compute nodes.\n"
+    target = assemble_candidate(
+        source,
+        plan,
+        request,
+        {request.fields[0].field_id: draft.rstrip("\n")},
+    )
+    draft_request = prepare_document(source, plan, max_characters=100_000)
+    executor = FakeExecutor(
+        critic_editor_json(
+            "RED",
+            [
+                {
+                    "reason": "Термин compute nodes ошибочно повторён дважды.",
+                    "expected_correction": "Удалить повтор термина.",
+                    "searchable_snippet": "compute nodes and compute nodes",
+                }
+            ],
+            corrected,
+        ),
+        critic_json("GREEN", []),
+    )
+
+    result = review_translation(
+        executor,
+        model="editor-model",
+        arbiter_model="arbiter-model",
+        source=source,
+        source_plan=plan,
+        translation_request=request,
+        target=target,
+        target_path=target_path,
+        source_locale=Locale.RU,
+        target_locale=Locale.EN,
+        draft_request=draft_request,
+        draft_responses=(draft,),
+    )
+
+    assert result.final_candidate == corrected.encode()
+    assert result.primary.verdict is Verdict.RED
+    assert result.final.verdict is Verdict.GREEN
+    assert result.repair_applied
+    assert [call.role.value for call in executor.calls] == ["critic", "arbiter"]
+    assert all(
+        "keep that term once" in call.prompt
+        and "Never claim that an alias is missing" in call.prompt
+        for call in executor.calls
+    )
+
+
+def test_editor_and_arbiter_see_restored_protected_fragments() -> None:
+    plan, request, _values, target = prepared()
+    draft_request = prepare_document(SOURCE, plan, max_characters=100_000)
+    draft_target = raw_document(target)
+    executor = FakeExecutor(
+        critic_editor_json("GREEN", [], draft_target),
+        critic_json("GREEN", []),
+    )
+
+    review_translation(
+        executor,
+        model="editor-model",
+        arbiter_model="arbiter-model",
+        source=SOURCE,
+        source_plan=plan,
+        translation_request=request,
+        target=target,
+        target_path=PATH,
+        source_locale=Locale.EN,
+        target_locale=Locale.RU,
+        draft_request=draft_request,
+        draft_responses=(draft_target,),
+    )
+
+    assert all("<protected-fragments>" in call.prompt for call in executor.calls)
+    assert all("/docs/guide" in call.prompt for call in executor.calls)
+    assert "[[YDBDOC_" in executor.calls[0].prompt.split("<final-target>\n", 1)[1]
+
+
+def test_only_arbiter_findings_define_the_public_red_verdict() -> None:
+    plan, request, _values, target = prepared()
+    draft_request = prepare_document(SOURCE, plan, max_characters=100_000)
+    draft_target = raw_document(target)
+    arbiter_finding = finding(
+        repairable=False,
+        snippet="Прочитайте",
+        line=3,
+    )
+    executor = FakeExecutor(
+        critic_editor_json("GREEN", [], draft_target),
+        critic_json("RED", [arbiter_finding]),
+    )
+
+    result = review_translation(
+        executor,
+        model="editor-model",
+        arbiter_model="arbiter-model",
+        source=SOURCE,
+        source_plan=plan,
+        translation_request=request,
+        target=target,
+        target_path=PATH,
+        source_locale=Locale.EN,
+        target_locale=Locale.RU,
+        draft_request=draft_request,
+        draft_responses=(draft_target,),
+    )
+
+    assert result.primary.verdict is Verdict.GREEN
+    assert result.final.verdict is Verdict.RED
+    assert result.final.findings[0].searchable_snippet == "Прочитайте"
+
+
 def test_critic_rejects_mismatched_saved_draft_with_exact_reason() -> None:
     plan, request, _values, target = prepared()
     draft_request = prepare_document(SOURCE, plan, max_characters=100_000)
@@ -416,7 +573,7 @@ def test_primary_critic_applies_its_own_correction_without_repair_call() -> None
     assert executor.calls[0].schema is not None
 
 
-def test_green_critic_editor_change_is_ignored() -> None:
+def test_green_critic_editor_returns_the_final_changed_chunk() -> None:
     plan, request, values, target = prepared()
     field_id = request.fields[1].field_id
     corrected_values = {
@@ -441,8 +598,8 @@ def test_green_critic_editor_change_is_ignored() -> None:
         target_locale=Locale.RU,
     )
 
-    assert result.final_candidate == target
-    assert not result.repair_applied
+    assert result.final_candidate == corrected
+    assert result.repair_applied
     assert [call.role.value for call in executor.calls] == ["critic"]
 
 
@@ -555,7 +712,8 @@ def test_full_document_repair_restores_source_fragments_before_exposing_map(inva
     assert all(field.field_id not in editor_prompt for field in request.fields)
     assert "<authoritative-source>" in editor_prompt
     assert "<final-target>" in editor_prompt
-    assert "/docs/guide" not in editor_prompt
+    assert "/docs/guide" in editor_prompt
+    assert "<protected-fragments>" in editor_prompt
     expected_roles = ["critic"]
     assert [call.role.value for call in executor.calls] == expected_roles
     assert all(call.target_path == PATH for call in executor.calls)
@@ -848,7 +1006,7 @@ def test_oversized_repair_uses_minimum_ordered_structural_chunks_within_limit() 
         for field in request.fields
     }
     target = assemble_candidate(source, plan, request, target_values)
-    limit = 3_000
+    limit = 3_500
 
     class ChunkExecutor:
         def __init__(self) -> None:
@@ -1408,7 +1566,7 @@ def test_t017_n04_repair_preserves_logical_escaped_title_in_untouched_field() ->
     assert [call.role.value for call in executor.calls] == ["critic"]
 
 
-def test_unrepairable_finding_gets_one_targeted_editor_call() -> None:
+def test_editor_does_not_get_a_second_semantic_correction_call() -> None:
     _plan, _request, _values, target = prepared()
     corrected = raw_document(target).replace("Прочитайте", "Обязательно прочитайте")
     executor = FakeExecutor(
@@ -1422,11 +1580,10 @@ def test_unrepairable_finding_gets_one_targeted_editor_call() -> None:
 
     result = review(executor)
 
-    assert result.final.verdict is Verdict.GREEN
+    assert result.final.verdict is Verdict.RED
     assert result.repair_attempted
-    assert result.repair_applied
-    assert [call.role.value for call in executor.calls] == ["critic", "critic"]
-    assert "Mandatory unresolved edits" in executor.calls[1].prompt
+    assert not result.repair_applied
+    assert [call.role.value for call in executor.calls] == ["critic"]
 
 
 def test_unchanged_targeted_editor_result_stays_red_without_loop() -> None:
@@ -1444,7 +1601,7 @@ def test_unchanged_targeted_editor_result_stays_red_without_loop() -> None:
 
     assert result.final.verdict is Verdict.RED
     assert not result.repair_applied
-    assert len(executor.calls) == 2
+    assert len(executor.calls) == 1
 
 
 def test_mixed_findings_repair_only_locally_safe_mapped_fields() -> None:
@@ -1534,7 +1691,7 @@ def test_invalid_critic_edit_retains_original_and_red_verdict() -> None:
     assert callback_candidates == []
     assert "<final-target>" in executor.calls[0].prompt
     assert "Прочитайте" in executor.calls[0].prompt
-    assert "/docs/guide" not in executor.calls[0].prompt
+    assert "/docs/guide" in executor.calls[0].prompt
 
 
 def test_critic_edit_callback_failure_is_terminal() -> None:
@@ -1629,7 +1786,7 @@ def test_lone_surrogate_critic_edit_retains_original() -> None:
     assert [call.role.value for call in executor.calls] == ["critic"]
 
 
-def test_unchanged_editor_red_gets_one_targeted_attempt_without_guessing_a_field() -> None:
+def test_unchanged_editor_red_does_not_start_a_semantic_loop() -> None:
     _plan, _request, _values, target = prepared()
     executor = FakeExecutor(
         critic_editor_json(
@@ -1645,7 +1802,7 @@ def test_unchanged_editor_red_gets_one_targeted_attempt_without_guessing_a_field
     assert result.final.verdict is Verdict.RED
     assert result.repair_attempted
     assert not result.repair_applied
-    assert len(executor.calls) == 2
+    assert len(executor.calls) == 1
 
 
 @pytest.mark.parametrize(

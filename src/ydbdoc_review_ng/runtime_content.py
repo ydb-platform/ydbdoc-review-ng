@@ -549,6 +549,7 @@ class RuntimeContent:
         self.model = environment.get("YDBDOC_MODEL") or "deepseek-v4-flash"
         self.fallback_model = environment.get("YDBDOC_MODEL_FALLBACK") or "yandexgpt-5.1"
         self.critic_model = environment.get("YDBDOC_MODEL_CRITIC") or "yandexgpt-5.1"
+        self.arbiter_model = environment.get("YDBDOC_MODEL_ARBITER") or self.model
         self.critic_fallback_model = (
             environment.get("YDBDOC_MODEL_CRITIC_FALLBACK") or self.model
         )
@@ -1592,6 +1593,7 @@ class RuntimeContent:
                 review = review_translation(
                     self.models,
                     model=self.critic_model,
+                    arbiter_model=self.arbiter_model,
                     fallback_model=self.critic_fallback_model,
                     source=document.source,
                     source_plan=document.plan,

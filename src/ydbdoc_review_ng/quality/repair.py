@@ -28,6 +28,7 @@ from ydbdoc_review_ng.quality.types import (
 from ydbdoc_review_ng.translation import (
     AssemblyError,
     DocumentChunk,
+    DocumentPlaceholder,
     DocumentTranslationError,
     DocumentTranslationRequest,
     ProtectedMismatch,
@@ -160,6 +161,7 @@ def _editor_request(
     requested_ids: tuple[str, ...],
     operator_context: str | None = None,
     terminology_context: str | None = None,
+    placeholders: tuple[DocumentPlaceholder, ...] = (),
 ) -> ModelRequest:
     return build_critic_request(
         model=model,
@@ -174,6 +176,45 @@ def _editor_request(
         operator_context=operator_context,
         editable=True,
         terminology_context=terminology_context,
+        protected_fragments=tuple(
+            (item.token, item.source_bytes.decode("utf-8"))
+            for item in placeholders
+            if item.token in source_text or item.token in target_text
+        ),
+    )
+
+
+def _arbiter_request(
+    *,
+    model: str,
+    source_text: str,
+    target_text: str,
+    target_path: RepoPath,
+    source_locale: Locale,
+    target_locale: Locale,
+    operator_context: str | None,
+    terminology_context: str | None,
+    placeholders: tuple[DocumentPlaceholder, ...],
+) -> ModelRequest:
+    return build_critic_request(
+        model=model,
+        source=source_text.encode(),
+        target=target_text.encode(),
+        target_path=target_path,
+        source_locale=source_locale,
+        target_locale=target_locale,
+        requested_ids=(),
+        final=True,
+        source_is_excerpt=True,
+        target_is_excerpt=True,
+        operator_context=operator_context,
+        editable=False,
+        terminology_context=terminology_context,
+        protected_fragments=tuple(
+            (item.token, item.source_bytes.decode("utf-8"))
+            for item in placeholders
+            if item.token in source_text or item.token in target_text
+        ),
     )
 
 
@@ -309,6 +350,7 @@ def _editor_requests(
             requested_ids=requested_ids,
             operator_context=operator_context,
             terminology_context=terminology_context,
+            placeholders=source_document.placeholders,
         )
         return chunk, request
 
@@ -413,6 +455,7 @@ def _editor_requests_from_draft(
                 requested_ids=requested_ids,
                 operator_context=operator_context,
                 terminology_context=terminology_context,
+                placeholders=document_request.placeholders,
             )
             if (
                 len(request.prompt) > max_characters
@@ -497,6 +540,7 @@ def review_translation(
     executor: ModelExecutor,
     *,
     model: str,
+    arbiter_model: str | None = None,
     fallback_model: str | None = None,
     source: bytes,
     source_plan: SourcePlan,
@@ -584,10 +628,10 @@ def review_translation(
         )
     repair_error: RepairErrorReason | None = None
     repaired_candidate: bytes | None = None
+    assembled_candidate = target
     effective_chunks: list[DocumentChunk] = []
     responses: list[str] = []
     editor_results: list[CriticResult] = []
-    unresolved_findings: list[Finding] = []
     editor_changed_target = False
 
     def invoke_editor(request: ModelRequest) -> ModelCallResult:
@@ -625,44 +669,7 @@ def review_translation(
         )
         proposed_correction = result.corrected_markdown
         assert proposed_correction is not None
-        correction = (
-            proposed_correction if result.verdict is Verdict.RED else current_target
-        )
-        pending = (
-            result.findings
-            if result.findings and correction == current_target
-            else tuple(finding for finding in result.findings if not finding.repairable)
-        )
-        if pending:
-            before_targeted_edit = correction
-            repair_payload = [
-                {
-                    "reason": finding.reason,
-                    "expected_correction": finding.expected_correction,
-                    "searchable_snippet": finding.searchable_snippet,
-                }
-                for finding in pending
-            ]
-            repair_request = _fallback_editor_request(request, request.model)
-            repair_request = ModelRequest(
-                repair_request.role,
-                repair_request.model,
-                repair_request.prompt
-                + "\n\nMandatory unresolved edits:\n"
-                + json.dumps(repair_payload, ensure_ascii=False)
-                + "\nApply every listed expected_correction now and return the complete "
-                "changed target excerpt. Do not merely repeat the input. This is the only "
-                "correction attempt.",
-                None
-                if repair_request.schema is None
-                else cast(FrozenJson, mutable_json(repair_request.schema)),
-                repair_request.max_tokens,
-                repair_request.target_path,
-            )
-            correction = flat_correction(invoke_editor(repair_request))
-            if correction != before_targeted_edit:
-                pending = ()
-        unresolved_findings.extend(pending)
+        correction = proposed_correction
         editor_changed_target = editor_changed_target or correction != current_target
         editor_results.append(result)
         validate_chunk_response(chunk, document_request.placeholders, correction)
@@ -718,6 +725,7 @@ def review_translation(
                                     requested_ids=critic_field_ids,
                                     operator_context=operator_context,
                                     terminology_context=terminology_context,
+                                    placeholders=document_request.placeholders,
                                 ),
                             )
                         )
@@ -781,19 +789,6 @@ def review_translation(
         else Verdict.GREEN,
         tuple(findings),
     )
-    if primary.verdict is Verdict.GREEN and not editor_changed_target:
-        return QualityReviewResult(
-            target,
-            None,
-            target,
-            primary,
-            primary,
-            False,
-            False,
-            repair_error,
-            accepted_maps,
-        )
-
     if repair_error is None:
         try:
             effective_request = DocumentTranslationRequest(
@@ -802,40 +797,32 @@ def review_translation(
             repaired_candidate = restore_document(
                 source, source_plan, effective_request, tuple(responses)
             )
+            assembled_candidate = repaired_candidate
             if repaired_candidate == target:
                 repaired_candidate = None
-                return QualityReviewResult(
-                    target,
-                    None,
-                    target,
-                    primary,
-                    primary,
-                    True,
-                    False,
-                    repair_error,
-                    accepted_maps,
+            else:
+                try:
+                    target_translations = _derive_target_translations(
+                        source,
+                        source_plan,
+                        translation_request,
+                        assembled_candidate,
+                        target_path,
+                    )
+                except QualityInputError:
+                    target_translations = (
+                        accepted_map.as_dict() if accepted_map is not None else {}
+                    )
+                accepted_maps = (
+                    AcceptedMap(target_path, tuple(sorted(target_translations.items()))),
                 )
-            try:
-                target_translations = _derive_target_translations(
-                    source,
-                    source_plan,
-                    translation_request,
-                    repaired_candidate,
-                    target_path,
-                )
-            except QualityInputError:
-                target_translations = accepted_map.as_dict() if accepted_map is not None else {}
-            accepted_maps = (
-                AcceptedMap(target_path, tuple(sorted(target_translations.items()))),
-            )
         except DocumentTranslationError:
             repair_error = RepairErrorReason.INVALID_RESPONSE
             repaired_candidate = None
         except (AssemblyError, UnicodeError, QualityInputError):
             repair_error = RepairErrorReason.ASSEMBLY_FAILED
             repaired_candidate = None
-    final_candidate = repaired_candidate if repaired_candidate is not None else target
-    if repaired_candidate is None:
+    if repair_error is not None:
         return QualityReviewResult(
             target,
             None,
@@ -847,23 +834,55 @@ def review_translation(
             repair_error,
             accepted_maps,
         )
+    final_candidate = assembled_candidate
     if repaired_candidate is not None and before_repaired_map is not None:
         before_repaired_map(accepted_maps[0])
     if on_validated_edit is not None:
         on_validated_edit(final_candidate)
-    # The critic-editor is the final semantic writer. Its valid primary edits
-    # resolve repairable findings; one valid changed targeted edit resolves the
-    # remaining diagnoses. An unchanged targeted response stays RED. There is no
-    # second critique or repair loop.
-    unresolved = tuple(dict.fromkeys(unresolved_findings))
-    final = CriticResult(Verdict.RED if unresolved else Verdict.GREEN, unresolved)
+    arbiter_results: list[CriticResult] = []
+    if arbiter_model is not None:
+        for chunk, correction in zip(effective_chunks, responses, strict=True):
+            request = _arbiter_request(
+                model=arbiter_model,
+                source_text=chunk.text,
+                target_text=correction,
+                target_path=target_path,
+                source_locale=source_locale,
+                target_locale=target_locale,
+                operator_context=operator_context,
+                terminology_context=terminology_context,
+                placeholders=document_request.placeholders,
+            )
+            response = invoke_editor(request)
+            if not response.success or response.text is None:
+                raise QualityExecutionError("arbiter")
+            try:
+                arbiter_results.append(
+                    parse_critic_response(
+                        response.text,
+                        target_path=target_path,
+                        requested_ids=(),
+                        editable=False,
+                        current_target=correction,
+                    )
+                )
+            except CriticResponseError:
+                raise QualityExecutionError("arbiter") from None
+    arbiter_findings = tuple(
+        dict.fromkeys(finding for result in arbiter_results for finding in result.findings)
+    )
+    final = (
+        CriticResult(Verdict.RED if arbiter_findings else Verdict.GREEN, arbiter_findings)
+        if arbiter_model is not None
+        else (CriticResult(Verdict.GREEN, ()) if editor_changed_target else primary)
+    )
     return QualityReviewResult(
         target,
         repaired_candidate,
         final_candidate,
         primary,
         final,
-        True,
+        editor_changed_target or primary.verdict is Verdict.RED,
         repaired_candidate is not None,
         repair_error,
         accepted_maps,

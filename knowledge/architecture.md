@@ -19,7 +19,7 @@
 
 `doc_translate` идёт линейно: create job audit → authorize → snapshot →
 budget → direction/scope → parse → translate → local structural validation and
-safe Markdown normalization → critic-editor → full validation/Diplodoc build → one commit/push
+safe Markdown normalization → critic-editor → independent arbiter → full validation/Diplodoc build → one commit/push
 → PR verdict → terminal job status.
 
 `doc_verify` создаёт job audit, берёт текущую translation branch и authoritative
@@ -153,19 +153,18 @@ to the exact newly published SHA. This prevents reruns from producing a branch
 that is both behind and ahead of the current base while preserving concurrent
 manual edits.
 
-## Critic-editor as final semantic writer (2026-09-28)
+## Critic-editor followed by an independent arbiter (2026-09-29)
 
 Semantic defects such as duplicated glossary aliases are intentionally not
 encoded as growing local heuristics. The translator creates a structurally valid
 draft. For every document or aligned excerpt the critic-editor returns only
 minimal findings (`reason`, `searchable_snippet`, `expected_correction`) and the
-complete corrected Markdown. Verdict is derived from findings; path is local
-state and line is derived from the snippet. A valid changed edit resolves the
-draft findings. Findings paired with unchanged Markdown receive one targeted
-edit call containing the critic's own diagnosis; a valid changed result
-resolves them, while a missing, invalid or unchanged result remains RED. There
-is no final-critic loop and no model-produced `repairable`, path, line, verdict
-or field IDs. One schema-invalid
+complete corrected Markdown. Editor findings are audit diagnostics and do not
+define the public verdict. The editor never receives them back for another
+semantic call. A separate read-only arbiter, using the translator model by
+default, evaluates the corrected excerpt and alone returns GREEN/RED findings.
+There is no model ping-pong and no model-produced `repairable`, path, line,
+verdict or field IDs in the editor response. One schema-invalid
 HTTP-success response may be repeated once with the parser reason; this is a
 bounded technical retry, not a semantic review loop. A provider
 `non_final`/truncated response is likewise retried at most once with the

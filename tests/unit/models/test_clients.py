@@ -90,6 +90,7 @@ def openai_response(
     text: object = '{"field-1":"Hello"}',
     status: object = "stop",
     reasoning: object = 0,
+    cached: object = 0,
 ) -> HttpResponse:
     return HttpResponse(
         200,
@@ -107,6 +108,7 @@ def openai_response(
                     "prompt_tokens": 80,
                     "completion_tokens": 10,
                     "total_tokens": 90,
+                    "prompt_tokens_details": {"cached_tokens": cached},
                     "completion_tokens_details": {"reasoning_tokens": reasoning},
                 },
             }
@@ -329,6 +331,31 @@ def test_t017_f09_runtime_prices_ordinary_native_usage_without_synthetic_cost() 
     assert result.attempts[0].cost_rub == Decimal("0.1440")
     assert persistence.attempts == [result.attempts[0]]
     assert models.cost == Decimal("0.1440")
+
+
+def test_runtime_prices_deepseek_usage_including_cached_input() -> None:
+    class Persistence:
+        def __init__(self) -> None:
+            self.attempts = []
+
+        def __call__(self, attempt, *, job_id) -> None:
+            assert job_id == "current-job"
+            self.attempts.append(attempt)
+
+    persistence = Persistence()
+    models = RecordedModels(
+        {"YANDEX_API_KEY": SECRET, "YANDEX_FOLDER_ID": FOLDER},
+        persistence,  # type: ignore[arg-type]
+        FakeTransport(openai_response(cached=20)),
+    )
+    models.bind_job("current-job")
+
+    result = models.invoke(request("deepseek-v4-flash"))
+
+    assert result.success
+    assert result.attempts[0].usage.cached_input_tokens == 20
+    assert result.attempts[0].cost_rub == Decimal("0.024500")
+    assert models.cost == Decimal("0.024500")
 
 
 def test_native_actual_nested_reasoning_zero_is_extracted() -> None:

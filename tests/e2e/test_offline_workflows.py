@@ -515,6 +515,7 @@ class ReviewAdapter:
         return review_translation(
             CriticExecutor(self.case, context, candidate.content),
             model=MODEL,
+            arbiter_model=MODEL,
             source=context.source,
             source_plan=context.source_plan,
             translation_request=context.request,
@@ -663,7 +664,7 @@ def test_offline_translate_runs_real_pipeline_in_both_directions(
         assert protected in target
     for language in (b"cpp", b"java", b"javascript", b"python", b"bash", b"yaml", b"html"):
         assert b"```" + language in target
-    assert case.calls == ["translate", "critic"]
+    assert case.calls == ["translate", "critic", "arbiter"]
     assert (
         case.events.index("critic")
         < case.events.index("validate")
@@ -692,7 +693,7 @@ def test_mixed_direction_byte_identical_result_creates_no_empty_pr(tmp_path: Pat
     assert case.backend.commit_count == 0
     assert case.backend.prs == {}
     assert case.backend.comments == {}
-    assert case.calls == ["direction", "translate", "critic"]
+    assert case.calls == ["direction", "translate", "critic", "arbiter"]
 
 
 def test_malformed_translation_blocks_publication_and_terminalizes_job(tmp_path: Path) -> None:
@@ -733,8 +734,9 @@ def test_critic_edit_is_validated_and_published_once(
     assert result.repair_applied
     assert case.backend.commit_count == 1
     editor_index = case.events.index("critic")
-    assert case.events[editor_index : editor_index + 3] == [
+    assert case.events[editor_index : editor_index + 4] == [
         "critic",
+        "arbiter",
         "validate",
         "publish",
     ]
@@ -775,7 +777,7 @@ def test_doc_verify_ignores_exhausted_budget(tmp_path: Path) -> None:
     result = workflows.doc_verify(verify_input(case))
 
     assert result.verdict is Verdict.GREEN
-    assert case.calls == ["critic"]
+    assert case.calls == ["critic", "arbiter"]
     assert not any("SELECT SUM(cost_rub)" in statement for statement, _params in ydb.calls)
     assert ydb.terminal_rows[-1]["status"] == JobStatus.SUCCEEDED.value
 
