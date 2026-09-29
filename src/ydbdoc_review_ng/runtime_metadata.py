@@ -29,6 +29,7 @@ _ROOT_TOC_NAMES = (
     "toc_changelog.yaml",
 )
 _MAX_LOCAL_TOC_FILES = 100
+_ATX_H1 = re.compile(rb"(?m)^# [ \t]*(?P<title>[^\r\n]+?)[ \t]*(?:\r?$)")
 
 
 @dataclass(frozen=True)
@@ -218,6 +219,20 @@ class MetadataProducer:
             return self.pending[path.value]
         return self.reader.read_bytes(self.target, path)
 
+    def _target_title(self, target_path: RepoPath) -> str:
+        """Use the established target article title for a missing TOC entry."""
+        content = self._target_bytes(target_path)
+        if content is not None:
+            match = _ATX_H1.search(content)
+            if match is not None:
+                try:
+                    title = match.group("title").decode("utf-8").strip()
+                except UnicodeError:
+                    title = ""
+                if title:
+                    return title
+        return posixpath.basename(target_path.value).removesuffix(".md")
+
     def _nearest_target_toc(
         self, target_root: str, target_toc: RepoPath
     ) -> tuple[RepoPath, bytes, _Toc] | None:
@@ -280,8 +295,6 @@ class MetadataProducer:
         new: bool = False,
         old: RepoPath | None = None,
     ) -> tuple[FileChange, ...]:
-        if not new and old is None:
-            return ()
         source_root = source_path.value.split("/core/", 1)[0] + "/core"
         target_root = target_path.value.split("/core/", 1)[0] + "/core"
         toc_paths = {
@@ -400,7 +413,7 @@ class MetadataProducer:
                 after = _append_toc(
                     target_toc_view,
                     relative,
-                    posixpath.basename(target_path.value).removesuffix(".md"),
+                    self._target_title(target_path),
                 )
             changes.append(FileChange(target_toc, target_bytes, after))
         if old is not None:

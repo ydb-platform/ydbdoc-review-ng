@@ -71,7 +71,10 @@ semantic stop наследует первоначальный expiry. Infrastruc
   рядом с каждым source excerpt; verdict и findings объединяются.
 - Add source-TOC-reachable страницы добавляет target TOC entry без redirect;
   add вне source TOC не обязан менять TOC; rename обновляет target TOC path и
-  создаёт прямой redirect old→new; ordinary edit не меняет ни TOC, ни redirects.
+  создаёт прямой redirect old→new. Ordinary edit также проверяет симметричную
+  TOC-запись: существующая запись остаётся byte-identical, отсутствующая
+  добавляется с названием из H1 существующей target-статьи. Redirect при этом
+  не создаётся.
 - YDB хранит job, versioned continuation checkpoint и каждую начатую model attempt с request, response при наличии,
   status/error и cost. Job всегда завершается terminal status/error, включая
   ранние failures. TTL текстов составляет 14 дней.
