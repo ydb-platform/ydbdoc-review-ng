@@ -1677,6 +1677,15 @@ class RuntimeContent:
 
             draft = self.review_drafts.get(path)
 
+            def terminology_for(
+                source_text: str, bound_document: Document = document
+            ) -> str | None:
+                return self._terminology_context(
+                    bound_document,
+                    max_characters=critic_limit,
+                    source_text=source_text,
+                )
+
             try:
                 review = review_translation(
                     self.models,
@@ -1694,10 +1703,7 @@ class RuntimeContent:
                     accepted_map=restored_map,
                     full_repair=selective and restored_map is None,
                     operator_context=self.review_operator_context,
-                    terminology_context=self._terminology_context(
-                        document,
-                        max_characters=critic_limit,
-                    ),
+                    terminology_context_for=terminology_for,
                     before_model_call=check_head if selective else None,
                     before_repaired_map=publish_map if selective else None,
                     link_resolver=self._link_resolver(

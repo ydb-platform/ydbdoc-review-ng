@@ -104,7 +104,7 @@ def run() -> None:
     ]
     assert list(services.jobs.values())[-1]["status"] == "succeeded"
     attempts = [row for row in services.audit if "attempt_id" in row]
-    assert len(attempts) == 5
+    assert len(attempts) == 7
     assert attempts[-1]["job_id"] == saved["consumed_by_job_id"]
     print(
         "INSTALLED_RUNTIME_SMOKE_PASS: translate + verify + continue, compact YAML, "

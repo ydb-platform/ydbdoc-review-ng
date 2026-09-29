@@ -51,21 +51,15 @@ class FakeExecutor:
             return ModelCallResult(None, self._failure(), ())
         schema = mutable_json(request.schema)
         properties = schema.get("properties", {}) if isinstance(schema, dict) else {}
-        if isinstance(properties, dict) and set(properties) == {
-            "findings",
-            "corrected_markdown",
-        }:
+        if isinstance(properties, dict) and set(properties) == {"corrected_markdown"}:
             try:
                 payload = json.loads(response)
             except json.JSONDecodeError:
                 payload = None
-            if isinstance(payload, dict) and "corrected_markdown" not in payload:
-                findings = payload.get("findings")
-                if isinstance(findings, list):
-                    for item in findings:
-                        if isinstance(item, dict):
-                            item.pop("field_ids", None)
-                if payload.get("verdict") == "GREEN":
+            if isinstance(payload, dict):
+                if "corrected_markdown" in payload:
+                    correction = payload["corrected_markdown"]
+                elif payload.get("verdict") == "GREEN":
                     correction = request.prompt.split("<final-target>\n", 1)[1].split(
                         "</final-target>", 1
                     )[0]
@@ -78,8 +72,7 @@ class FakeExecutor:
                         )[0]
                     if correction is None:
                         return ModelCallResult(None, self._failure(), ())
-                payload["corrected_markdown"] = correction
-                response = json.dumps(payload, ensure_ascii=False)
+                response = json.dumps({"corrected_markdown": correction}, ensure_ascii=False)
         return ModelCallResult(response, None, ())
 
     @staticmethod
@@ -110,18 +103,11 @@ def critic_json(verdict: str, findings: list[dict[str, object]]) -> str:
 
 
 def critic_editor_json(
-    verdict: str,
-    findings: list[dict[str, object]],
+    _verdict: str,
+    _findings: list[dict[str, object]],
     corrected_markdown: str,
 ) -> str:
-    return json.dumps(
-        {
-            "verdict": verdict,
-            "findings": findings,
-            "corrected_markdown": corrected_markdown,
-        },
-        ensure_ascii=False,
-    )
+    return json.dumps({"corrected_markdown": corrected_markdown}, ensure_ascii=False)
 
 
 def fallback_editor_json(corrected_markdown: str) -> str:
@@ -217,13 +203,8 @@ def test_editor_returns_final_chunk_and_independent_arbiter_owns_verdict() -> No
     draft_request = prepare_document(SOURCE, plan, max_characters=100_000)
     draft_target = raw_document(target)
     corrected = draft_target.replace("Прочитайте", "Изучите")
-    editor_finding = {
-        "reason": "Формулировка неточна.",
-        "expected_correction": "Использовать точный глагол.",
-        "searchable_snippet": "Прочитайте",
-    }
     executor = FakeExecutor(
-        critic_editor_json("RED", [editor_finding], corrected),
+        fallback_editor_json(corrected),
         critic_json("GREEN", []),
     )
 
@@ -242,11 +223,46 @@ def test_editor_returns_final_chunk_and_independent_arbiter_owns_verdict() -> No
         draft_responses=(draft_target,),
     )
 
-    assert result.primary.verdict is Verdict.RED
+    assert result.primary.verdict is Verdict.GREEN
     assert result.final.verdict is Verdict.GREEN
     assert b"\xd0\x98\xd0\xb7\xd1\x83\xd1\x87\xd0\xb8\xd1\x82\xd0\xb5" in result.final_candidate
     assert [call.role.value for call in executor.calls] == ["critic", "arbiter"]
     assert [call.model for call in executor.calls] == ["editor-model", "arbiter-model"]
+
+
+def test_editor_and_arbiter_select_glossary_for_the_current_chunk() -> None:
+    plan, request, _values, target = prepared()
+    draft_request = prepare_document(SOURCE, plan, max_characters=100_000)
+    draft_target = raw_document(target)
+    seen: list[str] = []
+
+    def context_for(source_text: str) -> str:
+        seen.append(source_text)
+        return "SOURCE: guide\nTARGET: руководство"
+
+    executor = FakeExecutor(
+        fallback_editor_json(draft_target),
+        critic_json("GREEN", []),
+    )
+
+    review_translation(
+        executor,
+        model="editor-model",
+        arbiter_model="arbiter-model",
+        source=SOURCE,
+        source_plan=plan,
+        translation_request=request,
+        target=target,
+        target_path=PATH,
+        source_locale=Locale.EN,
+        target_locale=Locale.RU,
+        terminology_context_for=context_for,
+        draft_request=draft_request,
+        draft_responses=(draft_target,),
+    )
+
+    assert seen == [draft_request.chunks[0].text] * 2
+    assert all("TARGET: руководство" in call.prompt for call in executor.calls)
 
 
 def test_editor_removes_duplicate_compute_nodes_before_arbiter_verdict() -> None:
@@ -295,7 +311,7 @@ def test_editor_removes_duplicate_compute_nodes_before_arbiter_verdict() -> None
     )
 
     assert result.final_candidate == corrected.encode()
-    assert result.primary.verdict is Verdict.RED
+    assert result.primary.verdict is Verdict.GREEN
     assert result.final.verdict is Verdict.GREEN
     assert result.repair_applied
     assert [call.role.value for call in executor.calls] == ["critic", "arbiter"]
@@ -927,7 +943,7 @@ def test_repairable_red_accepts_actual_validated_critic_edit() -> None:
     assert result.final_candidate == expected
     assert result.repair_attempted and result.repair_applied
     assert result.repair_error is None
-    assert result.primary.verdict is Verdict.RED
+    assert result.primary.verdict is Verdict.GREEN
     assert result.final.verdict is Verdict.GREEN
     assert [call.role.value for call in executor.calls] == ["critic"]
     assert executor.calls[0].schema is not None
@@ -1015,7 +1031,7 @@ def test_oversized_repair_uses_minimum_ordered_structural_chunks_within_limit() 
 
         def invoke(self, model_request: ModelRequest, /) -> ModelCallResult:
             self.calls.append(model_request)
-            if "Act as a critic-editor" in model_request.prompt:
+            if "Act as a pragmatic technical editor" in model_request.prompt:
                 self.editor_calls += 1
                 return ModelCallResult(
                     critic_editor_json(
@@ -1043,7 +1059,7 @@ def test_oversized_repair_uses_minimum_ordered_structural_chunks_within_limit() 
     )
 
     repair_calls = [
-        call for call in executor.calls if "Act as a critic-editor" in call.prompt
+        call for call in executor.calls if "Act as a pragmatic technical editor" in call.prompt
     ]
     assert result.final_candidate == target
     assert len(repair_calls) == 2
@@ -1076,7 +1092,7 @@ def test_large_repair_uses_response_safe_chunks_and_restores_exact_target() -> N
 
         def invoke(self, model_request: ModelRequest, /) -> ModelCallResult:
             self.calls.append(model_request)
-            if "Act as a critic-editor" in model_request.prompt:
+            if "Act as a pragmatic technical editor" in model_request.prompt:
                 self.critic_calls += 1
                 return ModelCallResult(
                     critic_editor_json(
@@ -1104,7 +1120,7 @@ def test_large_repair_uses_response_safe_chunks_and_restores_exact_target() -> N
     )
 
     repair_calls = tuple(
-        call for call in executor.calls if "Act as a critic-editor" in call.prompt
+        call for call in executor.calls if "Act as a pragmatic technical editor" in call.prompt
     )
     target_chunks = tuple(
         current_editor_target(call) for call in repair_calls
@@ -1151,7 +1167,7 @@ def test_exhausted_content_filter_uses_intact_fallback_request() -> None:
 
         def invoke(self, model_request: ModelRequest, /) -> ModelCallResult:
             self.calls.append(model_request)
-            if "Act as a critic-editor" in model_request.prompt:
+            if "Act as a pragmatic technical editor" in model_request.prompt:
                 self.repair_calls += 1
                 if self.repair_calls == 1:
                     return ModelCallResult(None, AttemptError.CONTENT_FILTER, ())
@@ -1178,7 +1194,7 @@ def test_exhausted_content_filter_uses_intact_fallback_request() -> None:
     )
 
     repair_calls = tuple(
-        call for call in executor.calls if "Act as a critic-editor" in call.prompt
+        call for call in executor.calls if "Act as a pragmatic technical editor" in call.prompt
     )
     source_chunks = tuple(
         call.prompt.split("<authoritative-source>\n", 1)[1].split(
@@ -1215,7 +1231,7 @@ def test_content_filter_from_primary_and_fallback_is_terminal() -> None:
 
         def invoke(self, model_request: ModelRequest, /) -> ModelCallResult:
             self.calls.append(model_request)
-            if "Act as a critic-editor" in model_request.prompt:
+            if "Act as a pragmatic technical editor" in model_request.prompt:
                 self.editor_calls += 1
                 if self.editor_calls <= 2:
                     return ModelCallResult(None, AttemptError.CONTENT_FILTER, ())
@@ -1243,7 +1259,7 @@ def test_content_filter_from_primary_and_fallback_is_terminal() -> None:
         )
 
     repair_calls = tuple(
-        call for call in executor.calls if "Act as a critic-editor" in call.prompt
+        call for call in executor.calls if "Act as a pragmatic technical editor" in call.prompt
     )
     assert len(repair_calls) == 2
     assert [call.model for call in repair_calls] == ["model", "fallback-model"]
@@ -1267,7 +1283,7 @@ def test_repair_content_filter_does_not_split_uneven_translation() -> None:
 
         def invoke(self, model_request: ModelRequest, /) -> ModelCallResult:
             self.calls.append(model_request)
-            if "Act as a critic-editor" in model_request.prompt:
+            if "Act as a pragmatic technical editor" in model_request.prompt:
                 self.repair_calls += 1
                 if self.repair_calls == 1:
                     return ModelCallResult(None, AttemptError.CONTENT_FILTER, ())
@@ -1294,7 +1310,7 @@ def test_repair_content_filter_does_not_split_uneven_translation() -> None:
     )
 
     repair_calls = tuple(
-        call for call in executor.calls if "Act as a critic-editor" in call.prompt
+        call for call in executor.calls if "Act as a pragmatic technical editor" in call.prompt
     )
     source_chunks = tuple(
         call.prompt.split("<authoritative-source>\n", 1)[1].split(
@@ -1580,8 +1596,8 @@ def test_editor_does_not_get_a_second_semantic_correction_call() -> None:
 
     result = review(executor)
 
-    assert result.final.verdict is Verdict.RED
-    assert result.repair_attempted
+    assert result.final.verdict is Verdict.GREEN
+    assert not result.repair_attempted
     assert not result.repair_applied
     assert [call.role.value for call in executor.calls] == ["critic"]
 
@@ -1599,7 +1615,7 @@ def test_unchanged_targeted_editor_result_stays_red_without_loop() -> None:
 
     result = review(executor)
 
-    assert result.final.verdict is Verdict.RED
+    assert result.final.verdict is Verdict.GREEN
     assert not result.repair_applied
     assert len(executor.calls) == 1
 
@@ -1799,8 +1815,8 @@ def test_unchanged_editor_red_does_not_start_a_semantic_loop() -> None:
 
     result = review(executor)
 
-    assert result.final.verdict is Verdict.RED
-    assert result.repair_attempted
+    assert result.final.verdict is Verdict.GREEN
+    assert not result.repair_attempted
     assert not result.repair_applied
     assert len(executor.calls) == 1
 
@@ -1856,7 +1872,7 @@ def test_critic_parser_derives_redundant_verdict_from_findings(
 
 def test_green_critic_editor_may_return_a_valid_correction() -> None:
     result = parse_critic_response(
-        critic_editor_json("GREEN", [], "changed"),
+        fallback_editor_json("changed"),
         target_path=PATH,
         requested_ids=(),
         editable=True,
@@ -1867,32 +1883,25 @@ def test_green_critic_editor_may_return_a_valid_correction() -> None:
     assert result.corrected_markdown == "changed"
 
 
-def test_editor_parser_derives_metadata_from_minimal_finding() -> None:
-    current = "First line\nDuplicated alias here\n"
-    result = parse_critic_response(
-        json.dumps(
-            {
-                "findings": [
-                    {
-                        "reason": "Термин повторён.",
-                        "expected_correction": "Удалить повтор.",
-                        "searchable_snippet": "Duplicated alias",
-                    }
-                ],
-                "corrected_markdown": "First line\nAlias here\n",
-            },
-            ensure_ascii=False,
-        ),
-        target_path=PATH,
-        requested_ids=(),
-        editable=True,
-        current_target=current,
+def test_editor_parser_rejects_diagnostic_fields() -> None:
+    raw = json.dumps(
+        {
+            "findings": [],
+            "corrected_markdown": "First line\nAlias here\n",
+        },
+        ensure_ascii=False,
     )
 
-    assert result.verdict is Verdict.RED
-    assert result.findings[0].target_path == PATH.value
-    assert result.findings[0].target_line == 2
-    assert result.findings[0].repairable
+    with pytest.raises(CriticResponseError) as caught:
+        parse_critic_response(
+            raw,
+            target_path=PATH,
+            requested_ids=(),
+            editable=True,
+            current_target="First line\nDuplicated alias here\n",
+        )
+
+    assert caught.value.reason is CriticResponseErrorReason.UNEXPECTED_FIELD
 
 
 @pytest.mark.parametrize(
@@ -2085,21 +2094,23 @@ def test_critic_request_limits_red_to_material_translation_defects(final: bool) 
         final=final,
     )
 
-    assert "Use RED only for a concrete, currently present, material translation defect" in (
-        built.prompt
-    )
+    assert "Default to GREEN" in built.prompt
+    assert "materially wrong information" in built.prompt
     assert "wrong or reversed meaning" in built.prompt
-    assert "missing user-facing information" in built.prompt
+    assert "missing or invented user-facing information" in built.prompt
     assert "untranslated user-facing prose" in built.prompt
-    assert "wrong technical terminology that can mislead use" in built.prompt
+    assert "wrong command, parameter, number, version, or technical entity" in built.prompt
     assert "broken or purpose-changing link usage" in built.prompt
+    assert "imperfect English" in built.prompt
     assert "optional stylistic polishing" in built.prompt
-    assert "smoother grammar" in built.prompt
-    assert "tone preferences" in built.prompt
+    assert "synonym choice" in built.prompt
+    assert "understandable awkward wording" in built.prompt
     assert "more detail than the authoritative source" in built.prompt
     assert 'vague requests such as "review", "refine", or "could be clearer"' in built.prompt
     assert "complete, accurate, and understandable" in built.prompt
     assert "return GREEN even if its prose could be polished" in built.prompt
+    assert "terminology variant is not a defect" in built.prompt
+    assert "explicit project-glossary mapping" in built.prompt
 
 
 @pytest.mark.parametrize("final", [False, True])
@@ -2164,6 +2175,30 @@ def test_critic_editor_receives_project_glossary_context() -> None:
     assert "<project-glossary>" in built.prompt
     assert "Row-oriented tables" in built.prompt
     assert "Use these target-language terms when judging or correcting" in built.prompt
+
+
+def test_critic_editor_returns_only_final_markdown_and_avoids_style_rewrites() -> None:
+    built = build_critic_request(
+        model="model",
+        source=b"Source",
+        target=b"Understandable target",
+        target_path=PATH,
+        source_locale=Locale.EN,
+        target_locale=Locale.RU,
+        requested_ids=(),
+        editable=True,
+    )
+
+    assert "pragmatic technical editor" in built.prompt
+    assert "Silently fix" in built.prompt
+    assert "understandable awkward wording" in built.prompt
+    assert "Do not describe changes or return findings" in built.prompt
+    assert mutable_json(built.schema) == {
+        "type": "object",
+        "properties": {"corrected_markdown": {"type": "string"}},
+        "required": ["corrected_markdown"],
+        "additionalProperties": False,
+    }
 
 
 def test_critic_schema_omits_field_ids_when_document_has_no_repairable_fields() -> None:
@@ -2266,6 +2301,9 @@ def test_malformed_critic_gets_exactly_one_contract_retry() -> None:
     assert "previous response violated" in executor.calls[1].prompt
     for call in executor.calls:
         schema = mutable_json(call.schema)
-        assert type(schema) is dict
-        finding = schema["properties"]["findings"]["items"]
-        assert "field_ids" not in finding["properties"]
+        assert schema == {
+            "type": "object",
+            "properties": {"corrected_markdown": {"type": "string"}},
+            "required": ["corrected_markdown"],
+            "additionalProperties": False,
+        }

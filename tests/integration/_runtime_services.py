@@ -261,15 +261,14 @@ class RuntimeServices:
             prompt = request_prompt(body)
             if properties and all(key.startswith("segment_") for key in properties):
                 values = translation_segments(prompt)
+            elif set(properties) == {"corrected_markdown"}:
+                values = {
+                    "corrected_markdown": raw_repair_context(prompt, "final-target")
+                }
             elif "findings" in properties:
                 values = {"findings": []}
                 if "verdict" in properties:
                     values["verdict"] = "GREEN"
-                if "corrected_markdown" in properties:
-                    prompt = request_prompt(body)
-                    values["corrected_markdown"] = raw_repair_context(
-                        prompt, "final-target"
-                    )
             else:
                 values = {key: "Translated" for key in properties}
             text = json.dumps(values)
@@ -400,19 +399,20 @@ class InstalledContinueServices(RuntimeServices):
                 )
             return HttpResponse(200, json.dumps(body).encode(), Decimal("0.01"))
         if self.stop_review and schema is not None and "findings" in schema["schema"]["properties"]:
-            properties = schema["schema"]["properties"]
             prompt = request_prompt(json.loads(request.body))
             values = {
+                "verdict": "RED",
                 "findings": [
                     {
+                        "repairable": False,
                         "reason": "Meaning requires operator context.",
                         "expected_correction": "Confirm the intended source meaning.",
                         "searchable_snippet": "Translated",
+                        "target_path": prompt.split("Target path: ", 1)[1].split("\n", 1)[0],
+                        "target_line": 1,
                     }
                 ],
             }
-            if "corrected_markdown" in properties:
-                values["corrected_markdown"] = raw_repair_context(prompt, "final-target")
             body = json.loads(response.body)
             if "choices" in body:
                 body["choices"][0]["message"]["content"] = json.dumps(values)

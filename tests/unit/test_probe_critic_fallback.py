@@ -39,22 +39,10 @@ def test_diagnostic_probe_uses_the_runtime_whole_excerpt_contract() -> None:
     schema = request.schema
 
     assert schema is not None
-    assert set(schema["properties"]) == {"findings", "corrected_markdown"}
-    finding = schema["properties"]["findings"]["items"]
-    assert set(finding["properties"]) == {
-        "reason",
-        "expected_correction",
-        "searchable_snippet",
-    }
-    assert tuple(finding["required"]) == (
-        "reason",
-        "expected_correction",
-        "searchable_snippet",
-    )
+    assert set(schema["properties"]) == {"corrected_markdown"}
     _parse_diagnostic_probe_response(
         json.dumps(
             {
-                "findings": [],
                 "corrected_markdown": (
                     "**Storage group**, **distributed storage group**, **storage group**, or "
                     "**Blob storage group** is a place for reliable data storage."

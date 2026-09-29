@@ -64,27 +64,10 @@ def critic_schema(
     editable: bool = False,
 ) -> dict[str, object]:
     if editable:
-        editable_finding = {
-            "type": "object",
-            "properties": {
-                "reason": {"type": "string", "minLength": 1},
-                "expected_correction": {"type": "string", "minLength": 1},
-                "searchable_snippet": {"type": "string", "minLength": 1},
-            },
-            "required": ["reason", "expected_correction", "searchable_snippet"],
-            "additionalProperties": False,
-        }
         return {
             "type": "object",
-            "properties": {
-                "findings": {
-                    "type": "array",
-                    "items": editable_finding,
-                    "maxItems": 20,
-                },
-                "corrected_markdown": {"type": "string"},
-            },
-            "required": ["findings", "corrected_markdown"],
+            "properties": {"corrected_markdown": {"type": "string"}},
+            "required": ["corrected_markdown"],
             "additionalProperties": False,
         }
     finding_properties: dict[str, object] = {
@@ -142,9 +125,7 @@ def build_critic_request(
     source_text = source.decode("utf-8")
     target_text = target.decode("utf-8")
     if editable:
-        field_ids_instruction = (
-            "Do not include field_ids; this editor returns the complete corrected excerpt.\n"
-        )
+        field_ids_instruction = ""
     elif requested_ids:
         field_ids_instruction = (
             "Always include field_ids in every finding. Use [] when no safe exact field mapping "
@@ -166,59 +147,71 @@ def build_critic_request(
     else:
         source_scope_instruction = ""
     verdict_instruction = (
-        "Act as a critic-editor. Return findings and corrected_markdown only; do not return "
-        "verdict, repairable, "
-        "target_path, target_line, or field_ids. Keep findings concise and consolidate related "
-        "defects. If there are no material defects, return an empty findings array and copy the "
-        "current target byte-for-byte into corrected_markdown. If there are defects, report each "
-        "one and fix all of them in the same complete corrected_markdown. Preserve every "
+        "Act as a pragmatic technical editor. Return corrected_markdown only. Silently fix every "
+        "clear material defect and otherwise keep the current target unchanged. Preserve every "
         "protected placeholder exactly once and do not add, remove, rename, or reorder "
         "placeholders. "
         if editable
-        else "Use GREEN when there are no material defects and RED otherwise. "
+        else (
+            "Default to GREEN. Use RED only when a technical reader would receive materially "
+            "wrong information or could not understand or use the documentation. "
+        )
     )
     defect_instruction = (
-        "Add a finding only for a concrete, currently present, material translation defect: "
+        "Fix only a concrete, currently present, material translation defect: "
         if editable
-        else "Use RED only for a concrete, currently present, material translation defect: "
+        else "A RED defect must be concrete and currently present: "
     )
     style_instruction = (
-        "Do not add findings for optional stylistic polishing, smoother grammar, tone "
+        "Do not rewrite for optional stylistic polishing, smoother grammar, tone "
         if editable
-        else "Do not return RED for optional stylistic polishing, smoother grammar, tone "
+        else "Do not return RED for imperfect English, optional stylistic polishing, tone "
     )
     complete_instruction = (
-        "and understandable, do not add findings even if its prose could be polished. "
+        "and understandable, leave it unchanged even if its prose could be polished. "
         if editable
         else "and understandable, return GREEN even if its prose could be polished. "
     )
     field_list_instruction = "" if editable else "List each field ID at most once. "
+    result_instruction = (
+        "Do not describe changes or return findings. Return the complete edited excerpt in the "
+        "single corrected_markdown field. "
+        if editable
+        else (
+            "Every finding must name an actual source/target mismatch visible in the current "
+            "final target, include an exact searchable snippet copied from the current target, "
+            "and give a concrete replacement or correction. Do not report a stale defect that "
+            "the current target bytes no longer contain. Write reason and expected_correction "
+            "in Russian so the public PR comment is immediately understandable to the "
+            "documentation author. "
+        )
+    )
     prompt = (
         "Compare the authoritative source with the complete translated target. "
         f"{source_scope_instruction}"
         f"{verdict_instruction}{defect_instruction}"
-        "wrong or reversed meaning; missing user-facing information; untranslated user-facing "
-        "prose; wrong technical terminology that can mislead use; or broken or purpose-changing "
+        "wrong or reversed meaning; missing or invented user-facing information; untranslated "
+        "user-facing prose; a wrong command, parameter, number, version, or technical entity "
+        "that can mislead use; an incomprehensible sentence; or broken or purpose-changing "
         f"link usage. {style_instruction}"
-        "preferences, requests for more detail than the authoritative source, or vague requests "
+        "preferences, articles, capitalization, synonym choice, understandable awkward wording, "
+        "repetition that does not change meaning, requests for more detail than the authoritative "
+        "source, or vague requests "
         'such as "review", "refine", or "could be clearer". If the target is complete, accurate, '
-        f"{complete_instruction}Every finding "
-        "must name an actual source/target mismatch visible in the current final target, include "
-        "an exact searchable snippet copied from the current target, and give a concrete "
-        "replacement or correction. Do not report a stale defect that the current target bytes "
-        "no longer contain. Operator context is guidance for interpreting intent only; it must "
+        f"{complete_instruction}{result_instruction}"
+        "Operator context is guidance for interpreting intent only; it must "
         "not override the authoritative source or current target bytes and must not force a "
         "finding that is no longer present. "
-        "Check full meaning and accuracy, completeness, terminology, untranslated user-facing "
-        "prose, and the purpose and workability of links in context. Do not rewrite URLs or "
+        "Check full meaning and accuracy, completeness, untranslated user-facing prose, and the "
+        "purpose and workability of links in context. A terminology variant is not a defect "
+        "unless it contradicts an explicit project-glossary mapping or changes the identity or "
+        "technical behavior of the subject. Do not rewrite URLs or "
         "paths, and do not implement or request a navigation resolver. Return only the strict "
         "JSON result. In glossary alias lists, a source-language term and an already supplied "
         "target-language alias may translate to the same target term: keep that term once, do "
         "not require one target occurrence per source alias, and treat a repeated identical "
         "target alias as a defect. Never claim that an alias is missing when its exact term is "
         "already present in the current target. "
-        "Write reason and expected_correction in Russian so the public PR comment "
-        "is immediately understandable to the documentation author. "
         f"{field_list_instruction}"
         f"{field_ids_instruction}"
         f"Direction: {source_locale.value} -> {target_locale.value}\n"
@@ -277,11 +270,13 @@ def parse_critic_response(
         raise CriticResponseError(CriticResponseErrorReason.ROOT_NOT_OBJECT)
     if _has_duplicate(value):
         raise CriticResponseError(CriticResponseErrorReason.DUPLICATE_KEY)
-    expected = frozenset(
-        {"findings", "corrected_markdown"} if editable else {"verdict", "findings"}
-    )
-    optional_root = frozenset({"verdict"}) if editable else frozenset()
-    document = _object(value, expected, optional_root)
+    expected = frozenset({"corrected_markdown"} if editable else {"verdict", "findings"})
+    document = _object(value, expected)
+    if editable:
+        raw_correction = document["corrected_markdown"]
+        if type(raw_correction) is not str or current_target is None:
+            raise CriticResponseError(CriticResponseErrorReason.INVALID_FINDING)
+        return CriticResult(Verdict.GREEN, (), raw_correction)
     raw_verdict = document.get("verdict")
     if raw_verdict is not None and (
         type(raw_verdict) is not str or raw_verdict not in {"GREEN", "RED"}
@@ -358,10 +353,4 @@ def parse_critic_response(
     # cross-field relationship across supported model backends. Normalizing the
     # redundant verdict avoids rejecting an otherwise complete strict response.
     verdict = Verdict.RED if findings else Verdict.GREEN
-    corrected_markdown: str | None = None
-    if editable:
-        raw_correction = document["corrected_markdown"]
-        if type(raw_correction) is not str or current_target is None:
-            raise CriticResponseError(CriticResponseErrorReason.INVALID_FINDING)
-        corrected_markdown = raw_correction
-    return CriticResult(verdict, tuple(findings), corrected_markdown)
+    return CriticResult(verdict, tuple(findings))

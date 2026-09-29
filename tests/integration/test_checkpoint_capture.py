@@ -209,8 +209,14 @@ class CaptureServices(RuntimeServices):
             "corrected_markdown"
         }:
             role = "critic"
+            self.critics += 1
+            current = raw_repair_context(prompt, "final-target")
             values = {
-                "corrected_markdown": raw_repair_context(prompt, "final-target")
+                "corrected_markdown": (
+                    rewrite_markdown(current, "Corrected")
+                    if self.stop == "review" and self.critics == 1
+                    else current
+                )
             }
         elif "findings" in schema["properties"]:
             editable = "corrected_markdown" in schema["properties"]
@@ -587,7 +593,6 @@ def test_red_without_a_published_current_verdict_never_opens_checkpoint():
         "translate",
         "critic",
         "arbiter",
-        "repair",
         "attempt",
         "validation",
         "publish",

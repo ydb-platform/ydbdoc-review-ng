@@ -9,6 +9,9 @@
   и не контролирует placeholders.
 - Direction, translate, critic-editor и read-only arbiter возвращают structured output по JSON Schema;
   raw JSON повторно проверяется локально независимо от гарантий провайдера.
+- Schema critic-editor содержит только `corrected_markdown`: редактор возвращает
+  готовый чанк и не тратит output/context на findings. Только read-only arbiter
+  возвращает `verdict` и `findings` для пользовательского результата.
 - Каждая начатая attempt сохраняется в durable state с параметрами, входом,
   status/error, сырым ответом и usage при их наличии.
 - Любой полученный response, включая malformed или семантически неудачный,
@@ -33,6 +36,9 @@
   проверяется локально, затем runtime вставляет source-owned fragments в
   исходном порядке. Critic-editor и arbiter видят собранный masked Markdown и
   точное отображение placeholder → fragment.
+- Для каждого отдельного чанка translator, critic-editor и arbiter получают
+  только те пары project glossary, исходные термины которых встречаются в этом
+  чанке.
 
 ## Проверенные модели
 

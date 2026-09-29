@@ -51,7 +51,7 @@ from ydbdoc_review_ng.locales import (
 from ydbdoc_review_ng.models import ModelCallResult, ModelRequest
 from ydbdoc_review_ng.parser.markdown import build_markdown_plan
 from ydbdoc_review_ng.persistence import DailyBudgetExceeded, JobStatus, YdbPersistence
-from ydbdoc_review_ng.plan import SourcePlan, fields_of
+from ydbdoc_review_ng.plan import SourcePlan
 from ydbdoc_review_ng.publication import (
     FileChange,
     GitPublicationAdapter,
@@ -458,44 +458,17 @@ class CriticExecutor:
         role = request.role.value
         self.case.calls.append(role)
         self.case.events.append(role)
-        if role == "critic" and self.case.repair:
-            target_plan = build_markdown_plan(
-                self.context.source_plan.source_snapshot,
-                self.context.target_path,
-                self.candidate,
-            )
-            first_field = fields_of(target_plan)[0]
-            snippet = self.candidate[first_field.span.start : first_field.span.end].decode()
-            assert request.schema is not None
-            text = json.dumps(
-                {
-                    "verdict": "RED",
-                    "findings": [
-                        {
-                            "repairable": True,
-                            "reason": "The first field needs correction.",
-                            "expected_correction": "Repair the first field.",
-                            "searchable_snippet": snippet,
-                            "target_path": self.context.target_path.value,
-                            "target_line": first_field.lines.start,
-                        }
-                    ],
-                    "corrected_markdown": request.prompt.split(
-                        "<final-target>\n", 1
-                    )[1]
-                    .split("</final-target>", 1)[0]
-                    .replace("# ", "# Repaired: ", 1),
-                }
-            )
+        assert request.schema is not None
+        properties = request.schema["properties"]
+        if role == "critic" and set(properties) == {"corrected_markdown"}:
+            corrected = request.prompt.split("<final-target>\n", 1)[1].split(
+                "</final-target>", 1
+            )[0]
+            if self.case.repair:
+                corrected = corrected.replace("# ", "# Repaired: ", 1)
+            text = json.dumps({"corrected_markdown": corrected})
         else:
-            values = {"verdict": "GREEN", "findings": []}
-            if request.schema is not None and "corrected_markdown" in request.schema[
-                "properties"
-            ]:
-                values["corrected_markdown"] = request.prompt.split(
-                    "<final-target>\n", 1
-                )[1].split("</final-target>", 1)[0]
-            text = json.dumps(values)
+            text = json.dumps({"verdict": "GREEN", "findings": []})
         return ModelCallResult(text, None, ())
 
 

@@ -232,6 +232,7 @@ def _editor_requests(
     max_characters: int,
     link_resolver: LinkResolver | None = None,
     terminology_context: str | None = None,
+    terminology_context_for: Callable[[str], str | None] | None = None,
 ) -> tuple[
     tuple[ModelRequest, ...],
     DocumentTranslationRequest,
@@ -349,7 +350,11 @@ def _editor_requests(
             target_locale=target_locale,
             requested_ids=requested_ids,
             operator_context=operator_context,
-            terminology_context=terminology_context,
+            terminology_context=(
+                terminology_context_for(source_text)
+                if terminology_context_for is not None
+                else terminology_context
+            ),
             placeholders=source_document.placeholders,
         )
         return chunk, request
@@ -409,6 +414,7 @@ def _editor_requests_from_draft(
     operator_context: str | None,
     max_characters: int,
     terminology_context: str | None = None,
+    terminology_context_for: Callable[[str], str | None] | None = None,
 ) -> tuple[
     tuple[ModelRequest, ...],
     DocumentTranslationRequest,
@@ -454,7 +460,11 @@ def _editor_requests_from_draft(
                 target_locale=target_locale,
                 requested_ids=requested_ids,
                 operator_context=operator_context,
-                terminology_context=terminology_context,
+                terminology_context=(
+                    terminology_context_for(source_text)
+                    if terminology_context_for is not None
+                    else terminology_context
+                ),
                 placeholders=document_request.placeholders,
             )
             if (
@@ -558,6 +568,7 @@ def review_translation(
     max_request_characters: int = 200_000,
     link_resolver: LinkResolver | None = None,
     terminology_context: str | None = None,
+    terminology_context_for: Callable[[str], str | None] | None = None,
     draft_request: DocumentTranslationRequest | None = None,
     draft_responses: tuple[str, ...] | None = None,
 ) -> QualityReviewResult:
@@ -606,6 +617,7 @@ def review_translation(
             max_characters=max_request_characters,
             link_resolver=link_resolver,
             terminology_context=terminology_context,
+            terminology_context_for=terminology_context_for,
         )
     else:
         assert draft_responses is not None
@@ -624,6 +636,7 @@ def review_translation(
                 operator_context=operator_context,
                 max_characters=max_request_characters,
                 terminology_context=terminology_context,
+                terminology_context_for=terminology_context_for,
             )
         )
     repair_error: RepairErrorReason | None = None
@@ -724,7 +737,11 @@ def review_translation(
                                     target_locale=target_locale,
                                     requested_ids=critic_field_ids,
                                     operator_context=operator_context,
-                                    terminology_context=terminology_context,
+                                    terminology_context=(
+                                        terminology_context_for(original.text)
+                                        if terminology_context_for is not None
+                                        else terminology_context
+                                    ),
                                     placeholders=document_request.placeholders,
                                 ),
                             )
@@ -823,12 +840,13 @@ def review_translation(
             repair_error = RepairErrorReason.ASSEMBLY_FAILED
             repaired_candidate = None
     if repair_error is not None:
+        failed = CriticResult(Verdict.RED, primary.findings)
         return QualityReviewResult(
             target,
             None,
             target,
             primary,
-            primary,
+            failed,
             True,
             False,
             repair_error,
@@ -850,7 +868,11 @@ def review_translation(
                 source_locale=source_locale,
                 target_locale=target_locale,
                 operator_context=operator_context,
-                terminology_context=terminology_context,
+                terminology_context=(
+                    terminology_context_for(chunk.text)
+                    if terminology_context_for is not None
+                    else terminology_context
+                ),
                 placeholders=document_request.placeholders,
             )
             response = invoke_editor(request)

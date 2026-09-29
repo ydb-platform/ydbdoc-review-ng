@@ -118,7 +118,7 @@ def test_shipped_composition_translates_then_verifies_current_pr_without_retrans
         next(
             i
             for i, event in enumerate(events)
-                if event == ("MODEL", ("findings", "corrected_markdown"))
+                if event == ("MODEL", ("corrected_markdown",))
         )
         < next(
             i
@@ -154,7 +154,7 @@ def test_shipped_composition_translates_then_verifies_current_pr_without_retrans
         == 0
     )
     assert [event for event in services.events if event[0] == "MODEL"] == [
-        ("MODEL", ("findings", "corrected_markdown")),
+        ("MODEL", ("corrected_markdown",)),
         ("MODEL", ("verdict", "findings")),
     ]
     assert not any(
@@ -192,7 +192,6 @@ def test_runtime_publishes_field_local_inline_code_grammar_order_once() -> None:
                     response = super().model(request)
                     payload = json.loads(response.body)
                     values = {
-                        "findings": [],
                         "corrected_markdown": (
                             "* The [[YDBDOC_PROTECTED_0003]] column was added to "
                             "[[YDBDOC_PROTECTED_0001]] and [[YDBDOC_PROTECTED_0002]].\n"
@@ -291,20 +290,12 @@ def test_runtime_preserves_list_formatting_drift_through_critic() -> None:
                 schema = schema_wrapper["schema"]
                 self.events.append(("MODEL", tuple(schema["properties"])))
                 values = {
-                    "findings": [
-                        {
-                            "reason": "Clarify the translated list item.",
-                            "expected_correction": "Use corrected wording.",
-                            "searchable_snippet": "translated item",
-                        }
-                    ],
-                }
-                if "corrected_markdown" in schema["properties"]:
-                    values["corrected_markdown"] = (
+                    "corrected_markdown": (
                         "* Parent translated\n"
                         "* [[YDBDOC_PROTECTED_0001]] — corrected item "
                         "(i.e., only an administrator)\n"
                     )
+                }
                 text = json.dumps(values)
             else:
                 self.raw_calls += 1
@@ -375,7 +366,7 @@ def test_runtime_preserves_list_formatting_drift_through_critic() -> None:
         b"\xe2\x80\x94 corrected item (i.e., only an administrator)\n"
     )
     assert services.events.count(
-        ("MODEL", ("findings", "corrected_markdown"))
+        ("MODEL", ("corrected_markdown",))
     ) == 1
     assert services.events.count(("MODEL", ("verdict", "findings"))) == 1
     assert services.events.count(("REPAIR", "markdown")) == 0
@@ -942,7 +933,7 @@ def test_t017_r07_already_renamed_noop_checks_entire_pinned_target(
 
     assert _run_t017_r07(services) == expected_exit
     assert (
-        ("MODEL", ("findings", "corrected_markdown")) in services.events
+        ("MODEL", ("corrected_markdown",)) in services.events
     ) is expects_critic
     if expected_exit:
         assert services.audit[-1]["error"] in {"load_candidate_failed", "validate_failed"}
@@ -1203,15 +1194,17 @@ class _T017N04Services(RuntimeServices):
                 key: value.replace('An \\"escaped\\" title', 'A \\"quoted\\" title')
                 for key, value in translation_segments(request_prompt(body)).items()
             }
+        elif properties == ("corrected_markdown",):
+            prompt = request_prompt(body)
+            values = {
+                "corrected_markdown": prompt.split("<final-target>\n", 1)[1].split(
+                    "</final-target>", 1
+                )[0]
+            }
         elif "findings" in properties:
             values = {"findings": []}
             if "verdict" in properties:
                 values["verdict"] = "GREEN"
-            if "corrected_markdown" in properties:
-                prompt = request_prompt(body)
-                values["corrected_markdown"] = prompt.split(
-                    "<final-target>\n", 1
-                )[1].split("</final-target>", 1)[0]
         else:
             values = {field_id: 'A "quoted" title' for field_id in properties}
         return HttpResponse(
@@ -1277,7 +1270,7 @@ def test_t017_n04_real_translate_reviews_escaped_quoted_frontmatter() -> None:
 
     assert result == 0
     assert services.files["ydb/docs/en/core/page.md"] == target
-    assert ("MODEL", ("findings", "corrected_markdown")) in services.events
+    assert ("MODEL", ("corrected_markdown",)) in services.events
     assert services.comments[0]["body"].startswith("🟢 GREEN\n")
 
 
@@ -1318,7 +1311,7 @@ def test_t017_n04_real_verify_reviews_escaped_quoted_frontmatter() -> None:
 
     assert result == 0
     assert [event for event in services.events if event[0] == "MODEL"] == [
-        ("MODEL", ("findings", "corrected_markdown")),
+        ("MODEL", ("corrected_markdown",)),
         ("MODEL", ("verdict", "findings")),
     ]
     assert services.comments[0]["body"].startswith("🟢 GREEN\n")
@@ -1802,23 +1795,18 @@ def test_critic_edit_is_validated_then_published_once_before_pr():
             if self.critics > 1:
                 return super().model(request)
             self.events.append(("CRITIC", "first"))
-            values = {
-                "findings": [
-                    {
-                        "reason": "Wrong term",
-                        "expected_correction": "Use Corrected",
-                        "searchable_snippet": "Translated",
-                    }
-                ],
-            }
             if "corrected_markdown" in schema["properties"]:
                 prompt = request_prompt(body)
                 current = prompt.split("<final-target>\n", 1)[1].split(
                     "</final-target>", 1
                 )[0]
-                values["corrected_markdown"] = current.replace(
-                    "# Translated", "# Corrected", 1
-                )
+                values = {
+                    "corrected_markdown": current.replace(
+                        "# Translated", "# Corrected", 1
+                    )
+                }
+            else:
+                values = {"verdict": "GREEN", "findings": []}
             return HttpResponse(
                 200,
                 json.dumps(

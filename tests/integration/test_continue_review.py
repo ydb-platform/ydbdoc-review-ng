@@ -95,45 +95,37 @@ class ReviewServices(LifecycleServices):
                 else "arbiter"
             )
         )
-        flat_editor = schema is not None and set(schema["properties"]) == {
-            "corrected_markdown"
-        }
-        editable = schema is not None and "corrected_markdown" in schema["properties"]
         self.roles.append(role)
         self.prompts.append((role, prompt))
         self.calls.append((role, path, schema))
         self.timeline.append(role)
         if self.failure == role:
             raise TimeoutError("model unavailable")
-        if flat_editor:
-            values = {
-                "corrected_markdown": raw_repair_context(prompt, "final-target")
-            }
-        elif role in {"critic", "arbiter"}:
+        if role in {"critic", "arbiter"}:
             outcomes = self.outcomes.get(path, [])
             if role == "critic":
                 outcome = outcomes.pop(0) if outcomes else "green"
                 self.arbiter_outcomes[path] = outcome
             else:
                 outcome = self.arbiter_outcomes.get(path, "green")
-            values = {"findings": []}
-            if outcome == "red" or role == "critic" and outcome == "repair":
+            findings: list[dict[str, object]] = []
+            values: dict[str, object] = {"findings": findings}
+            if role == "arbiter" and outcome == "red":
                 target = self.snapshots[self.branch_head][path].decode()
                 finding = {
                     "reason": "Missing meaning in the heading.",
                     "expected_correction": "Restore the full meaning.",
                     "searchable_snippet": target.splitlines()[0].removeprefix("# "),
                 }
-                if role == "arbiter":
-                    finding.update(
-                        {
-                            "repairable": False,
-                            "target_path": path,
-                            "target_line": 1,
-                        }
-                    )
-                values["findings"].append(finding)
-            if editable:
+                finding.update(
+                    {
+                        "repairable": False,
+                        "target_path": path,
+                        "target_line": 1,
+                    }
+                )
+                findings.append(finding)
+            if role == "critic":
                 current = raw_repair_context(prompt, "final-target")
                 source = raw_repair_context(prompt, "authoritative-source")
                 if outcome != "repair" or self.repair_uses_current_values:
@@ -147,16 +139,18 @@ class ReviewServices(LifecycleServices):
                     correction = repaired_heading + "".join(
                         current.splitlines(keepends=True)[1:]
                     )
-                values["corrected_markdown"] = (
-                    self.repair_payload if self.repair_payload is not None else correction
-                )
+                values = {
+                    "corrected_markdown": (
+                        self.repair_payload if self.repair_payload is not None else correction
+                    )
+                }
                 if self.failure == "repair" and outcome == "repair":
                     raise TimeoutError("model unavailable")
                 if self.move_after == "repair" and outcome == "repair":
                     self.branch_head = "f" * 40
                     self.snapshots[self.branch_head] = dict(self.files)
             else:
-                values["verdict"] = "RED" if values["findings"] else "GREEN"
+                values["verdict"] = "RED" if findings else "GREEN"
         else:
             current = raw_repair_context(prompt, "current-target")
             source = raw_repair_context(prompt, "authoritative-source")
@@ -173,7 +167,11 @@ class ReviewServices(LifecycleServices):
             self.branch_head = "f" * 40
             self.snapshots[self.branch_head] = dict(self.files)
         if role in {"critic", "arbiter"}:
-            raw = json.dumps(values)
+            raw = (
+                self.repair_payload
+                if role == "critic" and self.repair_payload is not None
+                else json.dumps(values)
+            )
         elif self.repair_payload is not None:
             raw = self.repair_payload
         return HttpResponse(
@@ -277,11 +275,9 @@ def test_continuation_repair_publishes_exact_model_markdown():
                 replacement = "* Parent translated\n* Nested translated item\n"
             elif role == "critic" and self.continuing and "Nested source item" in prompt:
                 values = json.loads(response_text(response.body))
-                if values["findings"]:
-                    values["findings"][0]["searchable_snippet"] = "Parent translated"
-                    values["corrected_markdown"] = (
-                        "* Parent corrected\n* Nested translated item\n"
-                    )
+                values["corrected_markdown"] = (
+                    "* Parent corrected\n* Nested translated item\n"
+                )
                 return HttpResponse(
                     200, replace_response_text(response.body, json.dumps(values)), Decimal("0.01")
                 )
@@ -487,15 +483,15 @@ def test_head_movement_blocks_later_models_publication_and_verdict(move_after):
     assert services.rows[saved.continuation_id]["status"] == "open"
 
 
-def test_invalid_critic_edit_keeps_candidate_without_arbiter():
+def test_invalid_critic_edit_fails_closed_without_arbiter():
     services = ReviewServices(names=("a", "b"))
     saved = services.start_review()
     before = dict(services.files)
     services.outcomes = {EN + "b.md": ["repair", "red"]}
     services.repair_payload = json.dumps({})
-    result = services.resume()
-    assert result.verdict is Verdict.RED and not result.repair_applied
-    assert services.roles == ["critic"]
+    with pytest.raises(application.WorkflowError):
+        services.resume()
+    assert services.roles == ["critic", "critic"]
     assert services.files == before and services.commits == services.initial_commits
     assert services.checkpoint().state.accepted_documents == saved.state.accepted_documents
 

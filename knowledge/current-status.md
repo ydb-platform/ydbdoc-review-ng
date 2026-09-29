@@ -664,3 +664,28 @@ prompt вместе с correction note. Контекст теперь динам
 через `max_request // 6` (для default 6 000 это 1 000), а terminology test
 проверяет малый лимит. Локальный реальный changelog из PR #50858 успешно
 готовится в 53 chunk при этом бюджете.
+
+## Прагматичный editor и независимый arbiter
+
+Run `36540228205` завершил полный pipeline и создал translation PR с числовой
+стоимостью `495.066900 RUB`, но read-only arbiter вернул RED по пяти замечаниям.
+Всего было записано 170 оплачиваемых attempts: 56 translator, 57 critic-editor
+(включая 10 content-filter/технических попыток) и 47 arbiter. Это подтвердило,
+что стоимость всех ролей и повторов суммируется; unknown допустим только для
+конкретной attempt без provider cost и без достаточного usage.
+
+Текущий контракт упрощён. Translator переводит prose chunks полного файла,
+runtime возвращает защищённые фрагменты, critic-editor получает исходный чанк и
+черновик и возвращает единственное поле `corrected_markdown` — готовый чанк без
+findings. Затем независимый read-only arbiter формирует пользовательские
+`verdict + findings`; RED не запускает новый semantic loop. Оба prompt-а
+требуют прагматичной технической оценки: понятный неидеальный английский и
+допустимые синонимы не блокируют результат, если не искажён смысл и не нарушено
+явное glossary-соответствие. Для translator, editor и arbiter glossary context
+выбирается отдельно по терминам текущего source chunk.
+
+Независимый offline release gate этой версии зелёный: 1967 non-live тестов,
+Ruff, strict mypy, wheel/sdist и smoke установленного wheel для полного пути
+`translate → verify RED/checkpoint → continue GREEN`. Smoke подтвердил семь
+отдельно аудируемых model attempts. До публикации и отдельного live
+`doc_model_probe` полный платный перевод повторно не запускался.
