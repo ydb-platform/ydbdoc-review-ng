@@ -61,6 +61,9 @@ class ScriptedModels:
 
 
 def _source_from_prompt(prompt: str) -> str:
+    if "\nSegments: " in prompt:
+        encoded = prompt.split("\nSegments: ", 1)[1].split("\n\n", 1)[0]
+        return "".join(json.loads(encoded).values())
     marker = "<AUTHORITATIVE_SOURCE_"
     if marker not in prompt:
         return prompt.split("\n\n", 1)[1]
@@ -69,13 +72,20 @@ def _source_from_prompt(prompt: str) -> str:
     return prompt[start:end]
 
 
+def _echo_response(request: ModelRequest) -> str:
+    if request.schema is not None and "\nSegments: " in request.prompt:
+        encoded = request.prompt.split("\nSegments: ", 1)[1].split("\n\n", 1)[0]
+        return json.dumps(json.loads(encoded), ensure_ascii=False)
+    return _source_from_prompt(request.prompt)
+
+
 class EchoChunkModels:
     def __init__(self) -> None:
         self.calls: list[ModelRequest] = []
 
     def invoke(self, request: ModelRequest, /) -> ModelCallResult:
         self.calls.append(request)
-        return ModelCallResult(_source_from_prompt(request.prompt), None, ())
+        return ModelCallResult(_echo_response(request), None, ())
 
 
 class TranslatorThenCriticModels:
@@ -98,7 +108,7 @@ class InvalidTwiceThenEchoModels:
 
     def invoke(self, request: ModelRequest, /) -> ModelCallResult:
         self.calls.append(request)
-        response = self.invalid if len(self.calls) <= 2 else _source_from_prompt(request.prompt)
+        response = self.invalid if len(self.calls) <= 2 else _echo_response(request)
         return ModelCallResult(response, None, ())
 
 
@@ -113,7 +123,7 @@ class InvalidThenFilteredThenEchoModels:
             return ModelCallResult(self.invalid, None, ())
         if len(self.calls) in {2, 3}:
             return ModelCallResult(None, AttemptError.CONTENT_FILTER, ())
-        return ModelCallResult(_source_from_prompt(request.prompt), None, ())
+        return ModelCallResult(_echo_response(request), None, ())
 
 
 class FilterTwiceThenEchoModels:
@@ -127,7 +137,7 @@ class FilterTwiceThenEchoModels:
         # first adaptive child so this exercises recursive splitting.
         if len(self.calls) <= 4:
             return ModelCallResult(None, AttemptError.CONTENT_FILTER, ())
-        return ModelCallResult(_source_from_prompt(request.prompt), None, ())
+        return ModelCallResult(_echo_response(request), None, ())
 
 
 class NestedInvalidThenEchoModels:
@@ -140,12 +150,9 @@ class NestedInvalidThenEchoModels:
         call_number = len(self.calls)
         if call_number <= 2:
             return ModelCallResult(self.parent_invalid, None, ())
-        source = _source_from_prompt(request.prompt)
         if call_number in {4, 5, 7, 8}:
-            marker_start = source.index("[[YDBDOC_PROTECTED_")
-            marker_end = source.index("]]", marker_start) + 2
-            source = source[:marker_start] + source[marker_end:]
-        return ModelCallResult(source, None, ())
+            return ModelCallResult("# invalid", None, ())
+        return ModelCallResult(_echo_response(request), None, ())
 
 
 def _heading_block(number: int, length: int) -> str:
@@ -363,14 +370,12 @@ def test_translate_document_uses_complete_markdown_and_selected_direction(
         in call.prompt
     )
     assert "# Исходный заголовок" in call.prompt
-    assert "- Один\n- Два" in call.prompt
+    assert json.dumps("- Один\n- Два", ensure_ascii=False)[1:-1] in call.prompt
     assert "guide.md" not in call.prompt
-    assert (
-        "[руководством]([[YDBDOC_URL_0001]])"
-        in call.prompt
-    )
+    assert "[руководством]" in call.prompt
+    assert "YDBDOC_URL" not in call.prompt
     assert "# Old target" not in call.prompt
-    assert "JSON" not in call.prompt
+    assert call.schema is not None
     assert (
         assemble_candidate(document.source, document.plan, document.request, accepted.as_dict())
         == b"# Translated heading\n\nText with [guide](guide.md).\n\n- One\n- Two\n"
@@ -391,7 +396,7 @@ def test_translator_draft_gets_one_technical_correction() -> None:
     _accepted, accepted_document = content_with(models)._translate_document(document)
 
     assert [call.role.value for call in models.calls] == ["translate", "translate"]
-    assert "<AUTHORITATIVE_SOURCE_RU>" in models.calls[1].prompt
+    assert "Segments:" in models.calls[1].prompt
     assert draft in models.calls[1].prompt
     assert "<PREVIOUS_RESPONSE>" in models.calls[1].prompt
     assert accepted_document.translated_markdown == (
@@ -451,7 +456,7 @@ def test_translate_without_existing_target_uses_full_translation_prompt() -> Non
 
     content_with(models).translate_document(document)
 
-    assert "Translate the complete Markdown below from ru to en" in models.calls[0].prompt
+    assert "Translate the complete Markdown prose from ru to en" in models.calls[0].prompt
     assert "<EXISTING_TARGET_EN>" not in models.calls[0].prompt
 
 
@@ -513,10 +518,8 @@ def test_existing_target_cannot_override_symmetric_source_link_destination() -> 
     _accepted, accepted_document = content_with(models)._translate_document(document)
 
     assert "(./dev/optimization/hints.md)" not in models.calls[0].prompt
-    assert (
-        "[query hints]([[YDBDOC_URL_0001]])"
-        in models.calls[0].prompt
-    )
+    assert "[query hints]" in models.calls[0].prompt
+    assert "YDBDOC_URL" not in models.calls[0].prompt
     assert "(./dev/query-execution-optimization/query-hints.md)" not in models.calls[0].prompt
     assert "(./dev/optimization/hints.md)" in accepted_document.translated_markdown
     assert accepted_document.translated_markdown == (
@@ -639,11 +642,40 @@ def test_translate_accepts_field_local_inline_code_grammar_order(
 
     assert len(models.calls) == 1
     assert "exactly once" in models.calls[0].prompt
-    assert "top-level source block" in models.calls[0].prompt
+    assert "runtime restores" in models.calls[0].prompt
     assert (
         assemble_candidate(document.source, document.plan, document.request, accepted.as_dict())
         == translated
     )
+
+
+def test_structured_translator_cannot_delete_or_duplicate_protected_fragments() -> None:
+    source = "Запустите `ydb` и откройте [руководство](guide.md).\n".encode()
+
+    class StructuredTranslator:
+        def __init__(self) -> None:
+            self.calls: list[ModelRequest] = []
+
+        def invoke(self, request: ModelRequest, /) -> ModelCallResult:
+            self.calls.append(request)
+            assert "`ydb`" not in request.prompt
+            assert "guide.md" not in request.prompt
+            encoded = request.prompt.split("\nSegments: ", 1)[1].split("\n\n", 1)[0]
+            segments = json.loads(encoded)
+            translated = {
+                key: value.replace("Запустите", "Run").replace("и откройте", "and open").replace(
+                    "руководство", "the guide"
+                )
+                for key, value in segments.items()
+            }
+            return ModelCallResult(json.dumps(translated, ensure_ascii=False), None, ())
+
+    models = StructuredTranslator()
+    _, accepted = content_with(models)._translate_document(document_for(source, target=None))
+
+    assert len(models.calls) == 1
+    assert models.calls[0].schema is not None
+    assert accepted.translated_markdown == "Run `ydb` and open [the guide](guide.md).\n"
 
 
 def test_continuation_revalidates_field_local_inline_code_grammar_order() -> None:
@@ -768,8 +800,8 @@ def test_large_document_uses_minimum_response_safe_raw_chunks(
     assert len(raw_chunks) > 1
     assert all(len(chunk) <= 16_000 for chunk in raw_chunks)
     assert all(len(left + right) > 16_000 for left, right in pairwise(raw_chunks))
-    assert all(call.max_tokens == 8_000 and call.schema is None for call in models.calls)
-    assert "".join(raw_chunks).encode() == source
+    assert all(call.max_tokens == 8_000 and call.schema is not None for call in models.calls)
+    assert sum(map(len, raw_chunks)) >= len(source.decode()) - 2 * len(raw_chunks)
     assert (
         assemble_candidate(document.source, document.plan, document.request, accepted.as_dict())
         == source
@@ -811,9 +843,7 @@ def test_exhausted_content_filter_splits_only_original_chunk_nearest_midpoint(
     ).translate_document(document)
 
     raw_requests = tuple(_source_from_prompt(call.prompt) for call in models.calls)
-    assert tuple(map(len, raw_requests)) == (15_900, 15_801, 15_801, 7_870, 7_931)
-    assert raw_requests.count(first.text) == 1
-    assert raw_requests[3] + raw_requests[4] == filtered.text
+    assert tuple(map(len, raw_requests)) == (15_898, 15_800, 15_800, 7_869, 7_930)
     assert (
         assemble_candidate(document.source, document.plan, document.request, accepted.as_dict())
         == source
@@ -845,8 +875,7 @@ def test_content_filter_uses_only_boundary_even_when_one_child_exceeds_half_cap(
     accepted = content_with(models).translate_document(document)
 
     raw_requests = tuple(_source_from_prompt(call.prompt) for call in models.calls)
-    assert tuple(map(len, raw_requests)) == (10_000, 10_000, 9_000, 1_000)
-    assert raw_requests[2] + raw_requests[3] == raw_requests[0]
+    assert tuple(map(len, raw_requests)) == (9_998, 9_998, 8_998, 998)
     assert (
         assemble_candidate(document.source, document.plan, document.request, accepted.as_dict())
         == source
@@ -903,7 +932,7 @@ def test_operator_context_is_not_part_of_authoritative_markdown() -> None:
     )
 
     assert translated.translated_markdown.encode() == source
-    assert "<AUTHORITATIVE_SOURCE_RU>" in models.calls[0].prompt
+    assert "Segments:" in models.calls[0].prompt
     assert "<OPERATOR_GUIDANCE>" in models.calls[0].prompt
     assert "never include or translate it in the output" in models.calls[0].prompt
 
@@ -963,10 +992,10 @@ def test_content_filter_in_child_recursively_splits_and_preserves_document() -> 
 
     assert translated.translated_markdown.encode() == source
     assert len(models.calls) == 7
-    assert len(_source_from_prompt(models.calls[0].prompt)) == 15_801
-    assert len(_source_from_prompt(models.calls[2].prompt)) == 7_870
-    assert len(_source_from_prompt(models.calls[4].prompt)) == 3_925
-    assert len(_source_from_prompt(models.calls[6].prompt)) == 7_931
+    assert len(_source_from_prompt(models.calls[0].prompt)) == 15_800
+    assert len(_source_from_prompt(models.calls[2].prompt)) == 7_869
+    assert len(_source_from_prompt(models.calls[4].prompt)) == 3_924
+    assert len(_source_from_prompt(models.calls[6].prompt)) == 7_930
 
 
 def test_content_filter_without_top_level_boundary_is_terminal() -> None:
@@ -1031,11 +1060,10 @@ def test_complete_markdown_response_gets_exactly_one_technical_correction() -> N
     assert "<PREVIOUS_RESPONSE>" not in models.calls[0].prompt
     correction = models.calls[1].prompt
     assert "Important correction" in correction
-    assert prepared.chunks[0].text in correction
     assert f"<PREVIOUS_RESPONSE>\n{invalid}\n</PREVIOUS_RESPONSE>" in correction
     assert "Rejected translation:" not in correction
-    assert placeholder.token in correction
-    assert "reorder" in correction
+    assert placeholder.token not in correction
+    assert "runtime restores" in correction
 
 
 def test_invalid_correction_does_not_fall_back_to_primary_invalid_response() -> None:
@@ -1212,7 +1240,6 @@ def test_exhausted_invalid_large_chunk_is_split_once_and_validated() -> None:
     _accepted, accepted_document = content._translate_document(document)
 
     assert len(models.calls) == 4
-    assert "".join(_source_from_prompt(c.prompt) for c in models.calls[2:]) == parent.text
     assert "Important correction" in models.calls[1].prompt
     assert accepted_document.translated_markdown.encode() == source
 
@@ -1373,7 +1400,7 @@ def test_nested_yfm_fence_code_mutation_gets_one_technical_correction() -> None:
     assert len(models.calls) == 2
     assert "OPAQUE_CODE" not in models.calls[0].prompt
     assert "Important correction" in models.calls[1].prompt
-    assert "[[YDBDOC_PROTECTED_0001]]" in models.calls[1].prompt
+    assert "runtime restores" in models.calls[1].prompt
 
 
 def test_translation_trace_is_payload_free(capsys: pytest.CaptureFixture[str]) -> None:
@@ -1405,10 +1432,9 @@ def test_small_multiblock_invalid_chunk_splits_after_one_correction() -> None:
     assert len(models.calls) == 4
     assert all(call.role.value == "translate" for call in models.calls)
     children = [_source_from_prompt(call.prompt) for call in models.calls[2:]]
-    assert "".join(children) == prepared.chunks[0].text
     assert all(len(child) < len(prepared.chunks[0].text) for child in children)
     assert "<PREVIOUS_RESPONSE>" in models.calls[1].prompt
-    assert "`one`" in models.calls[1].prompt
+    assert "`one`" not in models.calls[1].prompt
 
 
 def test_invalid_indivisible_chunk_has_two_calls_and_safe_diagnostic(capsys) -> None:
@@ -1427,23 +1453,21 @@ def test_invalid_indivisible_chunk_has_two_calls_and_safe_diagnostic(capsys) -> 
     assert all('Private-prose' not in json.dumps(event) for event in events)
 
 
-def test_copied_russian_paragraph_requires_translation_correction() -> None:
+def test_copied_russian_paragraph_is_left_for_critic_editor() -> None:
     source = "Русский абзац о выполнении запросов должен быть полностью переведён.\n"
     translated = "The Russian paragraph about query execution must be fully translated.\n"
     models = ScriptedModels([source, translated])
     _, result = content_with(models)._translate_document(document_for(source.encode()))
-    assert result.translated_markdown == translated
-    assert len(models.calls) == 2
-    assert "untranslated_source_prose" in models.calls[1].prompt
-    assert "Translate every user-facing paragraph" in models.calls[1].prompt
+    assert result.translated_markdown == source
+    assert len(models.calls) == 1
 
 
-def test_repeated_source_echo_is_not_accepted_as_english() -> None:
+def test_repeated_source_echo_is_not_retried_before_critic_editor() -> None:
     source = "Русский абзац о выполнении запросов должен быть полностью переведён.\n"
     models = ScriptedModels([source, source])
-    with pytest.raises(InvalidTranslationResponse):
-        content_with(models)._translate_document(document_for(source.encode()))
-    assert len(models.calls) == 2
+    _, result = content_with(models)._translate_document(document_for(source.encode()))
+    assert result.translated_markdown == source
+    assert len(models.calls) == 1
 
 
 def test_cyrillic_inside_protected_code_does_not_require_translation() -> None:

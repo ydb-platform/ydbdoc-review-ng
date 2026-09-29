@@ -4,8 +4,22 @@ from scripts.probe_critic_fallback import (
     _arbiter_probe_request,
     _diagnostic_probe_request,
     _parse_diagnostic_probe_response,
+    _translator_probe_contract,
 )
 from ydbdoc_review_ng.domain import ModelRole
+
+
+def test_translator_probe_uses_prose_only_segment_contract() -> None:
+    request, field, contract, _segments, document, _plan = _translator_probe_contract(
+        "deepseek-v4-flash"
+    )
+
+    assert request.role is ModelRole.TRANSLATE
+    assert request.schema is not None
+    assert set(request.schema["properties"]) == set(contract.requested_ids)
+    assert "`ydb`" not in request.prompt
+    assert "guide.md" not in request.prompt
+    assert len(field.placeholders) == len(document.placeholders) == 2
 
 
 def test_arbiter_probe_uses_read_only_final_contract() -> None:

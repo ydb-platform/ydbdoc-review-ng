@@ -5,7 +5,14 @@ from __future__ import annotations
 import json
 import os
 
-from ydbdoc_review_ng.domain import Locale, RepoPath
+from ydbdoc_review_ng.domain import (
+    GitSha,
+    Locale,
+    ModelRole,
+    RepoPath,
+    RepositoryId,
+    SnapshotRef,
+)
 from ydbdoc_review_ng.models import (
     AttemptResult,
     ModelCallResult,
@@ -15,6 +22,8 @@ from ydbdoc_review_ng.models import (
     YandexCredentials,
     YandexOpenAIClient,
 )
+from ydbdoc_review_ng.parser.markdown import build_markdown_plan
+from ydbdoc_review_ng.plan import SourcePlan
 from ydbdoc_review_ng.quality.critic import (
     CriticResponseError,
     build_critic_request,
@@ -22,6 +31,19 @@ from ydbdoc_review_ng.quality.critic import (
 )
 from ydbdoc_review_ng.quality.repair import _fallback_editor_request
 from ydbdoc_review_ng.quality.types import CriticResult
+from ydbdoc_review_ng.runtime_content import (
+    _assemble_document_chunk_segments,
+    _document_chunk_translation_request,
+    _TranslationSegment,
+)
+from ydbdoc_review_ng.translation import (
+    DocumentTranslationRequest,
+    TranslationField,
+    TranslationRequest,
+    prepare_document,
+    restore_document,
+    validate_chunk_response,
+)
 
 _DIAGNOSTIC_SOURCE = (
     "**Группа хранения**, **группа распределённого хранилища** или "
@@ -31,6 +53,45 @@ _DIAGNOSTIC_TARGET = (
     b"**Storage group**, **distributed storage group**, **storage group**, or "
     b"**Blob storage group** is a place for reliable data storage."
 )
+_TRANSLATOR_SOURCE = "Запустите `ydb` и откройте [руководство](guide.md).\n".encode()
+
+
+def _translator_probe_contract(
+    model: str,
+) -> tuple[
+    ModelRequest,
+    TranslationField,
+    TranslationRequest,
+    tuple[_TranslationSegment, ...],
+    DocumentTranslationRequest,
+    SourcePlan,
+]:
+    path = RepoPath("ydb/docs/ru/probe.md")
+    snapshot = SnapshotRef(RepositoryId("ydb-platform/ydb"), GitSha("0" * 40))
+    plan = build_markdown_plan(snapshot, path, _TRANSLATOR_SOURCE)
+    document = prepare_document(
+        _TRANSLATOR_SOURCE,
+        plan,
+        max_characters=6000,
+        source_locale="ru",
+        target_locale="en",
+    )
+    chunk = document.chunks[0]
+    request, field, contract, segments = _document_chunk_translation_request(
+        ModelRequest(
+            ModelRole.TRANSLATE,
+            model,
+            "translator probe",
+            None,
+            8000,
+            RepoPath("ydb/docs/en/probe.md"),
+        ),
+        chunk,
+        document.placeholders,
+        "ru",
+        "en",
+    )
+    return request, field, contract, segments, document, plan
 
 
 def _diagnostic_probe_request(model: str) -> ModelRequest:
@@ -99,6 +160,35 @@ def main() -> int:
     if not api_key or not folder_id:
         print("critic fallback probe unavailable: model credentials are not configured")
         return 2
+    translator_model = os.environ.get("YDBDOC_MODEL") or "deepseek-v4-flash"
+    translator_request, field, contract, segments, document, source_plan = (
+        _translator_probe_contract(translator_model)
+    )
+    translator_attempts: list[AttemptResult] = []
+    translator_result = _client(
+        translator_model,
+        YandexCredentials(api_key, folder_id),
+        translator_attempts,
+    ).invoke(translator_request)
+    if not translator_result.success or translator_result.text is None:
+        print("structured translator probe failed: model call;", _failure_summary(translator_result))
+        return 1
+    try:
+        draft = _assemble_document_chunk_segments(
+            field, contract, segments, translator_result.text
+        )
+        validate_chunk_response(document.chunks[0], document.placeholders, draft)
+        restored = restore_document(
+            _TRANSLATOR_SOURCE, source_plan, document, (draft,)
+        ).decode()
+    except (TypeError, ValueError):
+        print("structured translator probe failed: response contract")
+        return 1
+    if restored.count("`ydb`") != 1 or restored.count("(guide.md)") != 1:
+        print("structured translator probe failed: runtime-owned fragments were not restored")
+        return 1
+    print("structured translator probe passed")
+    translator_usage = translator_result.attempts[-1].usage
     # One probe unit matches a maximum translator chunk, not a combined critic
     # excerpt: filtered combined excerpts are replayed on these exact units.
     source = "".join(
@@ -209,7 +299,9 @@ def main() -> int:
         return 1
     arbiter_usage = arbiter_result.attempts[-1].usage
     print(
-        "critic fallback, critic-editor, and independent arbiter probes passed;",
+        "translator, critic fallback, critic-editor, and independent arbiter probes passed;",
+        f"translator_input_tokens={translator_usage.input_tokens};",
+        f"translator_output_tokens={translator_usage.output_tokens};",
         f"prompt_characters={len(request.prompt)};",
         f"input_tokens={usage.input_tokens};",
         f"output_tokens={usage.output_tokens};",

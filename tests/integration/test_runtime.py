@@ -8,7 +8,12 @@ import json
 from decimal import Decimal
 
 import pytest
-from _runtime_services import RuntimeServices, request_prompt, request_schema
+from _runtime_services import (
+    RuntimeServices,
+    request_prompt,
+    request_schema,
+    translation_segments,
+)
 
 
 def test_merged_source_uses_workflow_pinned_base_after_branch_advances() -> None:
@@ -177,7 +182,28 @@ def test_runtime_publishes_field_local_inline_code_grammar_order_once() -> None:
 
         def model(self, request):
             body = json.loads(request.body)
-            if request_schema(body) is not None:
+            schema_wrapper = request_schema(body)
+            if schema_wrapper is not None:
+                properties = schema_wrapper["schema"]["properties"]
+                if all(key.startswith("segment_") for key in properties):
+                    self.raw_calls += 1
+                    return super().model(request)
+                if "corrected_markdown" in properties:
+                    response = super().model(request)
+                    payload = json.loads(response.body)
+                    values = {
+                        "findings": [],
+                        "corrected_markdown": (
+                            "* The [[YDBDOC_PROTECTED_0003]] column was added to "
+                            "[[YDBDOC_PROTECTED_0001]] and [[YDBDOC_PROTECTED_0002]].\n"
+                        ),
+                    }
+                    text = json.dumps(values)
+                    if "choices" in payload:
+                        payload["choices"][0]["message"]["content"] = text
+                    else:
+                        payload["result"]["alternatives"][0]["message"]["text"] = text
+                    return HttpResponse(200, json.dumps(payload).encode(), Decimal("0.01"))
                 return super().model(request)
             self.raw_calls += 1
             self.events.append(("MODEL", ("raw_markdown",)))
@@ -255,21 +281,21 @@ def test_runtime_preserves_list_formatting_drift_through_critic() -> None:
             body = json.loads(request.body)
             schema_wrapper = request_schema(body)
             if schema_wrapper is not None:
+                properties = schema_wrapper["schema"]["properties"]
+                if all(key.startswith("segment_") for key in properties):
+                    self.raw_calls += 1
+                    return super().model(request)
                 self.critic_calls += 1
                 if self.critic_calls > 1:
                     return super().model(request)
                 schema = schema_wrapper["schema"]
                 self.events.append(("MODEL", tuple(schema["properties"])))
                 values = {
-                    "verdict": "RED",
                     "findings": [
                         {
-                            "repairable": True,
                             "reason": "Clarify the translated list item.",
                             "expected_correction": "Use corrected wording.",
                             "searchable_snippet": "translated item",
-                            "target_path": "ydb/docs/en/core/page.md",
-                            "target_line": 2,
                         }
                     ],
                 }
@@ -365,9 +391,9 @@ class ContentFilterServices(RuntimeServices):
         from ydbdoc_review_ng.models import HttpResponse
 
         body = json.loads(request.body)
-        if request_schema(body) is None and not request_prompt(body).startswith(
-            "Repair"
-        ):
+        schema_wrapper = request_schema(body)
+        properties = None if schema_wrapper is None else schema_wrapper["schema"]["properties"]
+        if properties is not None and all(key.startswith("segment_") for key in properties):
             self.raw_request_bodies.append(request.body)
             response = super().model(request)
             if len(self.raw_request_bodies) <= self.filtered_responses:
@@ -1172,6 +1198,11 @@ class _T017N04Services(RuntimeServices):
         self.events.append(("MODEL", properties))
         if properties == ("page.md",):
             values = {"page.md": "ru_to_en"}
+        elif properties and all(key.startswith("segment_") for key in properties):
+            values = {
+                key: value.replace('An \\"escaped\\" title', 'A \\"quoted\\" title')
+                for key, value in translation_segments(request_prompt(body)).items()
+            }
         elif "findings" in properties:
             values = {"findings": []}
             if "verdict" in properties:
@@ -1765,20 +1796,18 @@ def test_critic_edit_is_validated_then_published_once_before_pr():
                     )
                 return super().model(request)
             schema = schema_wrapper["schema"]
+            if all(key.startswith("segment_") for key in schema["properties"]):
+                return super().model(request)
             self.critics += 1
             if self.critics > 1:
                 return super().model(request)
             self.events.append(("CRITIC", "first"))
             values = {
-                "verdict": "RED",
                 "findings": [
                     {
-                        "repairable": True,
                         "reason": "Wrong term",
                         "expected_correction": "Use Corrected",
                         "searchable_snippet": "Translated",
-                        "target_path": "ydb/docs/en/core/page.md",
-                        "target_line": 1,
                     }
                 ],
             }

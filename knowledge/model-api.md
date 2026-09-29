@@ -4,8 +4,10 @@
 
 - `temperature = 0`.
 - Reasoning полностью отключён.
-- Translate возвращает raw Markdown и проходит локальную проверку protected fragments.
-- Direction, critic-editor и read-only arbiter возвращают structured output по JSON Schema;
+- Translate возвращает structured map только переводимых prose segments. Runtime
+  сам вставляет protected code/URL/path/template между ними; модель не возвращает
+  и не контролирует placeholders.
+- Direction, translate, critic-editor и read-only arbiter возвращают structured output по JSON Schema;
   raw JSON повторно проверяется локально независимо от гарантий провайдера.
 - Каждая начатая attempt сохраняется в durable state с параметрами, входом,
   status/error, сырым ответом и usage при их наличии.
@@ -16,7 +18,7 @@
 - Явный content-filter допускает ровно один повтор идентичного request в пределах
   `max_attempts = 2`; обе attempts аудируются и оплачиваются, а truncation и
   прочие non-final статусы не повторяются.
-- Raw-Markdown `TRANSLATE`/`REPAIR` chunk, дважды завершённый content-filter,
+- `TRANSLATE` chunk, дважды завершённый content-filter,
   допускает один deterministic split по ближайшей к середине top-level block
   boundary. Дочерний chunk при повторном content-filter делится тем же способом,
   пока диапазон top-level blocks строго уменьшается; успешные соседние chunks не
@@ -27,10 +29,10 @@
   `YDBDOC_MODEL_CRITIC_FALLBACK` один раз получает каждую точную сохранённую
   пару `translator chunk → validated response` внутри отфильтрованного excerpt
   с плоской schema `{corrected_markdown: string}`; следующий отказ терминален.
-- В raw-Markdown prompts каждый placeholder требуется ровно один раз в своём
-  source top-level block. Только независимые `inline_code` и атомарные `template`
-  могут менять порядок внутри переводимого поля; остальные placeholders и
-  link/image пары сохраняют порядок и вложенность.
+- Translator schema не содержит placeholders: полная карта segment IDs
+  проверяется локально, затем runtime вставляет source-owned fragments в
+  исходном порядке. Critic-editor и arbiter видят собранный masked Markdown и
+  точное отображение placeholder → fragment.
 
 ## Проверенные модели
 

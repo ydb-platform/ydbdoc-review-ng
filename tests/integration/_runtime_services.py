@@ -7,6 +7,9 @@ from decimal import Decimal
 
 
 def raw_translation_source(prompt):
+    if "\nSegments: " in prompt:
+        encoded = prompt.split("\nSegments: ", 1)[1].split("\n\n", 1)[0]
+        return "".join(json.loads(encoded).values())
     marker = "<AUTHORITATIVE_SOURCE_"
     if marker in prompt:
         start = prompt.index("\n", prompt.index(marker)) + 1
@@ -16,6 +19,14 @@ def raw_translation_source(prompt):
     for marker in ("\n\nOperator context:\n", "\n\nImportant correction:\n"):
         source = source.split(marker, 1)[0]
     return source
+
+
+def translation_segments(prompt, word="Translated", *, preserve_suffix=False):
+    encoded = prompt.split("\nSegments: ", 1)[1].split("\n\n", 1)[0]
+    return {
+        key: rewrite_markdown(value, word, preserve_suffix=preserve_suffix)
+        for key, value in json.loads(encoded).items()
+    }
 
 
 def request_prompt(body):
@@ -247,7 +258,10 @@ class RuntimeServices:
         else:
             properties = schema["schema"]["properties"]
             self.events.append(("MODEL", tuple(properties)))
-            if "findings" in properties:
+            prompt = request_prompt(body)
+            if properties and all(key.startswith("segment_") for key in properties):
+                values = translation_segments(prompt)
+            elif "findings" in properties:
                 values = {"findings": []}
                 if "verdict" in properties:
                     values["verdict"] = "GREEN"

@@ -17,6 +17,7 @@ from _runtime_services import (
     request_schema,
     rewrite_markdown,
     translated_markdown,
+    translation_segments,
 )
 
 from ydbdoc_review_ng.application import TranslateWorkflowInput, VerifyWorkflowInput, WorkflowError
@@ -255,6 +256,14 @@ class CaptureServices(RuntimeServices):
                             "target_line": 1,
                         }
                     )
+        elif schema["properties"] and all(
+            key.startswith("segment_") for key in schema["properties"]
+        ):
+            role = "translate"
+            self.translations += 1
+            values = translation_segments(prompt)
+            if self.stop in {"translation", "translation_assembly"} and self.translations >= 2:
+                values.pop(next(iter(values)))
         elif prompt.startswith("Compare"):
             role = "direction"
             schema = schema_wrapper["schema"]
@@ -264,7 +273,7 @@ class CaptureServices(RuntimeServices):
         self.roles.append(role)
         if self.failure == role:
             raise TimeoutError("transport failed")
-        if role not in {"translate", "repair"} and schema_wrapper is not None:
+        if schema_wrapper is not None:
             text = json.dumps(values)
         if "model" in body:
             payload = {
@@ -346,7 +355,7 @@ def test_two_invalid_current_field_responses_preserve_first_map_and_pending_orde
     assert services.commits == 0 and services.audit[-1]["status"] == "failed"
 
 
-def test_twice_lost_known_placeholder_stops_before_publication() -> None:
+def test_structured_translation_restores_known_placeholder_before_review() -> None:
     services = CaptureServices(names=("a",))
     source_path = "ydb/docs/ru/core/a.md"
     target_path = "ydb/docs/en/core/a.md"
@@ -354,16 +363,13 @@ def test_twice_lost_known_placeholder_stops_before_publication() -> None:
         files[source_path] = b"# Source `CPUTime`\n"
         files[target_path] = b"# Old\n"
 
-    with pytest.raises(WorkflowError):
-        services.translate()
+    result = services.translate()
 
-    assert services.roles == ["translate", "translate"]
-    assert services.critics == 0
-    assert services.commits == 0
-    assert services.files[target_path] == b"# Old\n"
-    checkpoint = services.checkpoint()
-    assert checkpoint.state.stage is ContinuationStage.TRANSLATION
-    assert checkpoint.state.pending_paths == (RepoPath(target_path),)
+    assert result.verdict is Verdict.GREEN
+    assert services.roles == ["translate", "critic", "arbiter"]
+    assert services.critics == 1
+    assert services.commits == 1
+    assert services.files[target_path] == b"# Translated `CPUTime`\n"
 
 
 @pytest.mark.parametrize("mode", ["translate", "verify"])

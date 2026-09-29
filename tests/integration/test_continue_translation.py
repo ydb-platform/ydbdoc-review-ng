@@ -7,7 +7,13 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
-from _runtime_services import raw_translation_source, replace_response_text, request_prompt
+from _runtime_services import (
+    raw_translation_source,
+    replace_response_text,
+    request_prompt,
+    request_schema,
+    translation_segments,
+)
 from test_checkpoint_capture import CaptureServices
 
 from ydbdoc_review_ng import application
@@ -89,9 +95,21 @@ class ContinueServices(CaptureServices):
             values = self.direction_values
         if self.continuing and self.roles[-1] == "translate" and "<TRANSLATION_DRAFT_" not in prompt:
             source = raw_translation_source(prompt)
-            raw = source.replace("Source", "Resumed")
+            schema_wrapper = request_schema(body)
+            if schema_wrapper is not None and all(
+                key.startswith("segment_")
+                for key in schema_wrapper["schema"]["properties"]
+            ):
+                values = translation_segments(prompt, "Resumed", preserve_suffix=True)
+                values = {
+                    key: value.replace("Source", "Resumed")
+                    for key, value in values.items()
+                }
+                raw = json.dumps(values)
+            else:
+                raw = source.replace("Source", "Resumed")
             if self.invalid_pending and self.invalid_pending in source:
-                raw = "[[YDBDOC_PROTECTED_9999]]"
+                raw = "{}"
             return HttpResponse(200, replace_response_text(response.body, raw), Decimal("0.01"))
         if values is not None:
             response = HttpResponse(

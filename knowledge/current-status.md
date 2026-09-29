@@ -1,5 +1,18 @@
 # Three-stage translation, editor and arbiter contract (2026-09-29)
 
+Run `36536112615` failed before the critic-editor on chunk 5 of
+`changelog-enterprise.md`: the raw-Markdown translator twice lost protected
+placeholders and an adaptive child later copied Russian prose. This exposed the
+last contradiction in the pipeline: an editable draft was still required to
+preserve runtime-owned technical markers before the editor could see it.
+Translator output is now a strict JSON map of prose-only segments. Code, URLs,
+paths and templates are absent from model output and are reinserted by runtime
+exactly once before critic-editor. Copied source prose is deliberately left for
+critic-editor instead of terminating translation. A direct regression proves a
+structured translator cannot delete or duplicate an inline command or link
+destination. No replacement paid run is permitted until the full offline gate
+and live four-contract model probe pass again.
+
 The quality path is exactly translator → critic-editor → independent read-only
 arbiter. The editor returns the complete ready Markdown excerpt in one semantic
 call; its findings are audit diagnostics and are never sent back for another
