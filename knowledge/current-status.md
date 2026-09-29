@@ -571,6 +571,20 @@ provider response status без prompt/ответа. Это нужно полу�
 publication regressions, Ruff, strict mypy, wheel/sdist и installed smoke
 `translate + verify + continue`.
 
+Probe-only run `36501094457` подтвердил, что transport recovery ограничен:
+YandexGPT дважды вернул HTTP 200 `ALTERNATIVE_STATUS_TRUNCATED_FINAL`, после
+чего выполнение завершилось `non_final; attempts=2` без перевода документов.
+Повтор не лечит причину. Structured critic contract сокращён до двух корневых
+полей: `findings` и `corrected_markdown`; finding содержит только три строки
+`reason`, `searchable_snippet`, `expected_correction` и ограничен 20 элементами.
+Из модели удалены дублирующие `verdict`, `repairable`, path, line и field IDs.
+Verdict/path/line выводит код. Если findings есть, но Markdown не изменился,
+остаётся единственный адресный edit-call. Это уменьшение контракта проверяется
+тем же live probe до запуска документов.
+Независимый gate минимального контракта зелёный: 1959 non-live тестов, 130
+профильных runtime/continue/publication тестов, Ruff, strict mypy, wheel/sdist и
+installed smoke `translate + verify + continue`.
+
 ## Локальная доработка source-only перевода
 
 27 сентября 2026 добавлена локальная, ещё не опубликованная доработка

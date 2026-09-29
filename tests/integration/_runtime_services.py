@@ -247,8 +247,8 @@ class RuntimeServices:
         else:
             properties = schema["schema"]["properties"]
             self.events.append(("MODEL", tuple(properties)))
-            if "verdict" in properties:
-                values = {"verdict": "GREEN", "findings": []}
+            if "findings" in properties:
+                values = {"findings": []}
                 if "corrected_markdown" in properties:
                     prompt = request_prompt(body)
                     values["corrected_markdown"] = raw_repair_context(
@@ -383,23 +383,19 @@ class InstalledContinueServices(RuntimeServices):
                     values
                 )
             return HttpResponse(200, json.dumps(body).encode(), Decimal("0.01"))
-        if self.stop_review and schema is not None and "verdict" in schema["schema"]["properties"]:
+        if self.stop_review and schema is not None and "findings" in schema["schema"]["properties"]:
             properties = schema["schema"]["properties"]
+            prompt = request_prompt(json.loads(request.body))
             values = {
-                "verdict": "RED",
                 "findings": [
                     {
-                        "repairable": False,
                         "reason": "Meaning requires operator context.",
                         "expected_correction": "Confirm the intended source meaning.",
                         "searchable_snippet": "Translated",
-                        "target_path": "ydb/docs/en/core/page.md",
-                        "target_line": 1,
                     }
                 ],
             }
             if "corrected_markdown" in properties:
-                prompt = request_prompt(json.loads(request.body))
                 values["corrected_markdown"] = raw_repair_context(prompt, "final-target")
             body = json.loads(response.body)
             if "choices" in body:

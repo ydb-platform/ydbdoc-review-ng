@@ -113,7 +113,7 @@ def test_shipped_composition_translates_then_verifies_current_pr_without_retrans
         next(
             i
             for i, event in enumerate(events)
-            if event == ("MODEL", ("verdict", "findings", "corrected_markdown"))
+                if event == ("MODEL", ("findings", "corrected_markdown"))
         )
         < next(
             i
@@ -149,7 +149,7 @@ def test_shipped_composition_translates_then_verifies_current_pr_without_retrans
         == 0
     )
     assert [event for event in services.events if event[0] == "MODEL"] == [
-        ("MODEL", ("verdict", "findings", "corrected_markdown"))
+        ("MODEL", ("findings", "corrected_markdown"))
     ]
     assert not any(
         "/git/" in path and method in {"POST", "PATCH"} for method, path in services.events
@@ -348,7 +348,7 @@ def test_runtime_preserves_list_formatting_drift_through_critic() -> None:
         b"\xe2\x80\x94 corrected item (i.e., only an administrator)\n"
     )
     assert services.events.count(
-        ("MODEL", ("verdict", "findings", "corrected_markdown"))
+        ("MODEL", ("findings", "corrected_markdown"))
     ) == 1
     assert services.events.count(("MODEL", ("verdict", "findings"))) == 0
     assert services.events.count(("REPAIR", "markdown")) == 0
@@ -915,7 +915,7 @@ def test_t017_r07_already_renamed_noop_checks_entire_pinned_target(
 
     assert _run_t017_r07(services) == expected_exit
     assert (
-        ("MODEL", ("verdict", "findings", "corrected_markdown")) in services.events
+        ("MODEL", ("findings", "corrected_markdown")) in services.events
     ) is expects_critic
     if expected_exit:
         assert services.audit[-1]["error"] in {"load_candidate_failed", "validate_failed"}
@@ -1171,8 +1171,8 @@ class _T017N04Services(RuntimeServices):
         self.events.append(("MODEL", properties))
         if properties == ("page.md",):
             values = {"page.md": "ru_to_en"}
-        elif "verdict" in properties:
-            values = {"verdict": "GREEN", "findings": []}
+        elif "findings" in properties:
+            values = {"findings": []}
             if "corrected_markdown" in properties:
                 prompt = request_prompt(body)
                 values["corrected_markdown"] = prompt.split(
@@ -1243,7 +1243,7 @@ def test_t017_n04_real_translate_reviews_escaped_quoted_frontmatter() -> None:
 
     assert result == 0
     assert services.files["ydb/docs/en/core/page.md"] == target
-    assert ("MODEL", ("verdict", "findings", "corrected_markdown")) in services.events
+    assert ("MODEL", ("findings", "corrected_markdown")) in services.events
     assert services.comments[0]["body"].startswith("🟢 GREEN\n")
 
 
@@ -1284,7 +1284,7 @@ def test_t017_n04_real_verify_reviews_escaped_quoted_frontmatter() -> None:
 
     assert result == 0
     assert [event for event in services.events if event[0] == "MODEL"] == [
-        ("MODEL", ("verdict", "findings", "corrected_markdown"))
+        ("MODEL", ("findings", "corrected_markdown"))
     ]
     assert services.comments[0]["body"].startswith("🟢 GREEN\n")
 
@@ -1836,7 +1836,7 @@ def test_runtime_never_reports_green_after_branch_moves_during_critic():
         def model(self, request):
             response = super().model(request)
             schema_wrapper = request_schema(json.loads(request.body))
-            if schema_wrapper and "verdict" in schema_wrapper["schema"]["properties"]:
+            if schema_wrapper and "findings" in schema_wrapper["schema"]["properties"]:
                 self.branch_head = "f" * 40
             return response
 

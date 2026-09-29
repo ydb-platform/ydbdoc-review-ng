@@ -35,9 +35,18 @@ def test_diagnostic_probe_uses_the_runtime_whole_excerpt_contract() -> None:
     schema = request.schema
 
     assert schema is not None
+    assert set(schema["properties"]) == {"findings", "corrected_markdown"}
     finding = schema["properties"]["findings"]["items"]
-    assert "field_ids" not in finding["properties"]
-    assert "field_ids" not in finding["required"]
+    assert set(finding["properties"]) == {
+        "reason",
+        "expected_correction",
+        "searchable_snippet",
+    }
+    assert tuple(finding["required"]) == (
+        "reason",
+        "expected_correction",
+        "searchable_snippet",
+    )
     _parse_diagnostic_probe_response(
         json.dumps(
             {

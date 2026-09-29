@@ -628,10 +628,10 @@ def review_translation(
         correction = (
             proposed_correction if result.verdict is Verdict.RED else current_target
         )
-        pending = tuple(
-            finding
-            for finding in result.findings
-            if not finding.repairable
+        pending = (
+            result.findings
+            if result.findings and correction == current_target
+            else tuple(finding for finding in result.findings if not finding.repairable)
         )
         if pending:
             before_targeted_edit = correction

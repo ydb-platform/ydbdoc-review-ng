@@ -211,37 +211,34 @@ class CaptureServices(RuntimeServices):
             values = {
                 "corrected_markdown": raw_repair_context(prompt, "final-target")
             }
-        elif "verdict" in schema["properties"]:
+        elif "findings" in schema["properties"]:
             role = "critic"
             self.critics += 1
-            props = schema["properties"]["findings"]["items"]["properties"]
             editable = "corrected_markdown" in schema["properties"]
-            path = props["target_path"]["const"]
+            path = prompt.split("Target path: ", 1)[1].split("\n", 1)[0]
             red = (
                 self.stop == "rename_red"
                 or self.stop == "review"
                 and (path.endswith("/b.md") or self.critics == 1)
             )
-            values = {"verdict": "RED" if red else "GREEN", "findings": []}
+            values = {"findings": []}
             if red:
                 values["findings"] = [
                     {
-                        "repairable": self.stop != "rename_red" and self.critics == 1,
                         "reason": "The meaning is incomplete.",
                         "expected_correction": "Restore the missing meaning.",
                         "searchable_snippet": "Translated",
-                        "target_path": path,
-                        "target_line": 1,
                     }
                 ]
             if editable:
                 current = raw_repair_context(prompt, "final-target")
+                repairable = self.stop != "rename_red" and self.critics == 1
                 values["corrected_markdown"] = (
                     rewrite_markdown(current, "Corrected")
-                    if red and values["findings"][0]["repairable"]
+                    if red and repairable
                     else current
                 )
-                if self.failure == "repair" and red and values["findings"][0]["repairable"]:
+                if self.failure == "repair" and red and repairable:
                     self.roles.append(role)
                     raise TimeoutError("transport failed")
         elif prompt.startswith("Compare"):

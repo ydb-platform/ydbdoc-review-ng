@@ -157,13 +157,15 @@ manual edits.
 
 Semantic defects such as duplicated glossary aliases are intentionally not
 encoded as growing local heuristics. The translator creates a structurally valid
-draft. For every document or aligned excerpt the critic-editor returns findings
-and the complete corrected Markdown in one response. A valid changed edit with
-only repairable findings resolves those draft findings. Findings explicitly
-left unrepairable receive one targeted edit call containing the critic's own
-diagnosis; a valid changed result resolves them, while a missing, invalid or
-unchanged result remains RED. There is no final-critic loop. Editor responses
-contain whole excerpts without legacy field IDs. One schema-invalid
+draft. For every document or aligned excerpt the critic-editor returns only
+minimal findings (`reason`, `searchable_snippet`, `expected_correction`) and the
+complete corrected Markdown. Verdict is derived from findings; path is local
+state and line is derived from the snippet. A valid changed edit resolves the
+draft findings. Findings paired with unchanged Markdown receive one targeted
+edit call containing the critic's own diagnosis; a valid changed result
+resolves them, while a missing, invalid or unchanged result remains RED. There
+is no final-critic loop and no model-produced `repairable`, path, line, verdict
+or field IDs. One schema-invalid
 HTTP-success response may be repeated once with the parser reason; this is a
 bounded technical retry, not a semantic review loop. A provider
 `non_final`/truncated response is likewise retried at most once with the

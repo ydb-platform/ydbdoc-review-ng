@@ -103,16 +103,13 @@ class ReviewServices(LifecycleServices):
         elif role == "critic":
             outcomes = self.outcomes.get(path, [])
             outcome = outcomes.pop(0) if outcomes else "green"
-            values = {"verdict": "GREEN" if outcome == "green" else "RED", "findings": []}
+            values = {"findings": []}
             if outcome != "green":
                 target = self.snapshots[self.branch_head][path].decode()
                 finding = {
-                    "repairable": outcome == "repair",
                     "reason": "Missing meaning in the heading.",
                     "expected_correction": "Restore the full meaning.",
                     "searchable_snippet": target.splitlines()[0].removeprefix("# "),
-                    "target_path": path,
-                    "target_line": 1,
                 }
                 values["findings"].append(finding)
             if editable:
@@ -483,9 +480,9 @@ def test_byte_identical_selected_repair_reports_existing_sha_without_empty_commi
     result = services.resume()
     assert result.verdict is Verdict.RED and not result.repair_applied
     assert result.final_commit_sha == saved.target_sha
-    assert services.roles == ["critic"]
+    assert services.roles == ["critic", "critic"]
     assert services.commits == services.initial_commits
-    assert services.timeline == ["critic", "report", "checkpoint"]
+    assert services.timeline == ["critic", "critic", "report", "checkpoint"]
     assert services.rows[saved.continuation_id]["status"] == "closed"
 
 

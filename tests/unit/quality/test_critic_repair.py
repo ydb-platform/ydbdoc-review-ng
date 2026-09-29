@@ -49,7 +49,12 @@ class FakeExecutor:
         response = next(self.responses)
         if response is None:
             return ModelCallResult(None, self._failure(), ())
-        if "Act as a critic-editor" in request.prompt:
+        schema = mutable_json(request.schema)
+        properties = schema.get("properties", {}) if isinstance(schema, dict) else {}
+        if isinstance(properties, dict) and set(properties) == {
+            "findings",
+            "corrected_markdown",
+        }:
             try:
                 payload = json.loads(response)
             except json.JSONDecodeError:
@@ -854,15 +859,10 @@ def test_oversized_repair_uses_minimum_ordered_structural_chunks_within_limit() 
             self.calls.append(model_request)
             if "Act as a critic-editor" in model_request.prompt:
                 self.editor_calls += 1
-                problems = (
-                    [finding(repairable=True, snippet="Target section 1", line=1)]
-                    if self.editor_calls == 1
-                    else []
-                )
                 return ModelCallResult(
                     critic_editor_json(
-                        "RED" if problems else "GREEN",
-                        problems,
+                        "GREEN",
+                        [],
                         current_editor_target(model_request),
                     ),
                     None,
@@ -920,15 +920,10 @@ def test_large_repair_uses_response_safe_chunks_and_restores_exact_target() -> N
             self.calls.append(model_request)
             if "Act as a critic-editor" in model_request.prompt:
                 self.critic_calls += 1
-                problems = (
-                    [finding(repairable=True, snippet="Target section 000", line=1)]
-                    if self.critic_calls == 1
-                    else []
-                )
                 return ModelCallResult(
                     critic_editor_json(
-                        "RED" if problems else "GREEN",
-                        problems,
+                        "GREEN",
+                        [],
                         current_editor_target(model_request),
                     ),
                     None,
@@ -1634,7 +1629,7 @@ def test_lone_surrogate_critic_edit_retains_original() -> None:
     assert [call.role.value for call in executor.calls] == ["critic"]
 
 
-def test_repairable_but_unmapped_red_does_not_guess_a_repair_field() -> None:
+def test_unchanged_editor_red_gets_one_targeted_attempt_without_guessing_a_field() -> None:
     _plan, _request, _values, target = prepared()
     executor = FakeExecutor(
         critic_editor_json(
@@ -1642,7 +1637,7 @@ def test_repairable_but_unmapped_red_does_not_guess_a_repair_field() -> None:
             [finding(repairable=True, snippet="Прочитайте", line=3)],
             raw_document(target),
         ),
-        critic_json("RED", [finding(repairable=True, snippet="Прочитайте", line=3)]),
+        fallback_editor_json(raw_document(target)),
     )
 
     result = review(executor)
@@ -1650,7 +1645,7 @@ def test_repairable_but_unmapped_red_does_not_guess_a_repair_field() -> None:
     assert result.final.verdict is Verdict.RED
     assert result.repair_attempted
     assert not result.repair_applied
-    assert len(executor.calls) == 1
+    assert len(executor.calls) == 2
 
 
 @pytest.mark.parametrize(
@@ -1713,6 +1708,34 @@ def test_green_critic_editor_may_return_a_valid_correction() -> None:
 
     assert result.verdict is Verdict.GREEN
     assert result.corrected_markdown == "changed"
+
+
+def test_editor_parser_derives_metadata_from_minimal_finding() -> None:
+    current = "First line\nDuplicated alias here\n"
+    result = parse_critic_response(
+        json.dumps(
+            {
+                "findings": [
+                    {
+                        "reason": "Термин повторён.",
+                        "expected_correction": "Удалить повтор.",
+                        "searchable_snippet": "Duplicated alias",
+                    }
+                ],
+                "corrected_markdown": "First line\nAlias here\n",
+            },
+            ensure_ascii=False,
+        ),
+        target_path=PATH,
+        requested_ids=(),
+        editable=True,
+        current_target=current,
+    )
+
+    assert result.verdict is Verdict.RED
+    assert result.findings[0].target_path == PATH.value
+    assert result.findings[0].target_line == 2
+    assert result.findings[0].repairable
 
 
 @pytest.mark.parametrize(
@@ -1821,30 +1844,17 @@ def test_critic_parser_canonicalizes_duplicate_repair_ids_in_first_occurrence_or
     )
 
 
-def test_critic_duplicate_ids_reach_one_raw_document_repair() -> None:
+def test_editor_request_does_not_expose_legacy_field_ids() -> None:
     _plan, request, _values, target = prepared()
     second_id = request.requested_ids[1]
     executor = FakeExecutor(
-        critic_json(
-            "RED",
-            [
-                finding(
-                    repairable=True,
-                    snippet="Прочитайте",
-                    line=3,
-                    field_ids=[second_id, second_id],
-                )
-            ],
-        ),
-        raw_document(target),
-        critic_json("GREEN", []),
+        critic_editor_json("GREEN", [], raw_document(target)),
     )
 
     result = review(executor)
 
-    assert result.repair_attempted
+    assert not result.repair_attempted
     assert not result.repair_applied
-    assert result.primary.findings[0].field_ids == ()
     assert executor.calls[0].schema is not None
     assert second_id not in executor.calls[0].prompt
     assert [call.role.value for call in executor.calls] == ["critic"]

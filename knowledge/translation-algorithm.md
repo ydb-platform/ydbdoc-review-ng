@@ -171,14 +171,14 @@ excerpts не повторяются.
 соответствующий фрагмент среди нерелевантных разделов. RED любого excerpt делает
 общий verdict RED, findings
 объединяются без повторов. В том же ответе critic-editor возвращает полный
-`corrected_markdown`; при GREEN он обязан точно повторить target. Отдельного
-model repair call нет. Каждый документ/excerpt получает один успешный
-critic-editor response. Валидное изменённое исправление с только repairable
-findings считается финальным. Для findings с `repairable=false` тот же critic
-получает один адресный edit-call с собственными точными диагнозами, без новой
-критики; валидное изменённое исправление закрывает их. Отсутствующее, невалидное
-или побайтно неизменное адресное исправление оставляет RED. Legacy `field_ids`
-не передаются: единица редактирования — полный excerpt. Schema-invalid ответ с
+`corrected_markdown`; при отсутствии findings он обязан точно повторить target.
+Контракт намеренно минимален: finding содержит только `reason`,
+`searchable_snippet` и `expected_correction`. Verdict выводится из наличия
+findings, path известен локально, line вычисляется по snippet; `repairable` и
+field IDs отсутствуют. Валидное изменённое исправление закрывает findings. Если
+при findings текст не изменился, тот же critic получает один адресный edit-call
+со своими диагнозами, без новой критики; отсутствующее, невалидное или снова
+неизменное исправление оставляет RED. Schema-invalid ответ с
 HTTP 200 получает один технический повтор с причиной parser-а, без semantic loop.
 Provider `non_final`/truncated также повторяется ровно один раз тем же запросом;
 это bounded transport recovery, а не новая критика.
