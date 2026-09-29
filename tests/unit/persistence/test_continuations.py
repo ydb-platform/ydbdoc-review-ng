@@ -234,6 +234,43 @@ def test_missing_checkpoint_has_a_payload_free_operator_diagnostic() -> None:
     assert raised.value.code == "continue_checkpoint_missing_or_ambiguous"
 
 
+def test_exact_checkpoint_consumption_ignores_other_live_lineages() -> None:
+    executor = CheckpointExecutor()
+    store = YdbPersistence(executor)
+    selected = save_semantic(
+        store, selected_checkpoint(ContinuationStage.REVIEW), now=NOW
+    )
+    other = replace(
+        selected_checkpoint(ContinuationStage.REVIEW),
+        continuation_id="checkpoint-2",
+        job_id="other-job",
+        trigger_pr=53,
+        source_sha=GitSha("c" * 40),
+        target_sha=GitSha("d" * 40),
+    )
+    executor.jobs[other.job_id] = {
+        "job_id": other.job_id,
+        "source_sha": other.source_sha.value,
+        "target_sha": None,
+    }
+    save_semantic(store, other, now=NOW)
+    executor.jobs["continue-job"] = {
+        "job_id": "continue-job",
+        "mode": Mode.DOC_CONTINUE.value,
+        "source_sha": selected.source_sha.value,
+        "target_sha": selected.target_sha.value,
+        "status": ydb.JobStatus.STARTED.value,
+        "error": None,
+    }
+
+    with pytest.raises(ydb.ContinuationUnavailable):
+        store.load_checkpoint(selected.source_pr, now=NOW)
+
+    store.consume_checkpoint(selected, "continue-job", now=NOW)
+
+    assert executor.rows[selected.continuation_id]["consumed_by_job_id"] == "continue-job"
+
+
 def test_later_semantic_stop_keeps_original_creation_and_expiry() -> None:
     executor = CheckpointExecutor()
     store = YdbPersistence(executor)

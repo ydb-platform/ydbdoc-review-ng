@@ -32,6 +32,9 @@ gate у него отсутствует.
 предшествующий `/ydbdoc continue` comment, затем загружает живой checkpoint.
 Для translation PR checkpoint выбирается по точным provenance `source_sha` и
 текущему `target_sha`; старые открытые checkpoints того же source PR не мешают.
+После такого admission checkpoint потребляется guarded update по точному ID и
+состоянию, без повторного глобального поиска по source PR. Поэтому исторические
+независимые цепочки не превращают уже выбранную запись в ambiguous.
 Для source PR неоднозначность остаётся fail-closed.
 Replay читает только сохранённые source/base SHA и проверяет scope/field IDs
 и exact translation head. Три stage: direction retry, перевод pending документов

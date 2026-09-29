@@ -340,11 +340,14 @@ class YdbPersistence:
         actual = self._checkpoint_by_id(checkpoint.continuation_id)
         if actual == consumed:
             return
-        if (
-            actual != checkpoint
-            or self.load_checkpoint(checkpoint.source_pr, now=now) != checkpoint
-        ):
+        if actual != checkpoint:
             raise PersistenceError("checkpoint consumption mismatch")
+        # Admission has already selected this exact checkpoint by provenance.
+        # Re-running the broad source-PR lookup here makes an otherwise exact
+        # CAS fail when older independent lineages are still live.  Validate
+        # the selected producer directly; the guarded UPDATE below remains the
+        # concurrency boundary for consuming this record.
+        self.validate_checkpoint_job(actual)
         self._consuming_job(consumed)
         values = {**self._checkpoint_values(checkpoint), "new_consumed_by_job_id": job_id}
         with suppress(PersistenceError):

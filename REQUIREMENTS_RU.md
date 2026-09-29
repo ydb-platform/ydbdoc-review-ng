@@ -692,6 +692,10 @@ gate не выполняется. Конкурентная атомарная re
   accepted documents; review только проблемных paths; source-only assembly;
   перевод целого документа или структурных чанков без field map; закрытие
   checkpoint на GREEN и сохранение первоначального expiry при повторном RED.
+- После admission конкретный checkpoint потребляется атомарно по его точному
+  `continuation_id` и полному сохранённому состоянию. Старые независимые живые
+  цепочки того же source PR не должны блокировать замену уже выбранного
+  checkpoint; гонку продолжений останавливает compare-and-set самой записи.
 - Перед release выполняются offline end-to-end сценарии всех трёх режимов, полный
   non-live suite, Ruff, mypy и `git diff --check`.
 

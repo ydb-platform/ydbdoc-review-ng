@@ -689,3 +689,16 @@ Ruff, strict mypy, wheel/sdist и smoke установленного wheel дл�
 `translate → verify RED/checkpoint → continue GREEN`. Smoke подтвердил семь
 отдельно аудируемых model attempts. До публикации и отдельного live
 `doc_model_probe` полный платный перевод повторно не запускался.
+
+## Live doc_continue и exact checkpoint consumption
+
+Run `36573401582` успешно применил операторскую инструкцию к
+`changelog-enterprise.md`, опубликовал commit `cb66bde` и получил от arbiter
+не-RED результат, но затем упал при замене semantic checkpoint. Причина:
+`consume_checkpoint` после точного admission повторно выполнял широкий lookup
+по source PR; несколько живых исторических цепочек делали этот второй lookup
+ambiguous. Потребление теперь валидирует выбранную запись и её producer по
+точному `continuation_id`, а атомарность сохраняет guarded compare-and-set.
+Регрессия и release gate зелёные: 1968 non-live тестов, Ruff, strict mypy,
+wheel/sdist, smoke установленного CLI для translate/verify/continue и
+`git diff --check`.
