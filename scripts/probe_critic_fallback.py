@@ -90,7 +90,10 @@ def _failure_summary(result: ModelCallResult) -> str:
     failure = result.failure.value if result.failure is not None else "unknown"
     http_status = None if last is None else last.http_status
     response_status = None if last is None else last.response_status
-    return f"{failure}; http={http_status}; status={response_status}"
+    return (
+        f"{failure}; attempts={len(result.attempts)}; "
+        f"http={http_status}; status={response_status}"
+    )
 
 
 def main() -> int:

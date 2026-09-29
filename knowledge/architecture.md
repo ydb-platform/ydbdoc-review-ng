@@ -165,8 +165,10 @@ diagnosis; a valid changed result resolves them, while a missing, invalid or
 unchanged result remains RED. There is no final-critic loop. Editor responses
 contain whole excerpts without legacy field IDs. One schema-invalid
 HTTP-success response may be repeated once with the parser reason; this is a
-bounded technical retry, not a semantic review loop. The edits are assembled,
-validated, built and published once. A full draft build must not
+bounded technical retry, not a semantic review loop. A provider
+`non_final`/truncated response is likewise retried at most once with the
+identical request; a second unfinished generation fails closed. The edits are
+assembled, validated, built and published once. A full draft build must not
 run before the critic-editor: fixable draft lint errors would otherwise prevent
 the editor from running. Mechanical list-marker spacing is normalized locally
 outside code before review; the final candidate always receives the strict build.

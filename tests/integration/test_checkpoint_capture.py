@@ -407,8 +407,10 @@ def test_provider_non_final_translation_is_rejected_before_publication():
         services.translate()
 
     attempts = [row for row in services.audit if "attempt_id" in row]
-    assert services.roles == ["translate", "translate"]
-    assert len(attempts) == 2 and all(row["error"] == "non_final" for row in attempts)
+    # Both the primary and the existing alternate translator are bounded to
+    # two identical transport attempts before the workflow fails closed.
+    assert services.roles == ["translate"] * 4
+    assert len(attempts) == 4 and all(row["error"] == "non_final" for row in attempts)
     assert services.commits == 0 and services.blobs == {} and services.tree == []
 
 

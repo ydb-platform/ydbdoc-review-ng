@@ -345,9 +345,7 @@ def test_native_actual_nested_reasoning_zero_is_extracted() -> None:
             HttpResponse(200, b"not-json", billable_cost_rub=Decimal("1.25")),
             AttemptError.MALFORMED_RESPONSE,
         ),
-        (native_response(status="ALTERNATIVE_STATUS_TRUNCATED"), AttemptError.NON_FINAL),
         (native_response(text=""), AttemptError.EMPTY_TEXT),
-        (openai_response(status="length"), AttemptError.NON_FINAL),
     ],
 )
 def test_invalid_received_response_is_recorded_once_with_available_cost(
@@ -490,15 +488,27 @@ def test_native_content_filter_twice_fails_after_exactly_two_audited_attempts() 
     assert recorded == list(result.attempts)
 
 
-def test_native_truncated_final_remains_nonretryable() -> None:
+def test_native_truncated_final_is_retried_once_then_final_succeeds() -> None:
     truncated = native_response(status="ALTERNATIVE_STATUS_TRUNCATED_FINAL")
     transport = FakeTransport(truncated, native_response())
 
     result = native_client(transport, []).invoke(request())
 
+    assert result.failure is None
+    assert len(result.attempts) == 2
+    assert len(transport.requests) == 2
+    assert [attempt.error for attempt in result.attempts] == [AttemptError.NON_FINAL, None]
+
+
+def test_native_truncated_final_twice_fails_after_two_attempts() -> None:
+    truncated = native_response(status="ALTERNATIVE_STATUS_TRUNCATED_FINAL")
+    transport = FakeTransport(truncated, truncated, native_response())
+
+    result = native_client(transport, []).invoke(request())
+
     assert result.failure is AttemptError.NON_FINAL
-    assert len(result.attempts) == 1
-    assert len(transport.requests) == 1
+    assert len(result.attempts) == 2
+    assert len(transport.requests) == 2
 
 
 def test_openai_content_filter_is_retried_once_then_stop_succeeds() -> None:

@@ -180,6 +180,8 @@ findings считается финальным. Для findings с `repairable=f
 или побайтно неизменное адресное исправление оставляет RED. Legacy `field_ids`
 не передаются: единица редактирования — полный excerpt. Schema-invalid ответ с
 HTTP 200 получает один технический повтор с причиной parser-а, без semantic loop.
+Provider `non_final`/truncated также повторяется ровно один раз тем же запросом;
+это bounded transport recovery, а не новая критика.
 Затем обязательны восстановление
 protected fragments, локальные validators и полный Diplodoc build итогового
 candidate, даже если critic не изменил bytes. Лишние пробелы после list marker

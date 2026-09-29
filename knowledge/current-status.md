@@ -560,6 +560,17 @@ progress marker, а при model failure — безопасные typed failure,
 provider response status без prompt/ответа. Это нужно получить отдельным
 повторным probe до полного перевода.
 
+Повторный probe-only run `36499974990` дал точную причину: fallback прошёл, а
+основной YandexGPT critic вернул HTTP 200 с
+`ALTERNATIVE_STATUS_TRUNCATED_FINAL`, классифицированным как `non_final`.
+Ответ до parser-а не дошёл. Model client теперь выполняет не более одного
+идентичного технического повтора для `non_final`, используя существующий общий
+лимит в две попытки; повторный truncated остаётся терминальной ошибкой. Probe
+проходит через тот же client и поэтому проверит этот recovery до полного run.
+Независимый gate изменения зелёный: 1958 non-live тестов, отдельные transport и
+publication regressions, Ruff, strict mypy, wheel/sdist и installed smoke
+`translate + verify + continue`.
+
 ## Локальная доработка source-only перевода
 
 27 сентября 2026 добавлена локальная, ещё не опубликованная доработка

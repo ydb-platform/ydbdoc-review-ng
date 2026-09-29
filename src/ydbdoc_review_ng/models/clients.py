@@ -403,7 +403,7 @@ class _BaseYandexClient:
             if error is None:
                 return ModelCallResult(parsed.text, None, tuple(attempts))
             retryable = (
-                error is AttemptError.CONTENT_FILTER
+                error in {AttemptError.CONTENT_FILTER, AttemptError.NON_FINAL}
                 or response.status_code in self._execution.retryable_statuses
             )
             if retryable and attempt_number < self._execution.max_attempts:
