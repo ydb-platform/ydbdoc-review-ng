@@ -831,6 +831,9 @@ def test_readiness_requires_both_success_on_exact_current_head(checks, status, w
         assert "Арбитр не нашёл блокирующих ошибок" in report
         assert "поставьте label `doc_verify`" in report
         assert "`doc_continue` сейчас не требуется" in report
+        assert "### Как воспользоваться `doc_continue`" in report
+        assert "`/ydbdoc continue`" in report
+        assert "label `doc_continue`" in report
         assert "не запускалась" not in report
 
 
@@ -853,5 +856,9 @@ def test_readiness_yellow_explains_quality_and_next_action_instead_of_raw_snapsh
         "Дождитесь завершения `build-docs`, затем поставьте label `doc_verify`. "
         "Он проверит текущий коммит и обновит этот вердикт.\n"
         "`doc_continue` сейчас не требуется: он используется только когда "
-        "в отчёте перечислены замечания арбитра и сохранён checkpoint."
+        "в отчёте перечислены замечания арбитра и сохранён checkpoint.\n"
+        "### Как воспользоваться `doc_continue`\n"
+        "После RED оставьте комментарий, первая строка которого — "
+        "`/ydbdoc continue`, следующими строками опишите нужные исправления, "
+        "затем поставьте label `doc_continue`."
     )
