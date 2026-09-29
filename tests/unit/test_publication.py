@@ -454,6 +454,40 @@ def test_current_doc_verify_is_reported_as_success_before_github_finishes_the_ch
     assert "doc_verify: не запускалась" not in backend.comments[7].body
 
 
+def test_doc_verify_waits_for_build_on_published_commit_before_final_report():
+    backend, snapshot, candidate, publisher, _ = setup_publication()
+    publisher.validate_candidate(snapshot, candidate)
+    publisher.publish(snapshot, candidate)
+    results = iter(
+        (
+            (),
+            (CheckResult("build-docs", COMMIT, "pending"),),
+            (CheckResult("build-docs", COMMIT, "success"),),
+        )
+    )
+    waits: list[float] = []
+    qa = QAReporter(
+        backend,
+        publisher,
+        lambda: ReportContext(SOURCE, TARGET, Decimal("1.25")),
+        lambda: next(results),
+        readiness_wait=waits.append,
+        readiness_poll_attempts=3,
+        readiness_poll_seconds=0.25,
+    )
+
+    qa.update_current_pr(
+        mode=Mode.DOC_VERIFY,
+        pr_number=123,
+        branch=snapshot.branch,
+        commit_sha=COMMIT,
+        review=review(),
+    )
+
+    assert waits == [0.25, 0.25]
+    assert backend.comments[7].body.startswith("🟢 GREEN")
+
+
 def test_red_report_is_short_russian_and_actionable_without_internal_details():
     finding = Finding(
         True, "Meaning reversed", "Preserve negation", "does not delete", PATH.value, 19

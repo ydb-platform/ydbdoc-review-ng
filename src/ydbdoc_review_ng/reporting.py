@@ -220,6 +220,9 @@ class QAReporter:
         *,
         verification_context: PublicationContext | None = None,
         current_head: Callable[[], GitSha | None] | None = None,
+        readiness_wait: Callable[[float], None] | None = None,
+        readiness_poll_attempts: int = 0,
+        readiness_poll_seconds: float = 10.0,
     ) -> None:
         self._backend = backend
         self._publisher = publisher
@@ -227,6 +230,19 @@ class QAReporter:
         self._checks = checks
         self._verification_context = verification_context
         self._current_head = current_head
+        self._readiness_wait = readiness_wait
+        self._readiness_poll_attempts = readiness_poll_attempts
+        self._readiness_poll_seconds = readiness_poll_seconds
+
+    @staticmethod
+    def _with_current_verify_success(
+        checks: tuple[CheckResult, ...], commit_sha: GitSha
+    ) -> tuple[CheckResult, ...]:
+        return tuple(
+            check
+            for check in checks
+            if check.name != "doc_verify" or check.head_sha != commit_sha
+        ) + (CheckResult("doc_verify", commit_sha, "success"),)
 
     def report_failure(self, source_pr_number: int, diagnostic: str, /) -> None:
         failure = _SCOPE_FAILURE_MESSAGES.get(diagnostic)
@@ -278,11 +294,17 @@ class QAReporter:
         try:
             checks = self._checks()
             if mode is Mode.DOC_VERIFY:
-                checks = tuple(
-                    check
-                    for check in checks
-                    if check.name != "doc_verify" or check.head_sha != commit_sha
-                ) + (CheckResult("doc_verify", commit_sha, "success"),)
+                checks = self._with_current_verify_success(checks, commit_sha)
+                attempts = self._readiness_poll_attempts
+                while (
+                    review.final.verdict is not Verdict.RED
+                    and merge_readiness(commit_sha, checks).status == "YELLOW"
+                    and attempts > 0
+                    and self._readiness_wait is not None
+                ):
+                    self._readiness_wait(self._readiness_poll_seconds)
+                    checks = self._with_current_verify_success(self._checks(), commit_sha)
+                    attempts -= 1
             report_context = self._report_context()
             body = render_report(review, commit_sha, report_context, checks)
             body += "\n" + QA_MARKER

@@ -200,3 +200,9 @@ snapshot such as `check not started`. The actionable next step is to wait for
 `build-docs` and apply the `doc_verify` label. `doc_continue` is offered only
 for a semantic RED that has a durable continuation checkpoint; it cannot be
 truthfully offered for a readiness-only YELLOW.
+
+When `doc_verify` publishes an editor correction, that push creates a new head
+after the previous `build-docs` result. The reporter therefore polls boundedly
+for `build-docs` on the exact published SHA before writing its final comment.
+This wait performs no model calls. A failed check produces RED; a timeout keeps
+the explicit readiness YELLOW.
