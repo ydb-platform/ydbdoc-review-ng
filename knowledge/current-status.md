@@ -702,3 +702,11 @@ ambiguous. Потребление теперь валидирует выбран
 Регрессия и release gate зелёные: 1968 non-live тестов, Ruff, strict mypy,
 wheel/sdist, smoke установленного CLI для translate/verify/continue и
 `git diff --check`.
+
+Повторный run `36580414284` остановился до model calls: предыдущая попытка
+оставила подтверждённый successor для target `cb66bde` в `pending`, поскольку
+падение произошло между producer audit и activation. Exact translation lookup
+теперь идемпотентно активирует единственную такую запись после проверки
+semantic producer marker; source-PR lookup остаётся read-only fail-closed.
+После этого изменения полный release gate зелёный: 1969 non-live тестов,
+3 live-теста штатно исключены; Ruff и strict mypy также прошли.

@@ -271,6 +271,35 @@ def test_exact_checkpoint_consumption_ignores_other_live_lineages() -> None:
     assert executor.rows[selected.continuation_id]["consumed_by_job_id"] == "continue-job"
 
 
+def test_exact_translation_identity_recovers_acknowledged_pending_checkpoint() -> None:
+    executor = CheckpointExecutor()
+    store = YdbPersistence(executor)
+    selected = selected_checkpoint(ContinuationStage.REVIEW)
+    pending = store.save_checkpoint(selected, now=NOW)
+    store.finish_job(
+        selected.job_id,
+        ydb.JobStatus.FAILED,
+        error=ydb.semantic_stop_error(selected.state.stage),
+        finished_at=NOW,
+        target_sha=selected.target_sha.value,
+    )
+
+    with pytest.raises(ydb.PersistenceError):
+        store.load_checkpoint(selected.source_pr, now=NOW)
+
+    recovered = store.load_checkpoint(
+        selected.source_pr,
+        now=NOW,
+        source_sha=selected.source_sha,
+        target_sha=selected.target_sha,
+    )
+
+    assert pending.status is ydb.CheckpointStatus.PENDING
+    assert recovered.status is ydb.CheckpointStatus.OPEN
+    assert recovered.continuation_id == selected.continuation_id
+    assert executor.rows[selected.continuation_id]["status"] == "open"
+
+
 def test_later_semantic_stop_keeps_original_creation_and_expiry() -> None:
     executor = CheckpointExecutor()
     store = YdbPersistence(executor)

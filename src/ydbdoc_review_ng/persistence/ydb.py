@@ -505,6 +505,14 @@ class YdbPersistence:
                 if row.get("source_sha") == source_sha.value
                 and row.get("target_sha") == target_sha.value
             ]
+            # A previous continuation can durably record its semantic stop and
+            # then lose the acknowledgement before activating the successor.
+            # Exact translation provenance makes a sole pending row
+            # unambiguous; activate_checkpoint still verifies its producer and
+            # performs an idempotent guarded update.  Broad source-PR lookup
+            # must never recover pending state.
+            if len(rows) == 1 and rows[0].get("status") == "pending":
+                return self.activate_checkpoint(self._checkpoint(rows[0]), now=now)
         elif target_sha is not None:
             raise PersistenceError("invalid continuation identity")
         relevant: list[int] = []

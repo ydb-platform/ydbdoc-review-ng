@@ -35,6 +35,9 @@ gate у него отсутствует.
 После такого admission checkpoint потребляется guarded update по точному ID и
 состоянию, без повторного глобального поиска по source PR. Поэтому исторические
 независимые цепочки не превращают уже выбранную запись в ambiguous.
+Единственный acknowledged `pending` successor может быть идемпотентно открыт
+при точном provenance translation PR; это восстанавливает потерянное
+acknowledgement, но не разрешает recovery через широкий source-PR lookup.
 Для source PR неоднозначность остаётся fail-closed.
 Replay читает только сохранённые source/base SHA и проверяет scope/field IDs
 и exact translation head. Три stage: direction retry, перевод pending документов

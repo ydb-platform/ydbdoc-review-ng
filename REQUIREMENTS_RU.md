@@ -696,6 +696,10 @@ gate не выполняется. Конкурентная атомарная re
   `continuation_id` и полному сохранённому состоянию. Старые независимые живые
   цепочки того же source PR не должны блокировать замену уже выбранного
   checkpoint; гонку продолжений останавливает compare-and-set самой записи.
+- Если semantic producer audit уже подтверждён, но acknowledgement активации
+  потерян, единственный `pending` checkpoint разрешено идемпотентно открыть
+  только при точном совпадении `source_sha + target_sha` translation PR.
+  Широкий lookup по source PR не восстанавливает `pending` записи.
 - Перед release выполняются offline end-to-end сценарии всех трёх режимов, полный
   non-live suite, Ruff, mypy и `git diff --check`.
 
