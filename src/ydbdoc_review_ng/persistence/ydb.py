@@ -511,8 +511,21 @@ class YdbPersistence:
             # unambiguous; activate_checkpoint still verifies its producer and
             # performs an idempotent guarded update.  Broad source-PR lookup
             # must never recover pending state.
-            if len(rows) == 1 and rows[0].get("status") == "pending":
-                return self.activate_checkpoint(self._checkpoint(rows[0]), now=now)
+            acknowledged_pending: list[ContinuationCheckpoint] = []
+            for row in rows:
+                if row.get("status") != "pending":
+                    continue
+                try:
+                    pending = self._checkpoint(row)
+                    self._require_live(pending, now)
+                    self._validate_job(pending)
+                except PersistenceError:
+                    continue
+                acknowledged_pending.append(pending)
+            if len(acknowledged_pending) > 1:
+                raise ContinuationUnavailable
+            if acknowledged_pending:
+                return self.activate_checkpoint(acknowledged_pending[0], now=now)
         elif target_sha is not None:
             raise PersistenceError("invalid continuation identity")
         relevant: list[int] = []

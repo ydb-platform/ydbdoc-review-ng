@@ -283,6 +283,17 @@ def test_exact_translation_identity_recovers_acknowledged_pending_checkpoint() -
         finished_at=NOW,
         target_sha=selected.target_sha.value,
     )
+    selected_row = executor.rows[selected.continuation_id]
+    executor.rows["closed-history"] = {
+        **selected_row,
+        "continuation_id": "closed-history",
+        "status": "closed",
+    }
+    executor.rows["unacknowledged-pending"] = {
+        **selected_row,
+        "continuation_id": "unacknowledged-pending",
+        "job_id": "unacknowledged-job",
+    }
 
     with pytest.raises(ydb.PersistenceError):
         store.load_checkpoint(selected.source_pr, now=NOW)
@@ -298,6 +309,38 @@ def test_exact_translation_identity_recovers_acknowledged_pending_checkpoint() -
     assert recovered.status is ydb.CheckpointStatus.OPEN
     assert recovered.continuation_id == selected.continuation_id
     assert executor.rows[selected.continuation_id]["status"] == "open"
+
+
+def test_exact_translation_identity_rejects_two_acknowledged_pending_checkpoints() -> None:
+    executor = CheckpointExecutor()
+    store = YdbPersistence(executor)
+    selected = selected_checkpoint(ContinuationStage.REVIEW)
+    store.save_checkpoint(selected, now=NOW)
+    store.finish_job(
+        selected.job_id,
+        ydb.JobStatus.FAILED,
+        error=ydb.semantic_stop_error(selected.state.stage),
+        finished_at=NOW,
+        target_sha=selected.target_sha.value,
+    )
+    duplicate_job = "duplicate-job"
+    executor.rows["duplicate"] = {
+        **executor.rows[selected.continuation_id],
+        "continuation_id": "duplicate",
+        "job_id": duplicate_job,
+    }
+    executor.jobs[duplicate_job] = {
+        **executor.jobs[selected.job_id],
+        "job_id": duplicate_job,
+    }
+
+    with pytest.raises(ydb.ContinuationUnavailable):
+        store.load_checkpoint(
+            selected.source_pr,
+            now=NOW,
+            source_sha=selected.source_sha,
+            target_sha=selected.target_sha,
+        )
 
 
 def test_later_semantic_stop_keeps_original_creation_and_expiry() -> None:

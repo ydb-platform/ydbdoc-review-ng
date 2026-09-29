@@ -710,3 +710,12 @@ wheel/sdist, smoke установленного CLI для translate/verify/cont
 semantic producer marker; source-PR lookup остаётся read-only fail-closed.
 После этого изменения полный release gate зелёный: 1969 non-live тестов,
 3 live-теста штатно исключены; Ruff и strict mypy также прошли.
+
+Run `36582251503` показал, что exact lookup содержит несколько исторических
+строк одного `source_sha + target_sha`, поэтому проверка общего `len(rows) == 1`
+не увидела единственный recoverable successor. Recovery теперь считает только
+живые `pending` записи с подтверждённым semantic producer audit: ровно одна
+активируется, две подтверждённые остаются fail-closed; closed и неподтверждённая
+история выбору не мешают.
+Финальный gate этой версии: 1970 non-live тестов, 3 live штатно исключены,
+Ruff и strict mypy зелёные.
