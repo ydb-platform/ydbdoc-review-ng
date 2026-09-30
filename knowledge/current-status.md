@@ -10,8 +10,19 @@ GREEN/YELLOW/RED по степени проблем. Остаточные зам
 не участвуют в семантическом вердикте.
 
 Точный prompt критика находится в REQUIREMENTS_RU.md §5. Prompt живой:
-его модифицируют при отладке, не меняя orchestration. Подтверждённый контракт
-ещё не реализован.
+его модифицируют при отладке, не меняя orchestration. Контракт реализован:
+`quality/prompts/critic.txt` поставляется в wheel/sdist, `review_pr` выполняет
+один корректирующий запрос и один запрос независимого арбитра. Runtime сохраняет
+полные актуальные Markdown/TOC и оба glossary из pinned snapshots. Структурные
+проверки применяются ко всему ответу до установки исправлений. REVIEW continue
+повторно проверяет весь PR, включая принятые ранее файлы; YELLOW закрывает
+checkpoint, RED сохраняет остаточные замечания без нового model call.
+
+Интеграционные witnesses используют полные карты файлов и FIFO-ответы,
+проверяют исправленные bytes публикации, единственный QA comment и независимость
+трёхцветного verdict от repository checks. Устаревшие per-document semantic
+helpers, fallback и excerpt-контракты удалены; translator/checkpoint helper
+`_derive_target_translations` сохранён.
 
 ## Исторические записи
 

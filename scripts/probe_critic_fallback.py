@@ -1,13 +1,12 @@
-"""Live, non-document probe for the alternate critic-editor contract."""
+"""Live synthetic probe for translator and whole-PR quality contracts."""
 
 from __future__ import annotations
 
-import json
 import os
+from collections.abc import Mapping
 
 from ydbdoc_review_ng.domain import (
     GitSha,
-    Locale,
     ModelRole,
     RepoPath,
     RepositoryId,
@@ -26,11 +25,11 @@ from ydbdoc_review_ng.parser.markdown import build_markdown_plan
 from ydbdoc_review_ng.plan import SourcePlan
 from ydbdoc_review_ng.quality.critic import (
     CriticResponseError,
-    build_critic_request,
-    parse_critic_response,
+    build_pr_arbiter_request,
+    build_pr_critic_request,
+    parse_pr_arbiter_response,
+    parse_pr_critic_response,
 )
-from ydbdoc_review_ng.quality.repair import _fallback_editor_request
-from ydbdoc_review_ng.quality.types import CriticResult
 from ydbdoc_review_ng.runtime_content import (
     _assemble_document_chunk_segments,
     _document_chunk_translation_request,
@@ -54,6 +53,11 @@ _DIAGNOSTIC_TARGET = (
     b"**Blob storage group** is a place for reliable data storage."
 )
 _TRANSLATOR_SOURCE = "Запустите `ydb` и откройте [руководство](guide.md).\n".encode()
+_SOURCE_PATH = "ydb/docs/ru/probe.md"
+_TARGET_PATH = "ydb/docs/en/probe.md"
+_GLOSSARY_FILES = {
+    "ydb/docs/en/glossary.md": b"Storage group: a place for reliable data storage.\n",
+}
 
 
 def _translator_probe_contract(
@@ -95,42 +99,24 @@ def _translator_probe_contract(
 
 
 def _diagnostic_probe_request(model: str) -> ModelRequest:
-    return build_critic_request(
+    return build_pr_critic_request(
         model=model,
-        source=_DIAGNOSTIC_SOURCE,
-        target=_DIAGNOSTIC_TARGET,
-        target_path=RepoPath("ydb/docs/en/probe.md"),
-        source_locale=Locale.RU,
-        target_locale=Locale.EN,
-        requested_ids=(),
-        source_is_excerpt=True,
-        target_is_excerpt=True,
-        editable=True,
+        source_files={_SOURCE_PATH: _DIAGNOSTIC_SOURCE},
+        translated_files={_TARGET_PATH: _DIAGNOSTIC_TARGET},
+        glossary_files=_GLOSSARY_FILES,
     )
 
 
-def _parse_diagnostic_probe_response(raw: str) -> CriticResult:
-    return parse_critic_response(
-        raw,
-        target_path=RepoPath("ydb/docs/en/probe.md"),
-        requested_ids=(),
-        editable=True,
-        current_target=_DIAGNOSTIC_TARGET.decode(),
-    )
+def _parse_diagnostic_probe_response(raw: str) -> dict[str, bytes]:
+    return parse_pr_critic_response(raw, target_paths=(_TARGET_PATH,))
 
 
-def _arbiter_probe_request(model: str, corrected: str) -> ModelRequest:
-    return build_critic_request(
+def _arbiter_probe_request(model: str, corrected: Mapping[str, bytes]) -> ModelRequest:
+    return build_pr_arbiter_request(
         model=model,
-        source=_DIAGNOSTIC_SOURCE,
-        target=corrected.encode(),
-        target_path=RepoPath("ydb/docs/en/probe.md"),
-        source_locale=Locale.RU,
-        target_locale=Locale.EN,
-        requested_ids=(),
-        final=True,
-        source_is_excerpt=True,
-        target_is_excerpt=True,
+        source_files={_SOURCE_PATH: _DIAGNOSTIC_SOURCE},
+        translated_files=corrected,
+        glossary_files=_GLOSSARY_FILES,
     )
 
 
@@ -158,7 +144,7 @@ def main() -> int:
     api_key = os.environ.get("YANDEX_API_KEY", "")
     folder_id = os.environ.get("YANDEX_FOLDER_ID", "")
     if not api_key or not folder_id:
-        print("critic fallback probe unavailable: model credentials are not configured")
+        print("quality probe unavailable: model credentials are not configured")
         return 2
     translator_model = os.environ.get("YDBDOC_MODEL") or "deepseek-v4-flash"
     translator_request, field, contract, segments, document, source_plan = (
@@ -189,60 +175,6 @@ def main() -> int:
         return 1
     print("structured translator probe passed")
     translator_usage = translator_result.attempts[-1].usage
-    # One probe unit matches a maximum translator chunk, not a combined critic
-    # excerpt: filtered combined excerpts are replayed on these exact units.
-    source = "".join(
-        f"- Параметр {index}: стабильное тестовое значение {index}.\n"
-        for index in range(80)
-    ).encode()
-    target = "".join(
-        f"- Parameter {index}: stable test value {index}.\n" for index in range(80)
-    ).encode()
-    primary = build_critic_request(
-        model="yandexgpt-5.1",
-        source=source,
-        target=target,
-        target_path=RepoPath("ydb/docs/en/probe.md"),
-        source_locale=Locale.RU,
-        target_locale=Locale.EN,
-        requested_ids=(),
-        source_is_excerpt=True,
-        target_is_excerpt=True,
-        editable=True,
-        terminology_context="term = stable term\n" * 300,
-    )
-    request = _fallback_editor_request(
-        primary,
-        os.environ.get("YDBDOC_MODEL_CRITIC_FALLBACK")
-        or os.environ.get("YDBDOC_MODEL")
-        or "deepseek-v4-flash",
-    )
-    attempts: list[AttemptResult] = []
-    client = YandexOpenAIClient(
-        YandexCredentials(
-            api_key,
-            folder_id,
-        ),
-        UrllibTransport(),
-        attempts.append,
-    )
-    result = client.invoke(request)
-    if not result.success or result.text is None:
-        print("critic fallback probe failed:", _failure_summary(result))
-        return 1
-    try:
-        payload = json.loads(result.text)
-    except json.JSONDecodeError:
-        print("critic fallback probe failed: malformed JSON")
-        return 1
-    if type(payload) is not dict or set(payload) != {"corrected_markdown"}:
-        print("critic fallback probe failed: wrong JSON shape")
-        return 1
-    if type(payload["corrected_markdown"]) is not str:
-        print("critic fallback probe failed: corrected_markdown is not text")
-        return 1
-    print("critic fallback probe passed")
-    usage = result.attempts[-1].usage
     diagnostic_primary = _diagnostic_probe_request(
         os.environ.get("YDBDOC_MODEL_CRITIC") or "yandexgpt-5.1"
     )
@@ -256,14 +188,13 @@ def main() -> int:
         print("structured critic probe failed: model call;", _failure_summary(primary_result))
         return 1
     try:
-        editor_result = _parse_diagnostic_probe_response(primary_result.text)
+        corrected_files = _parse_diagnostic_probe_response(primary_result.text)
     except CriticResponseError as error:
         print(f"structured critic probe failed: response contract ({error.reason.value})")
         return 1
-    corrected = editor_result.corrected_markdown
+    corrected = corrected_files[_TARGET_PATH].decode()
     if (
-        corrected is None
-        or corrected == _DIAGNOSTIC_TARGET.decode()
+        corrected == _DIAGNOSTIC_TARGET.decode()
         or corrected.lower().count("**storage group**") != 1
     ):
         print("structured critic probe failed: editor did not correct the duplicate alias")
@@ -273,7 +204,7 @@ def main() -> int:
     arbiter_model = os.environ.get("YDBDOC_MODEL_ARBITER") or os.environ.get(
         "YDBDOC_MODEL"
     ) or "deepseek-v4-flash"
-    arbiter = _arbiter_probe_request(arbiter_model, corrected)
+    arbiter = _arbiter_probe_request(arbiter_model, corrected_files)
     arbiter_attempts: list[AttemptResult] = []
     arbiter_result = _client(
         arbiter_model,
@@ -284,12 +215,9 @@ def main() -> int:
         print("arbiter probe failed: model call;", _failure_summary(arbiter_result))
         return 1
     try:
-        arbiter_review = parse_critic_response(
+        arbiter_review = parse_pr_arbiter_response(
             arbiter_result.text,
-            target_path=RepoPath("ydb/docs/en/probe.md"),
-            requested_ids=(),
-            editable=False,
-            current_target=corrected,
+            target_paths=(_TARGET_PATH,),
         )
     except CriticResponseError as error:
         print(f"arbiter probe failed: response contract ({error.reason.value})")
@@ -299,12 +227,9 @@ def main() -> int:
         return 1
     arbiter_usage = arbiter_result.attempts[-1].usage
     print(
-        "translator, critic fallback, critic-editor, and independent arbiter probes passed;",
+        "translator, whole-PR critic, and independent arbiter probes passed;",
         f"translator_input_tokens={translator_usage.input_tokens};",
         f"translator_output_tokens={translator_usage.output_tokens};",
-        f"prompt_characters={len(request.prompt)};",
-        f"input_tokens={usage.input_tokens};",
-        f"output_tokens={usage.output_tokens};",
         f"primary_input_tokens={primary_usage.input_tokens};",
         f"primary_output_tokens={primary_usage.output_tokens};",
         f"arbiter_input_tokens={arbiter_usage.input_tokens};",

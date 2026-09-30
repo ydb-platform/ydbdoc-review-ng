@@ -1,6 +1,7 @@
 """Run outside the checkout using the installed wheel and no real service I/O."""
 
 import importlib.metadata
+import importlib.resources
 import json
 import os
 import socket
@@ -14,6 +15,7 @@ from _runtime_services import InstalledContinueServices
 import ydbdoc_review_ng.runtime
 from ydbdoc_review_ng.cli import main
 from ydbdoc_review_ng.domain import GitSha, RepoPath, RepositoryId, SnapshotRef
+from ydbdoc_review_ng.quality import build_pr_critic_request
 from ydbdoc_review_ng.runtime_github import GitHubBackend
 from ydbdoc_review_ng.runtime_metadata import MetadataProducer
 
@@ -26,6 +28,16 @@ def run() -> None:
     assert Path(ydbdoc_review_ng.runtime.__file__).is_relative_to(sys.prefix)
     assert importlib.metadata.version("ydbdoc-review-ng") == "1.1.0"
     assert importlib.metadata.version("PyYAML").startswith("6.")
+    template = importlib.resources.files("ydbdoc_review_ng.quality").joinpath("prompts/critic.txt")
+    assert Path(str(template)).is_relative_to(sys.prefix)
+    request = build_pr_critic_request(
+        model="offline-critic",
+        source_files={"source.md": b"Complete source.\n\nUnchanged paragraph.\n"},
+        translated_files={"target.md": b"Complete translation.\n\nUnchanged paragraph.\n"},
+        glossary_files={"glossary.md": b"Whole glossary.\n"},
+    )
+    assert '"files"' in request.prompt and "{{ SOURCE_PR_FILES }}" not in request.prompt
+    assert "Unchanged paragraph." in request.prompt
     credentials = ydb.iam.ServiceAccountCredentials.from_content(
         json.dumps(
             {
@@ -48,9 +60,7 @@ def run() -> None:
     # The compact fake publisher only materializes one blob at branch update;
     # keep runtime smoke focused on installed translate/verify/continue. Exact
     # multi-file TOC publication is covered by the #50839 runtime golden.
-    services.files["ydb/docs/en/core/toc.yaml"] = (
-        b"items: [{name: Page, href: page.md}]\n"
-    )
+    services.files["ydb/docs/en/core/toc.yaml"] = b"items: [{name: Page, href: page.md}]\n"
     environment = {
         "YDBDOC_RUNTIME_FACTORY": "ydbdoc_review_ng.runtime:create_runtime",
         "GITHUB_ACTOR": "maintainer",
@@ -78,7 +88,6 @@ def run() -> None:
             main(["translate", "--pr", "42", "--source-sha", services.source, "--budget-rub", "10"])
             == 0
         )
-        services.stop_review = True
         assert (
             main(
                 [
@@ -96,7 +105,6 @@ def run() -> None:
         assert len(services.checkpoints) == 1
         saved = next(iter(services.checkpoints.values()))
         assert saved["stage"] == "review" and saved["status"] == "open"
-        services.stop_review = False
         services.continuing = True
         assert main(["continue", "--pr", "43"]) == 0
         assert saved["status"] == "closed"
@@ -111,6 +119,7 @@ def run() -> None:
     assert list(services.jobs.values())[-1]["status"] == "succeeded"
     attempts = [row for row in services.audit if "attempt_id" in row]
     assert len(attempts) == 7
+    assert not services.semantic_responses
     assert attempts[-1]["job_id"] == saved["consumed_by_job_id"]
     print(
         "INSTALLED_RUNTIME_SMOKE_PASS: translate + verify + continue, compact YAML, "

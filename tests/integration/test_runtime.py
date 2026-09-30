@@ -10,11 +10,208 @@ from pathlib import Path
 
 import pytest
 from _runtime_services import (
+    InstalledContinueServices,
     RuntimeServices,
     request_prompt,
     request_schema,
     translation_segments,
 )
+
+
+class WholePRServices(InstalledContinueServices):
+    """Pinned HTTP snapshots and a literal two-response semantic script."""
+
+    def __init__(self, verdict="GREEN", check_conclusion="success"):
+        super().__init__()
+        self.branch_head = self.translated
+        self.pr_exists = True
+        self.check_conclusion = check_conclusion
+        self.requests = []
+        self.blobs = {}
+        self.published = {}
+        self.source_files = {
+            "ydb/docs/ru/core/a.md": "# Source A\n\nCurrent alpha.\n\nUnchanged A.\n",
+            "ydb/docs/ru/core/b.md": "# Source B\n\nCurrent alpha relationship.\n\nUnchanged B.\n",
+            "ydb/docs/ru/core/toc.yaml": (
+                "items:\n  - name: Source A\n    href: a.md\n  - name: Source B\n    href: b.md\n"
+            ),
+        }
+        self.target_files = {
+            "ydb/docs/en/core/a.md": "# Draft A\n\nDraft alpha.\n\nUnchanged A.\n",
+            "ydb/docs/en/core/b.md": "# Draft B\n\nDraft alpha relationship.\n\nUnchanged B.\n",
+            "ydb/docs/en/core/toc.yaml": (
+                "items:\n  - name: Draft A\n    href: a.md\n"
+                "  - name: Draft B\n    href: b.md\n"
+                "  - name: Target only\n    href: target-only.md\n"
+            ),
+        }
+        self.corrected_files = {
+            "ydb/docs/en/core/a.md": "# Corrected A\n\nCorrect alpha.\n\nUnchanged A.\n",
+            "ydb/docs/en/core/b.md": (
+                "# Corrected B\n\nCorrect alpha relationship.\n\nUnchanged B.\n"
+            ),
+            "ydb/docs/en/core/toc.yaml": (
+                "items:\n  - name: Draft A\n    href: a.md\n"
+                "  - name: Draft B\n    href: b.md\n"
+                "  - name: Target only\n    href: target-only.md\n"
+            ),
+        }
+        self.glossary = {
+            "ydb/docs/ru/core/concepts/glossary.md": (
+                "# Glossary RU\n" + "Full definition.\n" * 900 + "Tail alpha definition.\n"
+            ),
+            "ydb/docs/en/core/concepts/glossary.md": "# Glossary EN\nAlpha definition.\n",
+        }
+        self.files = {
+            path: content.encode()
+            for path, content in (self.source_files | self.target_files | self.glossary).items()
+        }
+        self.semantic_responses = [
+            {"files": dict(self.corrected_files)},
+            {
+                "verdict": verdict,
+                "findings": []
+                if verdict == "GREEN"
+                else [
+                    {
+                        "repairable": False,
+                        "reason": "Residual alpha detail.",
+                        "expected_correction": "Clarify alpha detail.",
+                        "searchable_snippet": "Correct alpha.",
+                        "target_path": "ydb/docs/en/core/a.md",
+                        "target_line": 3,
+                    },
+                    {
+                        "repairable": False,
+                        "reason": "Residual relationship detail.",
+                        "expected_correction": "Clarify relationship detail.",
+                        "searchable_snippet": "Correct alpha relationship.",
+                        "target_path": "ydb/docs/en/core/b.md",
+                        "target_line": 3,
+                    },
+                ],
+            },
+        ]
+
+    def github(self, method, path, payload):
+        relative = path.removeprefix("/repos/ydb-platform/ydb")
+        if relative == "/pulls/42/files?per_page=100":
+            return [{"status": "modified", "filename": name} for name in self.source_files]
+        if relative.startswith("/contents/") and relative.endswith("?ref=" + self.base):
+            name = relative[10:].split("?", 1)[0]
+            if name == "ydb/docs/ru/core/toc.yaml":
+                return {
+                    "type": "file",
+                    "encoding": "base64",
+                    "content": base64.b64encode(b"items:\n").decode(),
+                }
+            if name in self.source_files and name.endswith(".md"):
+                return {
+                    "type": "file",
+                    "encoding": "base64",
+                    "content": base64.b64encode(b"# Preimage\n\nObsolete detail.\n").decode(),
+                }
+        if relative == "/git/blobs":
+            sha = f"{len(self.blobs) + 1:040x}"
+            self.blobs[sha] = base64.b64decode(payload["content"])
+            return {"sha": sha}
+        if relative == "/git/trees":
+            self.published = {item["path"]: self.blobs[item["sha"]] for item in payload["tree"]}
+            return {"sha": "d" * 40}
+        if relative == "/git/commits" and method == "POST":
+            self.translated = "f" * 40
+            return {"sha": self.translated}
+        if relative.startswith("/git/refs"):
+            self.events.append((method, path))
+            self.files.update(self.published)
+            self.branch_head = payload["sha"]
+            return {}
+        result = super().github(method, path, payload)
+        if relative == "/pulls/42":
+            result["changed_files"] = 3
+        if "/check-runs?" in relative:
+            for check in result["check_runs"]:
+                check["conclusion"] = self.check_conclusion
+        return result
+
+    def model(self, request):
+        body = json.loads(request.body)
+        self.requests.append((request_prompt(body), request_schema(body)))
+        return super().model(request)
+
+    def verify(self):
+        from ydbdoc_review_ng.application import VerifyWorkflowInput
+        from ydbdoc_review_ng.domain import GitSha
+        from ydbdoc_review_ng.runtime import create_runtime
+
+        runtime = create_runtime(
+            environment={
+                "GITHUB_ACTOR": "m",
+                "YDBDOC_ALLOWED_ACTORS": "m",
+                "YANDEX_API_KEY": "offline",
+                "YANDEX_FOLDER_ID": "offline",
+            },
+            ydb_executor=self,
+            github_transport=self.github,
+            model_transport=self.model,
+        )
+        return runtime.doc_verify(
+            VerifyWorkflowInput(
+                43,
+                GitSha(self.source),
+                GitSha(self.translated),
+            )
+        )
+
+
+def test_runtime_full_pr_critic_and_arbiter_share_exact_complete_inputs():
+    from _runtime_services import raw_repair_context
+
+    services = WholePRServices()
+    result = services.verify()
+    assert result.verdict.value == "GREEN"
+    assert len(services.requests) == 2 and not services.semantic_responses
+    for index, (prompt, schema) in enumerate(services.requests):
+        assert json.loads(raw_repair_context(prompt, "source-pr-files")) == services.source_files
+        assert json.loads(raw_repair_context(prompt, "translation-pr-files")) == (
+            services.target_files if index == 0 else services.corrected_files
+        )
+        assert json.loads(raw_repair_context(prompt, "project-glossary")) == services.glossary
+        assert set(schema["schema"]["properties"]) == (
+            {"files"} if index == 0 else {"verdict", "findings"}
+        )
+    assert services.published == {
+        path: text.encode()
+        for path, text in services.corrected_files.items()
+        if path.endswith(".md")
+    }
+    assert len(services.comments) == 1
+
+
+@pytest.mark.parametrize("verdict", ["YELLOW", "RED"])
+def test_runtime_residual_findings_report_once_without_further_model_calls(verdict):
+    services = WholePRServices(verdict)
+    result = services.verify()
+    assert result.verdict.value == verdict
+    assert len(services.requests) == 2 and not services.semantic_responses
+    assert len(services.comments) == 1
+    report = services.comments[0]["body"]
+    assert verdict in report
+    for text in ("Residual alpha detail.", "Residual relationship detail."):
+        assert report.count(text) == 1
+        assert all(text not in prompt for prompt, _schema in services.requests)
+    assert ("doc_continue" in report) == (verdict == "RED")
+
+
+@pytest.mark.parametrize("verdict", ["GREEN", "YELLOW", "RED"])
+@pytest.mark.parametrize("check_conclusion", ["success", "failure", None])
+def test_repository_checks_do_not_change_semantic_verdict(verdict, check_conclusion):
+    services = WholePRServices(verdict, check_conclusion)
+    result = services.verify()
+    assert result.verdict.value == verdict
+    assert verdict in services.comments[0]["body"]
+    assert len(services.requests) == 2
+    assert all("build-docs" not in prompt for prompt, _schema in services.requests)
 
 
 def test_merged_source_uses_workflow_pinned_base_after_branch_advances() -> None:
@@ -116,11 +313,7 @@ def test_shipped_composition_translates_then_verifies_current_pr_without_retrans
     assert services.comments[0]["body"].startswith("🟢 GREEN\n")
     events = services.events
     assert (
-        next(
-            i
-            for i, event in enumerate(events)
-                if event == ("MODEL", ("corrected_markdown",))
-        )
+        next(i for i, event in enumerate(events) if event == ("MODEL", ("files",)))
         < next(
             i
             for i, event in enumerate(events)
@@ -133,6 +326,10 @@ def test_shipped_composition_translates_then_verifies_current_pr_without_retrans
         )
     )
     services.events = []
+    services.semantic_responses = [
+        {"files": {"ydb/docs/en/core/page.md": "# Translated\n"}},
+        {"verdict": "GREEN", "findings": []},
+    ]
     runtime = create_runtime(
         environment=environment,
         ydb_executor=services,
@@ -155,7 +352,7 @@ def test_shipped_composition_translates_then_verifies_current_pr_without_retrans
         == 0
     )
     assert [event for event in services.events if event[0] == "MODEL"] == [
-        ("MODEL", ("corrected_markdown",)),
+        ("MODEL", ("files",)),
         ("MODEL", ("verdict", "findings")),
     ]
     assert not any(
@@ -180,6 +377,14 @@ def test_runtime_publishes_field_local_inline_code_grammar_order_once() -> None:
                 "`.sys/query_sessions` добавлена колонка `TraceId`.\n"
             ).encode()
             self.raw_calls = 0
+            self.semantic_responses[0] = {
+                "files": {
+                    "ydb/docs/en/core/page.md": (
+                        "* The `TraceId` column was added to `.sys/top_queries_*` and "
+                        "`.sys/query_sessions`.\n"
+                    )
+                }
+            }
 
         def model(self, request):
             body = json.loads(request.body)
@@ -189,21 +394,6 @@ def test_runtime_publishes_field_local_inline_code_grammar_order_once() -> None:
                 if all(key.startswith("segment_") for key in properties):
                     self.raw_calls += 1
                     return super().model(request)
-                if "corrected_markdown" in properties:
-                    response = super().model(request)
-                    payload = json.loads(response.body)
-                    values = {
-                        "corrected_markdown": (
-                            "* The [[YDBDOC_PROTECTED_0003]] column was added to "
-                            "[[YDBDOC_PROTECTED_0001]] and [[YDBDOC_PROTECTED_0002]].\n"
-                        ),
-                    }
-                    text = json.dumps(values)
-                    if "choices" in payload:
-                        payload["choices"][0]["message"]["content"] = text
-                    else:
-                        payload["result"]["alternatives"][0]["message"]["text"] = text
-                    return HttpResponse(200, json.dumps(payload).encode(), Decimal("0.01"))
                 return super().model(request)
             self.raw_calls += 1
             self.events.append(("MODEL", ("raw_markdown",)))
@@ -253,13 +443,12 @@ def test_runtime_publishes_field_local_inline_code_grammar_order_once() -> None:
     assert exit_code == 0
     assert services.raw_calls == 1
     assert services.files["ydb/docs/en/core/page.md"] == (
-        b"* The `TraceId` column was added to `.sys/top_queries_*` and "
-        b"`.sys/query_sessions`.\n"
+        b"* The `TraceId` column was added to `.sys/top_queries_*` and `.sys/query_sessions`.\n"
     )
-    assert sum(
-        method in {"POST", "PATCH"} and "/git/refs" in path
-        for method, path in services.events
-    ) == 1
+    assert (
+        sum(method in {"POST", "PATCH"} and "/git/refs" in path for method, path in services.events)
+        == 1
+    )
 
 
 def test_runtime_preserves_list_formatting_drift_through_critic() -> None:
@@ -276,6 +465,15 @@ def test_runtime_preserves_list_formatting_drift_through_critic() -> None:
             ).encode()
             self.raw_calls = 0
             self.critic_calls = 0
+            self.semantic_responses[0] = {
+                "files": {
+                    "ydb/docs/en/core/page.md": (
+                        "* Parent translated\n"
+                        "* `enable_strict_user_management` — corrected item "
+                        "(i.e., only an administrator)\n"
+                    )
+                }
+            }
 
         def model(self, request):
             body = json.loads(request.body)
@@ -286,18 +484,7 @@ def test_runtime_preserves_list_formatting_drift_through_critic() -> None:
                     self.raw_calls += 1
                     return super().model(request)
                 self.critic_calls += 1
-                if self.critic_calls > 1:
-                    return super().model(request)
-                schema = schema_wrapper["schema"]
-                self.events.append(("MODEL", tuple(schema["properties"])))
-                values = {
-                    "corrected_markdown": (
-                        "* Parent translated\n"
-                        "* [[YDBDOC_PROTECTED_0001]] — corrected item "
-                        "(i.e., only an administrator)\n"
-                    )
-                }
-                text = json.dumps(values)
+                return super().model(request)
             else:
                 self.raw_calls += 1
                 prompt = request_prompt(body)
@@ -366,9 +553,7 @@ def test_runtime_preserves_list_formatting_drift_through_critic() -> None:
         b"* `enable_strict_user_management` "
         b"\xe2\x80\x94 corrected item (i.e., only an administrator)\n"
     )
-    assert services.events.count(
-        ("MODEL", ("corrected_markdown",))
-    ) == 1
+    assert services.events.count(("MODEL", ("files",))) == 1
     assert services.events.count(("MODEL", ("verdict", "findings"))) == 1
     assert services.events.count(("REPAIR", "markdown")) == 0
 
@@ -393,9 +578,9 @@ class ContentFilterServices(RuntimeServices):
                 if "choices" in document:
                     document["choices"][0]["finish_reason"] = "content_filter"
                 else:
-                    document["result"]["alternatives"][0][
-                        "status"
-                    ] = "ALTERNATIVE_STATUS_CONTENT_FILTER"
+                    document["result"]["alternatives"][0]["status"] = (
+                        "ALTERNATIVE_STATUS_CONTENT_FILTER"
+                    )
                 return HttpResponse(
                     200,
                     json.dumps(document).encode(),
@@ -428,9 +613,7 @@ def test_runtime_retries_one_content_filter_then_publishes_once() -> None:
     )
 
     attempts = [row for row in services.audit if "attempt_id" in row]
-    translation_attempts = [
-        row for row in attempts if row["role"] == "translate"
-    ]
+    translation_attempts = [row for row in attempts if row["role"] == "translate"]
     assert exit_code == 0
     assert services.files["ydb/docs/en/core/page.md"] == b"# Translated\n"
     assert len(services.raw_request_bodies) == 2
@@ -441,10 +624,10 @@ def test_runtime_retries_one_content_filter_then_publishes_once() -> None:
         Decimal("0.01"),
         Decimal("0.01"),
     ]
-    assert sum(
-        method in {"POST", "PATCH"} and "/git/refs" in path
-        for method, path in services.events
-    ) == 1
+    assert (
+        sum(method in {"POST", "PATCH"} and "/git/refs" in path for method, path in services.events)
+        == 1
+    )
 
 
 def test_runtime_two_content_filters_fail_without_publication_or_checkpoint() -> None:
@@ -470,9 +653,7 @@ def test_runtime_two_content_filters_fail_without_publication_or_checkpoint() ->
     )
 
     translation_attempts = [
-        row
-        for row in services.audit
-        if "attempt_id" in row and row["role"] == "translate"
+        row for row in services.audit if "attempt_id" in row and row["role"] == "translate"
     ]
     assert exit_code == 1
     assert len(services.raw_request_bodies) == 4
@@ -480,9 +661,7 @@ def test_runtime_two_content_filters_fail_without_publication_or_checkpoint() ->
     assert [row["status"] for row in translation_attempts] == ["failed"] * 4
     assert [row["error"] for row in translation_attempts] == ["content_filter"] * 4
     assert [row["cost_rub"] for row in translation_attempts] == [Decimal("0.01")] * 4
-    assert not any(
-        method in {"POST", "PATCH"} for method, _path in services.events
-    )
+    assert not any(method in {"POST", "PATCH"} for method, _path in services.events)
     assert all("continuation_id" not in row for row in services.audit)
     assert services.audit[-1]["status"] == "failed"
 
@@ -496,6 +675,11 @@ class AdaptiveContentFilterServices(ContentFilterServices):
             prefix = f"## Block {number:03d} "
             parts.append(prefix + "x" * (length - len(prefix) - 1) + "\n")
         self.files["ydb/docs/ru/core/page.md"] = "".join(parts).encode()
+        self.semantic_responses[0] = {
+            "files": {
+                "ydb/docs/en/core/page.md": "\n".join(["## Translated\n"] * 111),
+            }
+        }
 
 
 def test_runtime_adaptive_split_audits_parent_and_children_then_publishes_once() -> None:
@@ -521,9 +705,7 @@ def test_runtime_adaptive_split_audits_parent_and_children_then_publishes_once()
     )
 
     translation_attempts = [
-        row
-        for row in services.audit
-        if "attempt_id" in row and row["role"] == "translate"
+        row for row in services.audit if "attempt_id" in row and row["role"] == "translate"
     ]
     assert exit_code == 0
     assert len(services.raw_request_bodies) == 9
@@ -531,10 +713,10 @@ def test_runtime_adaptive_split_audits_parent_and_children_then_publishes_once()
     assert [row["status"] for row in translation_attempts] == ["failed"] * 4 + ["succeeded"] * 5
     assert [row["error"] for row in translation_attempts] == ["content_filter"] * 4 + [None] * 5
     assert [row["cost_rub"] for row in translation_attempts] == [Decimal("0.01")] * 9
-    assert sum(
-        method in {"POST", "PATCH"} and "/git/refs" in path
-        for method, path in services.events
-    ) == 1
+    assert (
+        sum(method in {"POST", "PATCH"} and "/git/refs" in path for method, path in services.events)
+        == 1
+    )
 
 
 def test_runtime_filtered_child_splits_again_and_publishes_once() -> None:
@@ -560,9 +742,7 @@ def test_runtime_filtered_child_splits_again_and_publishes_once() -> None:
     )
 
     translation_attempts = [
-        row
-        for row in services.audit
-        if "attempt_id" in row and row["role"] == "translate"
+        row for row in services.audit if "attempt_id" in row and row["role"] == "translate"
     ]
     assert exit_code == 0
     assert len(services.raw_request_bodies) == 9
@@ -571,10 +751,10 @@ def test_runtime_filtered_child_splits_again_and_publishes_once() -> None:
     assert services.raw_request_bodies[0] != services.raw_request_bodies[2]
     assert [row["error"] for row in translation_attempts] == ["content_filter"] * 4 + [None] * 5
     assert [row["cost_rub"] for row in translation_attempts] == [Decimal("0.01")] * 9
-    assert sum(
-        method in {"POST", "PATCH"} and "/git/refs" in path
-        for method, path in services.events
-    ) == 1
+    assert (
+        sum(method in {"POST", "PATCH"} and "/git/refs" in path for method, path in services.events)
+        == 1
+    )
     assert all("continuation_id" not in row for row in services.audit)
 
 
@@ -598,6 +778,11 @@ def test_t017_f04_pure_rename_rejects_changed_whole_fence_before_commit() -> Non
 
     services = RenameServices()
     services.files["ydb/docs/ru/core/page.md"] = b"```sql\nSELECT 1;\n```\n"
+    services.semantic_responses[0] = {
+        "files": {
+            "ydb/docs/en/core/page.md": "```sql\nDROP TABLE users;\n```\n",
+        }
+    }
     services.files["ydb/docs/en/core/old.md"] = b"```sql\nDROP TABLE users;\n```\n"
     del services.files["ydb/docs/en/core/page.md"]
     runtime = create_runtime(
@@ -615,7 +800,8 @@ def test_t017_f04_pure_rename_rejects_changed_whole_fence_before_commit() -> Non
     with pytest.raises(WorkflowError):
         runtime.doc_translate(TranslateWorkflowInput(42, GitSha(services.source), Decimal(10)))
 
-    assert not any(method in {"POST", "PATCH", "MODEL"} for method, _ in services.events)
+    assert not any(method in {"POST", "PATCH"} for method, _ in services.events)
+    assert [row["role"] for row in services.audit if "attempt_id" in row] == ["critic"]
     assert services.audit[-1]["status"] == "failed"
 
 
@@ -788,6 +974,11 @@ class _T017R07Services(RuntimeServices):
             return
         source_doc = b"# Source grpc://safe.example:2135 guide.md\n"
         translated_doc = b"# Translated grpc://safe.example:2135 guide.md\n"
+        self.semantic_responses[0] = {
+            "files": {
+                "ydb/docs/en/core/page.md": "# Translated grpc://safe.example:2135 guide.md\n",
+            }
+        }
         self.ref_files[self.source] = {
             "ydb/docs/ru/core/page.md": source_doc,
             "ydb/docs/en/core/page.md": translated_doc,
@@ -933,9 +1124,7 @@ def test_t017_r07_already_renamed_noop_checks_entire_pinned_target(
     services = _T017R07Services("renamed", target_state)
 
     assert _run_t017_r07(services) == expected_exit
-    assert (
-        ("MODEL", ("corrected_markdown",)) in services.events
-    ) is expects_critic
+    assert (("MODEL", ("files",)) in services.events) is expects_critic
     if expected_exit:
         assert services.audit[-1]["error"] in {"load_candidate_failed", "validate_failed"}
 
@@ -1160,6 +1349,14 @@ def test_t017_q01_real_verify_rejects_quoted_key_block_scalar_change() -> None:
 
 
 class _T017N04Services(RuntimeServices):
+    def __init__(self):
+        super().__init__()
+        self.semantic_responses[0] = {
+            "files": {
+                "ydb/docs/en/core/page.md": _t017_n04_documents()[1].decode(),
+            }
+        }
+
     def model(self, request):
         from ydbdoc_review_ng.models import HttpResponse
 
@@ -1195,17 +1392,9 @@ class _T017N04Services(RuntimeServices):
                 key: value.replace('An \\"escaped\\" title', 'A \\"quoted\\" title')
                 for key, value in translation_segments(request_prompt(body)).items()
             }
-        elif properties == ("corrected_markdown",):
-            prompt = request_prompt(body)
-            values = {
-                "corrected_markdown": prompt.split("<final-target>\n", 1)[1].split(
-                    "</final-target>", 1
-                )[0]
-            }
-        elif "findings" in properties:
-            values = {"findings": []}
-            if "verdict" in properties:
-                values["verdict"] = "GREEN"
+        elif set(properties) in ({"files"}, {"verdict", "findings"}):
+            assert self.semantic_responses
+            values = self.semantic_responses.pop(0)
         else:
             values = {field_id: 'A "quoted" title' for field_id in properties}
         return HttpResponse(
@@ -1271,7 +1460,7 @@ def test_t017_n04_real_translate_reviews_escaped_quoted_frontmatter() -> None:
 
     assert result == 0
     assert services.files["ydb/docs/en/core/page.md"] == target
-    assert ("MODEL", ("corrected_markdown",)) in services.events
+    assert ("MODEL", ("files",)) in services.events
     assert services.comments[0]["body"].startswith("🟢 GREEN\n")
 
 
@@ -1312,7 +1501,7 @@ def test_t017_n04_real_verify_reviews_escaped_quoted_frontmatter() -> None:
 
     assert result == 0
     assert [event for event in services.events if event[0] == "MODEL"] == [
-        ("MODEL", ("corrected_markdown",)),
+        ("MODEL", ("files",)),
         ("MODEL", ("verdict", "findings")),
     ]
     assert services.comments[0]["body"].startswith("🟢 GREEN\n")
@@ -1608,12 +1797,24 @@ def test_pr50839_full_runtime_plan_publishes_exact_complete_toc() -> None:
                     "\xd0\x94\xd0\xb5\xd0\xba\xd0\xbe\xd0\xbc\xd0\xb8\xd1\x81\xd1\x81\xd0\xb8\xd1\x8f BlobDepot",
                     "Group Decommissioning",
                 ),
-                ("index.md", "\xd0\x9e\xd0\xb1\xd1\x81\xd0\xbb\xd1\x83\xd0\xb6\xd0\xb8\xd0\xb2\xd0\xb0\xd0\xbd\xd0\xb8\xd0\xb5", "Maintenance"),
+                (
+                    "index.md",
+                    "\xd0\x9e\xd0\xb1\xd1\x81\xd0\xbb\xd1\x83\xd0\xb6\xd0\xb8\xd0\xb2\xd0\xb0\xd0\xbd\xd0\xb8\xd0\xb5",
+                    "Maintenance",
+                ),
             ):
                 self.files[directory.format("ru") + name] = f"# {ru_heading}\n".encode()
                 self.files[directory.format("en") + name] = f"# {en_heading}\n".encode()
             self.files[directory.format("ru") + "toc_i.yaml"] = ru_toc
             self.files[directory.format("en") + "toc_i.yaml"] = en_before
+            self.semantic_responses[0] = {
+                "files": {
+                    directory.format("en") + "blobdepot.md": "# Translated\n",
+                    directory.format("en") + "blobdepot_decommit.md": "# Translated\n",
+                    directory.format("en") + "index.md": "# Translated\n",
+                    directory.format("en") + "toc_i.yaml": en_expected.decode(),
+                }
+            }
 
         def github(self, method, path, payload):
             normalized = path.removeprefix("/repos/ydb-platform/ydb")
@@ -1674,9 +1875,7 @@ def test_pr50839_full_runtime_plan_publishes_exact_complete_toc() -> None:
         model_transport=services.model,
     )
 
-    result = runtime.doc_translate(
-        TranslateWorkflowInput(42, GitSha(services.source), Decimal(10))
-    )
+    result = runtime.doc_translate(TranslateWorkflowInput(42, GitSha(services.source), Decimal(10)))
 
     assert result.final_commit_sha == GitSha(services.translated)
     assert services.published[directory.format("en") + "toc_i.yaml"] == en_expected
@@ -1684,7 +1883,9 @@ def test_pr50839_full_runtime_plan_publishes_exact_complete_toc() -> None:
     assert b"BlobDepot decommit" not in en_expected
 
 
-@pytest.mark.parametrize("toc_label", ["Group Decommissioning", "Corrected BlobDepot decommissioning"])
+@pytest.mark.parametrize(
+    "toc_label", ["Group Decommissioning", "Corrected BlobDepot decommissioning"]
+)
 def test_verify_replays_pinned_toc_plan_instead_of_translated_h1(toc_label) -> None:
     from ydbdoc_review_ng.application import VerifyWorkflowInput
     from ydbdoc_review_ng.domain import GitSha
@@ -1704,8 +1905,7 @@ def test_verify_replays_pinned_toc_plan_instead_of_translated_h1(toc_label) -> N
                         b"# Decommission source\n\nCurrent source.\n\nUnchanged paragraph.\n"
                     ),
                     directory.format("ru") + "toc_i.yaml": (
-                        "items:\n  - name: Декомиссия BlobDepot\n"
-                        "    href: blobdepot_decommit.md\n"
+                        "items:\n  - name: Декомиссия BlobDepot\n    href: blobdepot_decommit.md\n"
                     ).encode(),
                 },
                 self.base: {
@@ -1714,8 +1914,7 @@ def test_verify_replays_pinned_toc_plan_instead_of_translated_h1(toc_label) -> N
                         b"# Group Decommissioning\n"
                     ),
                     directory.format("en") + "toc_i.yaml": (
-                        b"items:\n  - name: BlobDepot decommit\n"
-                        b"    href: blobdepot_decommit.md\n"
+                        b"items:\n  - name: BlobDepot decommit\n    href: blobdepot_decommit.md\n"
                     ),
                 },
                 self.translated: {
@@ -1725,8 +1924,7 @@ def test_verify_replays_pinned_toc_plan_instead_of_translated_h1(toc_label) -> N
                         b"# Group decommissioning\n\nCurrent translation.\n\nUnchanged paragraph.\n"
                     ),
                     directory.format("en") + "toc_i.yaml": (
-                        f'items:\n  - name: "{toc_label}"\n'
-                        "    href: blobdepot_decommit.md\n"
+                        f'items:\n  - name: "{toc_label}"\n    href: blobdepot_decommit.md\n'
                     ).encode(),
                 },
             }
@@ -1764,9 +1962,7 @@ def test_verify_replays_pinned_toc_plan_instead_of_translated_h1(toc_label) -> N
         {"GITHUB_ACTOR": "maintainer", "YDBDOC_ALLOWED_ACTORS": "maintainer"},
         GitHubBackend(services.github),
     )
-    request = VerifyWorkflowInput(
-        43, GitSha(services.source), GitSha(services.translated)
-    )
+    request = VerifyWorkflowInput(43, GitSha(services.source), GitSha(services.translated))
 
     authorized = source.authorize_verify(request)
     snapshot = source.snapshot_verify(authorized)
@@ -1784,8 +1980,7 @@ def test_verify_replays_pinned_toc_plan_instead_of_translated_h1(toc_label) -> N
             b"# Decommission source\n\nCurrent source.\n\nUnchanged paragraph.\n"
         ),
         directory.format("ru") + "toc_i.yaml": (
-            "items:\n  - name: Декомиссия BlobDepot\n"
-            "    href: blobdepot_decommit.md\n"
+            "items:\n  - name: Декомиссия BlobDepot\n    href: blobdepot_decommit.md\n"
         ).encode(),
     }
     assert translated_files == {
@@ -1793,8 +1988,7 @@ def test_verify_replays_pinned_toc_plan_instead_of_translated_h1(toc_label) -> N
             b"# Group decommissioning\n\nCurrent translation.\n\nUnchanged paragraph.\n"
         ),
         directory.format("en") + "toc_i.yaml": (
-            f'items:\n  - name: "{toc_label}"\n'
-            "    href: blobdepot_decommit.md\n"
+            f'items:\n  - name: "{toc_label}"\n    href: blobdepot_decommit.md\n'
         ).encode(),
     }
     assert glossary_files == {}
@@ -1975,75 +2169,19 @@ def test_critic_edit_is_validated_then_published_once_before_pr():
     class Services(RuntimeServices):
         def __init__(self):
             super().__init__()
-            self.field_id = None
-            self.critics = 0
+            self.semantic_responses[0] = {
+                "files": {"ydb/docs/en/core/page.md": "# Corrected\n"},
+            }
 
         def model(self, request):
-            body = json.loads(request.body)
-            schema_wrapper = request_schema(body)
-            if schema_wrapper is None:
-                prompt = request_prompt(body)
-                if prompt.startswith("Repair"):
-                    self.events.append(("REPAIR", "markdown"))
-                    current = prompt.split("<current-target>\n", 1)[1].split(
-                        "</current-target>", 1
-                    )[0]
-                    values = current.replace("# Translated", "# Corrected", 1)
-                    return HttpResponse(
-                        200,
-                        json.dumps(
-                            {
-                                "result": {
-                                    "alternatives": [
-                                        {
-                                            "status": "ALTERNATIVE_STATUS_FINAL",
-                                            "message": {
-                                                "role": "assistant",
-                                                "text": values,
-                                            },
-                                        }
-                                    ]
-                                }
-                            }
-                        ).encode(),
-                        Decimal("0.02"),
-                    )
-                return super().model(request)
-            schema = schema_wrapper["schema"]
-            if all(key.startswith("segment_") for key in schema["properties"]):
-                return super().model(request)
-            self.critics += 1
-            if self.critics > 1:
-                return super().model(request)
-            self.events.append(("CRITIC", "first"))
-            if "corrected_markdown" in schema["properties"]:
-                prompt = request_prompt(body)
-                current = prompt.split("<final-target>\n", 1)[1].split(
-                    "</final-target>", 1
-                )[0]
-                values = {
-                    "corrected_markdown": current.replace(
-                        "# Translated", "# Corrected", 1
-                    )
-                }
-            else:
-                values = {"verdict": "GREEN", "findings": []}
-            return HttpResponse(
-                200,
-                json.dumps(
-                    {
-                        "result": {
-                            "alternatives": [
-                                {
-                                    "status": "ALTERNATIVE_STATUS_FINAL",
-                                    "message": {"role": "assistant", "text": json.dumps(values)},
-                                }
-                            ]
-                        }
-                    }
-                ).encode(),
-                Decimal("0.02"),
-            )
+            from _runtime_services import request_schema
+
+            schema = request_schema(json.loads(request.body))
+            response = super().model(request)
+            if schema is not None and set(schema["schema"]["properties"]) == {"files"}:
+                self.events[-1] = ("CRITIC", "first")
+                return HttpResponse(response.status_code, response.body, Decimal("0.02"))
+            return response
 
     services = Services()
     runtime = create_runtime(
@@ -2115,27 +2253,30 @@ def test_broken_trusted_base_stops_before_any_model_call(monkeypatch, tmp_path, 
 
     def reject_baseline(self):
         calls.append(self.docs_root)
-        raise DiplodocBuildError(('ERR ru/changelog-server.md: unreachable link',))
+        raise DiplodocBuildError(("ERR ru/changelog-server.md: unreachable link",))
 
-    monkeypatch.setattr(DiplodocBuildValidator, 'validate_baseline', reject_baseline)
+    monkeypatch.setattr(DiplodocBuildValidator, "validate_baseline", reject_baseline)
     runtime = create_runtime(
         environment={
-            'GITHUB_ACTOR': 'maintainer', 'YDBDOC_ALLOWED_ACTORS': 'maintainer',
-            'YANDEX_API_KEY': 'secret', 'YANDEX_FOLDER_ID': 'folder',
-            'YDBDOC_DOCS_ROOT': str(tmp_path),
+            "GITHUB_ACTOR": "maintainer",
+            "YDBDOC_ALLOWED_ACTORS": "maintainer",
+            "YANDEX_API_KEY": "secret",
+            "YANDEX_FOLDER_ID": "folder",
+            "YDBDOC_DOCS_ROOT": str(tmp_path),
         },
-        ydb_executor=services, github_transport=services.github, model_transport=services.model,
+        ydb_executor=services,
+        github_transport=services.github,
+        model_transport=services.model,
     )
     result = main(
-        ['translate', '--pr', '42', '--source-sha', services.source, '--budget-rub', '10'],
+        ["translate", "--pr", "42", "--source-sha", services.source, "--budget-rub", "10"],
         dispatcher=runtime,
     )
     assert result != 0
     assert calls == [tmp_path.resolve()]
-    assert not any(event[0] == 'MODEL' for event in services.events)
+    assert not any(event[0] == "MODEL" for event in services.events)
     assert not any(
-        method in {'POST', 'PATCH', 'DELETE'} for method, _ in services.events
-        if method != 'MODEL'
+        method in {"POST", "PATCH", "DELETE"} for method, _ in services.events if method != "MODEL"
     )
     assert not services.comments
-    assert 'trusted_base_build' in capsys.readouterr().err
+    assert "trusted_base_build" in capsys.readouterr().err

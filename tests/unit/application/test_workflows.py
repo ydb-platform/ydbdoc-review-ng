@@ -22,8 +22,8 @@ from ydbdoc_review_ng.errors import SafeDiagnosticError
 from ydbdoc_review_ng.persistence import DailyBudgetExceeded, JobStatus
 from ydbdoc_review_ng.quality import (
     CriticResult,
+    QualityInputError,
     QualityReviewResult,
-    RepairErrorReason,
     Verdict,
 )
 
@@ -40,7 +40,7 @@ class Scenario:
     fail_once_at: set[str] = field(default_factory=set)
     safe_fail_once_at: set[str] = field(default_factory=set)
     repair: bool = False
-    invalid_repair: bool = False
+    invalid_review: bool = False
     mixed_locale: bool = False
     events: list[str] = field(default_factory=list)
     model_calls: list[str] = field(default_factory=list)
@@ -201,7 +201,7 @@ class FakeReviewer:
         self.scenario.hit("review:critic-editor")
         self.scenario.model_calls.append("critic")
         green = CriticResult(Verdict.GREEN, ())
-        if not self.scenario.repair and not self.scenario.invalid_repair:
+        if not self.scenario.repair and not self.scenario.invalid_review:
             return QualityReviewResult(
                 candidate.content,
                 None,
@@ -212,23 +212,13 @@ class FakeReviewer:
                 False,
                 None,
             )
-        if self.scenario.invalid_repair:
-            red = CriticResult(Verdict.RED, ())
-            return QualityReviewResult(
-                candidate.content,
-                None,
-                candidate.content,
-                red,
-                red,
-                True,
-                False,
-                RepairErrorReason.INVALID_RESPONSE,
-            )
+        if self.scenario.invalid_review:
+            raise QualityInputError("invalid_corrected_files")
         return QualityReviewResult(
             candidate.content,
             b"repaired-candidate",
             b"repaired-candidate",
-            CriticResult(Verdict.RED, ()),
+            green,
             green,
             True,
             True,
@@ -627,29 +617,36 @@ def test_corrected_candidate_failure_prevents_report(failed_event: str) -> None:
     assert persistence.finished_errors[-1] == f"{captured.value.stage.value}_failed"
 
 
-def test_invalid_critic_edit_keeps_draft_and_publishes_once_with_red_verdict() -> None:
-    scenario = Scenario(invalid_repair=True)
-    workflows, _ = build_workflows(scenario)
+@pytest.mark.parametrize("mode", ["translate", "verify"])
+def test_invalid_critic_edit_fails_review_without_publication_or_semantic_verdict(mode) -> None:
+    scenario = Scenario(invalid_review=True)
+    workflows, persistence = build_workflows(scenario)
 
-    result = workflows.doc_translate(translate_input())
+    with pytest.raises(WorkflowError) as captured:
+        if mode == "translate":
+            workflows.doc_translate(translate_input())
+        else:
+            workflows.doc_verify(verify_input())
 
-    assert result.final_commit_sha == INITIAL_SHA
-    assert result.repair_applied is False
+    assert captured.value.stage is WorkflowStage.REVIEW
+    preparation = (
+        ["budget", "prepare:direction-scope-translate-assemble-reparse"]
+        if mode == "translate"
+        else ["load:verify-candidate", "validate:initial"]
+    )
     assert scenario.events == [
         "job:start",
-        "authorize:translate",
-        "snapshot:translate",
-        "budget",
-        "prepare:direction-scope-translate-assemble-reparse",
+        f"authorize:{mode}",
+        f"snapshot:{mode}",
+        *preparation,
         "review:t011",
         "review:critic-editor",
-        "validate:initial",
-        "publish:initial",
-        "report:current-pr-verdict",
-        "job:finish:succeeded",
+        "job:finish:failed",
     ]
-    assert scenario.model_calls == ["translate", "critic"]
-    assert scenario.published_branches == ["translation/pr-42"]
+    assert scenario.model_calls == (["translate", "critic"] if mode == "translate" else ["critic"])
+    assert scenario.published_branches == []
+    assert persistence.finished_errors == ["review_failed"]
+    assert "RED" not in str(captured.value)
 
 
 def test_mixed_locale_exhausted_budget_after_snapshot_has_exact_error_and_zero_model_calls() -> (

@@ -46,7 +46,7 @@ acknowledgement, но не разрешает recovery через широкий
 Replay читает только сохранённые source/base SHA и проверяет scope/field IDs
 и exact translation head. Три stage: direction retry, перевод pending документов
 с accepted maps и полная семантическая проверка PR. Source-only
-assembly и обычные проверки сохраняются. GREEN закрывает checkpoint; повторный
+assembly и обычные проверки сохраняются. GREEN и YELLOW закрывают checkpoint; повторный
 semantic stop наследует первоначальный expiry. Infrastructure failure не является
 новым semantic checkpoint. Общей resumable state machine нет.
 
@@ -72,6 +72,10 @@ semantic stop наследует первоначальный expiry. Infrastruc
 - Один критик получает полные актуальные source PR files, полные соответствующие
   translation PR files и полный glossary. Он сравнивает весь PR и сразу возвращает
   полные исправленные файлы, без findings для другой модели и без repair-loop.
+  Все исправления проверяются атомарно перед арбитром. TOC допускает изменение
+  переводимых labels с сохранением навигационной структуры, required entries и
+  target-only entries. Arbiter сохраняет собственный GREEN/YELLOW/RED независимо
+  от числа findings; ошибка ответа критика остаётся execution failure.
 - Add source-TOC-reachable страницы добавляет target TOC entry без redirect;
   add вне source TOC не обязан менять TOC; rename обновляет target TOC path и
   создаёт прямой redirect old→new. Ordinary edit также проверяет симметричную
@@ -178,7 +182,8 @@ GREEN/YELLOW/RED по степени проблем. Остаточные зам
 семантическом verdict.
 
 Prompt критика живой: его модифицируют при отладке, не меняя orchestration.
-Реализация этого контракта ещё не выполнена.
+Контракт реализован через `review_pr`; runtime загружает
+`quality/prompts/critic.txt` из установленного пакета при каждом запросе.
 
 ## Public semantic report (2026-09-30)
 
@@ -200,10 +205,12 @@ then block publication when a planned TOC/delete/rename/document result is
 missing.
 
 Supported TOC migrations bind the SHA-256 of the complete expected target file
-into the plan before document-model calls. Fixed and final reconciliation both
-require the exact digest, so path presence cannot mask stale content. This is
-still a migration rule backed by the established target article H1, not the
-future general TOC prose translator.
+into the plan before document-model calls. Fixed-output reconciliation verifies
+that exact baseline digest. Final reconciliation verifies the immutable expected
+baseline against the plan, then uses `validate_toc_correction` to accept corrected
+label prose while preserving navigation structure and entries. The initial
+migration uses the established target article H1; the whole-PR critic can correct
+the resulting labels.
 
 This is a narrow fail-closed planner, not the completed cross-file executor.
 Unsupported asset/redirect operations, metadata-only direction and TOC

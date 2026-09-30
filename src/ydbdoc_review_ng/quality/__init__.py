@@ -1,13 +1,10 @@
-"""Whole-document model critic and bounded repair API."""
+"""Whole-PR model critic and independent arbiter API."""
 
 from ydbdoc_review_ng.quality.critic import (
     CriticResponseError,
     CriticResponseErrorReason,
-    build_critic_request,
     build_pr_arbiter_request,
     build_pr_critic_request,
-    critic_schema,
-    parse_critic_response,
     parse_pr_arbiter_response,
     parse_pr_critic_response,
 )
@@ -16,7 +13,6 @@ from ydbdoc_review_ng.quality.repair import (
     QualityExecutionError,
     QualityInputError,
     review_pr,
-    review_translation,
 )
 from ydbdoc_review_ng.quality.types import (
     CriticResult,
@@ -37,13 +33,9 @@ __all__ = [
     "QualityReviewResult",
     "RepairErrorReason",
     "Verdict",
-    "build_critic_request",
     "build_pr_arbiter_request",
     "build_pr_critic_request",
-    "critic_schema",
-    "parse_critic_response",
     "parse_pr_arbiter_response",
     "parse_pr_critic_response",
     "review_pr",
-    "review_translation",
 ]

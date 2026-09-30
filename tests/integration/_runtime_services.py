@@ -109,6 +109,10 @@ class RuntimeServices:
             "ydb/docs/en/core/page.md": b"# Old\n",
         }
         self.blob = None
+        self.semantic_responses = [
+            {"files": {"ydb/docs/en/core/page.md": "# Translated\n"}},
+            {"verdict": "GREEN", "findings": []},
+        ]
 
     def execute(self, statement, parameters):
         self.audit.append(dict(parameters))
@@ -269,14 +273,9 @@ class RuntimeServices:
             prompt = request_prompt(body)
             if properties and all(key.startswith("segment_") for key in properties):
                 values = translation_segments(prompt)
-            elif set(properties) == {"corrected_markdown"}:
-                values = {
-                    "corrected_markdown": raw_repair_context(prompt, "final-target")
-                }
-            elif "findings" in properties:
-                values = {"findings": []}
-                if "verdict" in properties:
-                    values["verdict"] = "GREEN"
+            elif set(properties) in ({"files"}, {"verdict", "findings"}):
+                assert self.semantic_responses, "unexpected extra semantic model call"
+                values = self.semantic_responses.pop(0)
             else:
                 values = {key: "Translated" for key in properties}
             text = json.dumps(values)
@@ -313,8 +312,27 @@ class InstalledContinueServices(RuntimeServices):
         super().__init__()
         self.jobs = {}
         self.checkpoints = {}
-        self.stop_review = False
         self.continuing = False
+        self.semantic_responses = [
+            {"files": {"ydb/docs/en/core/page.md": "# Translated\n"}},
+            {"verdict": "GREEN", "findings": []},
+            {"files": {"ydb/docs/en/core/page.md": "# Translated\n"}},
+            {
+                "verdict": "RED",
+                "findings": [
+                    {
+                        "repairable": False,
+                        "reason": "Meaning requires operator context.",
+                        "expected_correction": "Confirm the intended source meaning.",
+                        "searchable_snippet": "Translated",
+                        "target_path": "ydb/docs/en/core/page.md",
+                        "target_line": 1,
+                    }
+                ],
+            },
+            {"files": {"ydb/docs/en/core/page.md": "# Translated\n"}},
+            {"verdict": "GREEN", "findings": []},
+        ]
 
     def execute(self, statement, parameters):
         if "a.target_path AS target_path" in statement:
@@ -382,49 +400,4 @@ class InstalledContinueServices(RuntimeServices):
                 }
                 for comment in response
             ]
-        return response
-
-    def model(self, request):
-        from ydbdoc_review_ng.models import HttpResponse
-
-        response = super().model(request)
-        schema = request_schema(json.loads(request.body))
-        if (
-            self.stop_review
-            and schema is not None
-            and set(schema["schema"]["properties"]) == {"corrected_markdown"}
-        ):
-            prompt = request_prompt(json.loads(request.body))
-            values = {
-                "corrected_markdown": raw_repair_context(prompt, "final-target")
-            }
-            body = json.loads(response.body)
-            if "choices" in body:
-                body["choices"][0]["message"]["content"] = json.dumps(values)
-            else:
-                body["result"]["alternatives"][0]["message"]["text"] = json.dumps(
-                    values
-                )
-            return HttpResponse(200, json.dumps(body).encode(), Decimal("0.01"))
-        if self.stop_review and schema is not None and "findings" in schema["schema"]["properties"]:
-            prompt = request_prompt(json.loads(request.body))
-            values = {
-                "verdict": "RED",
-                "findings": [
-                    {
-                        "repairable": False,
-                        "reason": "Meaning requires operator context.",
-                        "expected_correction": "Confirm the intended source meaning.",
-                        "searchable_snippet": "Translated",
-                        "target_path": prompt.split("Target path: ", 1)[1].split("\n", 1)[0],
-                        "target_line": 1,
-                    }
-                ],
-            }
-            body = json.loads(response.body)
-            if "choices" in body:
-                body["choices"][0]["message"]["content"] = json.dumps(values)
-            else:
-                body["result"]["alternatives"][0]["message"]["text"] = json.dumps(values)
-            return HttpResponse(200, json.dumps(body).encode(), Decimal("0.01"))
         return response

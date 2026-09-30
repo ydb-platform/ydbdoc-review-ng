@@ -60,7 +60,7 @@ from ydbdoc_review_ng.publication import (
     PublicationPlan,
     metadata_plan,
 )
-from ydbdoc_review_ng.quality import QualityReviewResult, Verdict, review_translation
+from ydbdoc_review_ng.quality import CriticResult, QualityReviewResult, Verdict, review_pr
 from ydbdoc_review_ng.reporting import (
     Comment,
     QAReporter,
@@ -447,27 +447,17 @@ class ContentAdapter:
 
 
 class CriticExecutor:
-    def __init__(self, case: Case, context: ReviewContext, candidate: bytes) -> None:
+    def __init__(self, case: Case, responses: list[str]) -> None:
         self.case = case
-        self.context = context
-        self.candidate = candidate
+        self.responses = responses
 
     def invoke(self, request: ModelRequest, /) -> ModelCallResult:
         role = request.role.value
         self.case.calls.append(role)
         self.case.events.append(role)
         assert request.schema is not None
-        properties = request.schema["properties"]
-        if role == "critic" and set(properties) == {"corrected_markdown"}:
-            corrected = request.prompt.split("<final-target>\n", 1)[1].split(
-                "</final-target>", 1
-            )[0]
-            if self.case.repair:
-                corrected = corrected.replace("# ", "# Repaired: ", 1)
-            text = json.dumps({"corrected_markdown": corrected})
-        else:
-            text = json.dumps({"verdict": "GREEN", "findings": []})
-        return ModelCallResult(text, None, ())
+        assert self.responses, "unexpected extra semantic call"
+        return ModelCallResult(self.responses.pop(0), None, ())
 
 
 class ReviewAdapter:
@@ -483,17 +473,46 @@ class ReviewAdapter:
         del snapshot
         context = candidate.review_context
         assert type(context) is ReviewContext
-        return review_translation(
-            CriticExecutor(self.case, context, candidate.content),
-            model=MODEL,
+        corrected = candidate.content.decode()
+        if self.case.repair:
+            corrected = corrected.replace("# ", "# Repaired: ", 1)
+        executor = CriticExecutor(
+            self.case,
+            [
+                json.dumps({"files": {context.target_path.value: corrected}}),
+                '{"verdict": "GREEN", "findings": []}',
+            ],
+        )
+
+        def validate_files(files):
+            target = files[context.target_path.value]
+            target_plan = build_markdown_plan(
+                context.source_plan.source_snapshot,
+                context.target_path,
+                target,
+            )
+            verify_protected_fragments(context.source, context.source_plan, target, target_plan)
+
+        files, final = review_pr(
+            executor,
+            critic_model=MODEL,
             arbiter_model=MODEL,
-            source=context.source,
-            source_plan=context.source_plan,
-            translation_request=context.request,
-            target=candidate.content,
-            target_path=context.target_path,
-            source_locale=context.source_locale,
-            target_locale=context.target_locale,
+            source_files={self.case.source_path.value: context.source},
+            translated_files={context.target_path.value: candidate.content},
+            glossary_files={},
+            validate_files=validate_files,
+        )
+        assert not executor.responses
+        result = files[context.target_path.value]
+        return QualityReviewResult(
+            original_candidate=candidate.content,
+            repaired_candidate=result if result != candidate.content else None,
+            final_candidate=result,
+            primary=CriticResult(Verdict.GREEN, ()),
+            final=final,
+            repair_attempted=True,
+            repair_applied=result != candidate.content,
+            repair_error=None,
         )
 
 
@@ -678,9 +697,7 @@ def test_malformed_translation_blocks_publication_and_terminalizes_job(tmp_path:
 
 
 @pytest.mark.parametrize("existing_pr", [False, True])
-def test_critic_edit_is_validated_and_published_once(
-    tmp_path: Path, existing_pr: bool
-) -> None:
+def test_critic_edit_is_validated_and_published_once(tmp_path: Path, existing_pr: bool) -> None:
     case = make_case(
         tmp_path,
         source=b"# Read [guide](/docs/guide)\n",
@@ -837,4 +854,3 @@ def test_publication_metadata_policy_materializes_in_real_git(
     else:
         assert toc == old.value.encode() + b"\n"
         assert redirects is None
-
