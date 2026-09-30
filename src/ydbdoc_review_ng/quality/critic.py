@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import re
+from collections.abc import Mapping
 from enum import Enum
+from importlib import resources
 from typing import cast
 
 from ydbdoc_review_ng.domain import Locale, ModelRole, RepoPath
@@ -19,6 +22,7 @@ class CriticResponseErrorReason(str, Enum):
     UNEXPECTED_FIELD = "unexpected_field"
     INVALID_VERDICT = "invalid_verdict"
     INVALID_FINDING = "invalid_finding"
+    INVALID_FILES = "invalid_files"
     INCONSISTENT_RESULT = "inconsistent_result"
 
 
@@ -54,6 +58,82 @@ def _object(
     if set(result) - expected - optional or not expected.issubset(result):
         raise CriticResponseError(CriticResponseErrorReason.UNEXPECTED_FIELD)
     return result
+
+
+def build_pr_critic_request(
+    *,
+    model: str,
+    source_files: Mapping[str, bytes],
+    translated_files: Mapping[str, bytes],
+    glossary_files: Mapping[str, bytes],
+    operator_context: str | None = None,
+) -> ModelRequest:
+    template = (
+        resources.files("ydbdoc_review_ng.quality")
+        .joinpath("prompts/critic.txt")
+        .read_text(encoding="utf-8")
+    )
+    values = {
+        "SOURCE_PR_FILES": source_files,
+        "TRANSLATION_PR_FILES": translated_files,
+        "PROJECT_GLOSSARY": glossary_files,
+    }
+    rendered = {
+        name: json.dumps(
+            {path: content.decode("utf-8") for path, content in files.items()},
+            ensure_ascii=False,
+        )
+        for name, files in values.items()
+    }
+    prompt = re.sub(
+        r"\{\{ (SOURCE_PR_FILES|TRANSLATION_PR_FILES|PROJECT_GLOSSARY) \}\}",
+        lambda match: rendered[match.group(1)],
+        template,
+    )
+    if operator_context is not None:
+        prompt += "\n<operator-context>\n" + operator_context + "</operator-context>"
+    schema = {
+        "type": "object",
+        "properties": {
+            "files": {
+                "type": "object",
+                "properties": {path: {"type": "string"} for path in translated_files},
+                "required": list(translated_files),
+                "additionalProperties": False,
+            }
+        },
+        "required": ["files"],
+        "additionalProperties": False,
+    }
+    return ModelRequest(ModelRole.CRITIC, model, prompt, cast(FrozenJson, schema), 8000)
+
+
+def parse_pr_critic_response(
+    raw: str | bytes,
+    *,
+    target_paths: tuple[str, ...],
+) -> dict[str, bytes]:
+    if type(raw) not in {str, bytes}:
+        raise TypeError("raw must be exact str or bytes")
+    try:
+        text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+        value = json.loads(text, object_pairs_hook=_ObjectPairs)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        raise CriticResponseError(CriticResponseErrorReason.MALFORMED_JSON) from None
+    if type(value) is not _ObjectPairs:
+        raise CriticResponseError(CriticResponseErrorReason.ROOT_NOT_OBJECT)
+    if _has_duplicate(value):
+        raise CriticResponseError(CriticResponseErrorReason.DUPLICATE_KEY)
+    document = _object(value, frozenset({"files"}))
+    if type(document["files"]) is not _ObjectPairs:
+        raise CriticResponseError(CriticResponseErrorReason.INVALID_FILES)
+    files = _object(document["files"], frozenset(target_paths))
+    if any(type(content) is not str for content in files.values()):
+        raise CriticResponseError(CriticResponseErrorReason.INVALID_FILES)
+    try:
+        return {path: cast(str, content).encode("utf-8") for path, content in files.items()}
+    except UnicodeEncodeError:
+        raise CriticResponseError(CriticResponseErrorReason.INVALID_FILES) from None
 
 
 def critic_schema(
