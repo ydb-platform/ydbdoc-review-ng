@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import os
 import re
-import time
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -407,7 +406,6 @@ class RuntimeReporter:
                 self.source.snapshots.source_snapshot.commit_sha,
                 self.models.cost,
             ),
-            lambda: (),
         ).report_failure(source_pr_number, diagnostic)
 
     def update_current_pr(
@@ -441,14 +439,10 @@ class RuntimeReporter:
                 self.source.probable_duplicates,
                 self.source.source_pr,
             ),
-            lambda: self.source.github.checks(commit_sha),
             verification_context=self.source.context,
             current_head=(
                 (lambda: self.source.github.head(branch)) if mode is Mode.DOC_CONTINUE else None
             ),
-            readiness_wait=time.sleep,
-            readiness_poll_attempts=90,
-            readiness_poll_seconds=10.0,
         )
         reporter.update_current_pr(
             mode=mode, pr_number=pr_number, branch=branch, commit_sha=commit_sha, review=review

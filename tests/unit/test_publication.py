@@ -18,11 +18,9 @@ from ydbdoc_review_ng.publication import (
 )
 from ydbdoc_review_ng.quality import CriticResult, Finding, QualityReviewResult, Verdict
 from ydbdoc_review_ng.reporting import (
-    CheckResult,
     Comment,
     QAReporter,
     ReportContext,
-    merge_readiness,
     render_report,
 )
 from ydbdoc_review_ng.runtime import RuntimeReporter
@@ -104,10 +102,6 @@ def reporter(backend, publisher):
         backend,
         publisher,
         lambda: ReportContext(SOURCE, TARGET, Decimal("1.25")),
-        lambda: (
-            CheckResult("doc_verify", COMMIT, "success"),
-            CheckResult("build-docs", COMMIT, "success"),
-        ),
     )
 
 
@@ -117,7 +111,6 @@ def test_scope_failure_is_reported_once_in_source_pr_and_updated_on_retry():
         backend,
         SimpleNamespace(noop=True),
         lambda: ReportContext(SOURCE, TARGET, None),
-        lambda: (),
     )
 
     qa.report_failure(50858, "source_character_limit_exceeded")
@@ -138,7 +131,6 @@ def test_translation_plan_failure_explains_why_no_candidate_was_published():
         backend,
         SimpleNamespace(noop=True),
         lambda: ReportContext(SOURCE, TARGET, None),
-        lambda: (),
     )
 
     qa.report_failure(50839, "translation_plan_toc_uncovered")
@@ -296,7 +288,6 @@ def test_verify_reports_on_existing_pr_without_requiring_publication():
         backend,
         publisher,
         lambda: ReportContext(SOURCE, TARGET, None),
-        lambda: (),
         verification_context=context,
     )
     qa.update_current_pr(
@@ -307,7 +298,7 @@ def test_verify_reports_on_existing_pr_without_requiring_publication():
         review=review(),
     )
     assert backend.events == [("create_comment", 123)]
-    assert backend.comments[7].body.startswith("🟡 YELLOW")
+    assert backend.comments[7].body.startswith("🟢 GREEN")
     assert "неизвестна" in backend.comments[7].body
 
 
@@ -430,10 +421,6 @@ def test_t017_f11_pat_authored_verify_reports_update_one_marker_comment() -> Non
         GitHubBackend(transport),
         publisher,
         lambda: ReportContext(SOURCE, TARGET, Decimal("1.25")),
-        lambda: (
-            CheckResult("doc_verify", COMMIT, "success"),
-            CheckResult("build-docs", COMMIT, "success"),
-        ),
     )
     for verdict in (Verdict.RED, Verdict.GREEN):
         qa.update_current_pr(
@@ -457,7 +444,6 @@ def test_current_doc_verify_is_reported_as_success_before_github_finishes_the_ch
         backend,
         publisher,
         lambda: ReportContext(SOURCE, TARGET, Decimal("1.25")),
-        lambda: (CheckResult("build-docs", COMMIT, "success"),),
     )
 
     qa.update_current_pr(
@@ -472,26 +458,14 @@ def test_current_doc_verify_is_reported_as_success_before_github_finishes_the_ch
     assert "doc_verify: не запускалась" not in backend.comments[7].body
 
 
-def test_doc_verify_waits_for_build_on_published_commit_before_final_report():
+def test_doc_verify_reports_semantic_verdict_without_repository_checks():
     backend, snapshot, candidate, publisher, _ = setup_publication()
     publisher.validate_candidate(snapshot, candidate)
     publisher.publish(snapshot, candidate)
-    results = iter(
-        (
-            (),
-            (CheckResult("build-docs", COMMIT, "pending"),),
-            (CheckResult("build-docs", COMMIT, "success"),),
-        )
-    )
-    waits: list[float] = []
     qa = QAReporter(
         backend,
         publisher,
         lambda: ReportContext(SOURCE, TARGET, Decimal("1.25")),
-        lambda: next(results),
-        readiness_wait=waits.append,
-        readiness_poll_attempts=3,
-        readiness_poll_seconds=0.25,
     )
 
     qa.update_current_pr(
@@ -502,7 +476,6 @@ def test_doc_verify_waits_for_build_on_published_commit_before_final_report():
         review=review(),
     )
 
-    assert waits == [0.25, 0.25]
     assert backend.comments[7].body.startswith("🟢 GREEN")
 
 
@@ -511,7 +484,7 @@ def test_red_report_is_short_russian_and_actionable_without_internal_details():
         True, "Meaning reversed", "Preserve negation", "does not delete", PATH.value, 19
     )
     report = render_report(
-        review(Verdict.RED, (finding,)), COMMIT, ReportContext(SOURCE, TARGET, Decimal("1.25")), ()
+        review(Verdict.RED, (finding,)), ReportContext(SOURCE, TARGET, Decimal("1.25"))
     )
     for value in [
         "🔴 RED",
@@ -556,9 +529,7 @@ def test_red_report_renders_every_finding_for_each_file() -> None:
 
     report = render_report(
         review(Verdict.RED, findings),
-        COMMIT,
         ReportContext(SOURCE, TARGET, Decimal("0.40")),
-        (),
     )
 
     assert report.count("- строка ") == 25
@@ -572,9 +543,7 @@ def test_red_report_renders_every_finding_for_each_file() -> None:
 def test_report_never_renders_unknown_cost_as_zero() -> None:
     report = render_report(
         review(),
-        COMMIT,
         ReportContext(SOURCE, TARGET, None),
-        (),
     )
 
     assert "Стоимость запуска: неизвестна" in report
@@ -584,12 +553,7 @@ def test_report_never_renders_unknown_cost_as_zero() -> None:
 def test_report_names_the_source_pr_being_translated() -> None:
     report = render_report(
         review(),
-        COMMIT,
         ReportContext(SOURCE, TARGET, Decimal("1.25"), source_pr_number=50858),
-        (
-            CheckResult("doc_verify", COMMIT, "success"),
-            CheckResult("build-docs", COMMIT, "success"),
-        ),
     )
 
     assert "Перевод PR #50858" in report
@@ -666,7 +630,7 @@ def test_translate_links_source_pr_to_one_current_translation_pr_comment() -> No
     assert "Перевод PR #42" in backend.comments_by_pr[123][0].body
 
 
-def test_probable_duplicate_keeps_green_checks_yellow_and_names_both_files() -> None:
+def test_probable_duplicate_is_a_semantic_yellow_and_names_both_files() -> None:
     new_path = RepoPath("ydb/docs/en/core/dev/optimization/hints.md")
     old_path = RepoPath(
         "ydb/docs/en/core/dev/query-execution-optimization/query-hints.md"
@@ -680,20 +644,16 @@ def test_probable_duplicate_keeps_green_checks_yellow_and_names_both_files() -> 
 
     report = render_report(
         review(),
-        COMMIT,
         context,
-        (
-            CheckResult("doc_verify", COMMIT, "success"),
-            CheckResult("build-docs", COMMIT, "success"),
-        ),
     )
 
     assert report.startswith("🟡 YELLOW")
     assert new_path.value in report
     assert old_path.value in report
     assert "возможный дубликат" in report.lower()
-    assert "разберитесь вручную" in report.lower()
-    assert "doc_verify" in report
+    assert "проверьте возможный дубликат вручную" in report.lower()
+    assert "doc_verify" not in report
+    assert "build-docs" not in report
 
 
 @pytest.mark.parametrize(
@@ -724,9 +684,7 @@ def test_renderer_rejects_every_incomplete_or_mistyped_finding(field, value):
     with pytest.raises(PublicationError, match="invalid_finding") as error:
         render_report(
             review(Verdict.RED, (complete, incomplete)),
-            COMMIT,
             ReportContext(SOURCE, TARGET, Decimal("1.25")),
-            (),
         )
     assert SECRET not in str(error.value)
 
@@ -743,7 +701,6 @@ def test_incomplete_finding_cannot_create_or_update_qa_comment(existing_comment)
         backend,
         publisher,
         lambda: ReportContext(SOURCE, TARGET, None),
-        lambda: (),
         verification_context=context,
     )
     with pytest.raises(PublicationError):
@@ -799,84 +756,17 @@ def test_byte_identical_repair_does_not_skip_report_for_already_published_change
     assert [e[0] for e in backend.events] == ["commit", "push", "create_pr", "create_comment"]
 
 
-@pytest.mark.parametrize(
-    "checks,status,word",
-    [
-        ((), "YELLOW", "не запускалась"),
-        (
-            (
-                CheckResult("doc_verify", COMMIT, "success"),
-                CheckResult("build-docs", COMMIT, "pending"),
-            ),
-            "YELLOW",
-            "выполняется",
-        ),
-        (
-            (
-                CheckResult("doc_verify", TARGET, "success"),
-                CheckResult("build-docs", COMMIT, "success"),
-            ),
-            "YELLOW",
-            "устаревший результат",
-        ),
-        (
-            (
-                CheckResult("doc_verify", COMMIT, "success"),
-                CheckResult("build-docs", COMMIT, "failure"),
-            ),
-            "RED",
-            "завершилась с ошибкой",
-        ),
-        (
-            (
-                CheckResult("doc_verify", COMMIT, "success"),
-                CheckResult("build-docs", COMMIT, "success"),
-            ),
-            "GREEN",
-            "успешно",
-        ),
-    ],
-)
-def test_readiness_requires_both_success_on_exact_current_head(checks, status, word):
-    readiness = merge_readiness(COMMIT, checks)
-    assert readiness.status == status
-    assert word in readiness.reason
-    icon = {"GREEN": "🟢", "YELLOW": "🟡", "RED": "🔴"}[status]
-    report = render_report(review(), COMMIT, ReportContext(SOURCE, TARGET, None), checks)
-    assert report.startswith(f"{icon} {status}")
-    if status == "YELLOW":
-        assert "### Почему YELLOW" in report
-        assert "Арбитр не нашёл блокирующих ошибок" in report
-        assert "поставьте label `doc_verify`" in report
-        assert "`doc_continue` сейчас не требуется" in report
-        assert "### Как воспользоваться `doc_continue`" in report
-        assert "`/ydbdoc continue`" in report
-        assert "label `doc_continue`" in report
-        assert "не запускалась" not in report
-
-
-def test_readiness_yellow_explains_quality_and_next_action_instead_of_raw_snapshot():
+def test_semantic_green_contains_no_repository_check_status():
     report = render_report(
         review(),
-        COMMIT,
         ReportContext(SOURCE, TARGET, Decimal("41.5072"), source_pr_number=50839),
-        (),
     )
 
     assert report == (
-        "🟡 YELLOW\n"
+        "🟢 GREEN\n"
         "Стоимость запуска: 41.5072 RUB\n"
         "Перевод PR #50839\n"
-        "### Почему YELLOW\n"
-        "Арбитр не нашёл блокирующих ошибок в переводе, но обязательные "
-        "CI-проверки текущего коммита ещё не подтвердили готовность к слиянию.\n"
-        "### Что делать\n"
-        "Дождитесь завершения `build-docs`, затем поставьте label `doc_verify`. "
-        "Он проверит текущий коммит и обновит этот вердикт.\n"
-        "`doc_continue` сейчас не требуется: он используется только когда "
-        "в отчёте перечислены замечания арбитра и сохранён checkpoint.\n"
-        "### Как воспользоваться `doc_continue`\n"
-        "После RED оставьте комментарий, первая строка которого — "
-        "`/ydbdoc continue`, следующими строками опишите нужные исправления, "
-        "затем поставьте label `doc_continue`."
+        "Перевод проверен. Исправления не требуются."
     )
+    assert "build-docs" not in report
+    assert "doc_verify" not in report

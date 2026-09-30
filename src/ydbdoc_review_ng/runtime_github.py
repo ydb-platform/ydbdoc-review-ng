@@ -17,7 +17,7 @@ from typing import Any
 from ydbdoc_review_ng.domain import GitSha, RepoPath, SnapshotRef
 from ydbdoc_review_ng.errors import SafeDiagnosticError
 from ydbdoc_review_ng.publication import PublicationContext, PublicationPlan
-from ydbdoc_review_ng.reporting import CheckResult, Comment
+from ydbdoc_review_ng.reporting import Comment
 from ydbdoc_review_ng.trace import traced
 
 JsonTransport = Callable[[str, str, object], Any]
@@ -419,17 +419,3 @@ class GitHubBackend:
 
     def update_comment(self, pr_number: int, comment_id: int, body: str, /) -> None:
         self.request("PATCH", f"/issues/comments/{comment_id}", {"body": body})
-
-    def checks(self, sha: GitSha) -> tuple[CheckResult, ...]:
-        result = self.request("GET", f"/commits/{sha.value}/check-runs?per_page=100&filter=latest")
-        rows = result["check_runs"]
-        if result["total_count"] > len(rows):
-            raise RuntimeBoundaryError("github_result_exceeds_single_page")
-        return tuple(
-            CheckResult(
-                row["name"],
-                GitSha(row["head_sha"]),
-                row["conclusion"] if row["status"] == "completed" else "pending",
-            )
-            for row in rows
-        )

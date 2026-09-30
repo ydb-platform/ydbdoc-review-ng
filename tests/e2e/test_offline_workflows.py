@@ -62,11 +62,9 @@ from ydbdoc_review_ng.publication import (
 )
 from ydbdoc_review_ng.quality import QualityReviewResult, Verdict, review_translation
 from ydbdoc_review_ng.reporting import (
-    CheckResult,
     Comment,
     QAReporter,
     ReportContext,
-    merge_readiness,
 )
 from ydbdoc_review_ng.scope import FileOperation
 from ydbdoc_review_ng.translation import (
@@ -524,15 +522,6 @@ def build_workflow(
         )
         return ReportContext(case.backend.head, head, Decimal("0.25"))
 
-    def checks() -> tuple[CheckResult, ...]:
-        head = (
-            publisher.context.current_head if publisher.context is not None else case.backend.head
-        )
-        return (
-            CheckResult("doc_verify", head, "success"),
-            CheckResult("build-docs", head, "success"),
-        )
-
     source = SourceAdapter(case)
     verification_context = PublicationContext(
         "ydb-platform/ydb", BRANCH, "main", "main", case.backend.head
@@ -541,7 +530,6 @@ def build_workflow(
         case.backend,
         publisher,
         report_context,
-        checks,
         verification_context=verification_context,
     )
     return (
@@ -850,29 +838,3 @@ def test_publication_metadata_policy_materializes_in_real_git(
         assert toc == old.value.encode() + b"\n"
         assert redirects is None
 
-
-@pytest.mark.parametrize(
-    ("checks", "expected"),
-    [
-        (("success", "success"), "GREEN"),
-        (("pending", "success"), "YELLOW"),
-        (("success", "stale"), "YELLOW"),
-        (("failure", "success"), "RED"),
-    ],
-)
-def test_same_head_readiness_requires_both_current_successes(
-    checks: tuple[str, str], expected: str
-) -> None:
-    head = GitSha("a" * 40)
-    stale = GitSha("b" * 40)
-    doc_status, build_status = checks
-    results = (
-        CheckResult("doc_verify", head, doc_status),
-        CheckResult(
-            "build-docs",
-            stale if build_status == "stale" else head,
-            "success" if build_status == "stale" else build_status,
-        ),
-    )
-
-    assert merge_readiness(head, results).status == expected

@@ -194,21 +194,16 @@ excerpt through a flat `corrected_markdown`-only schema. The translated target
 is never split proportionally to source block lengths and fallback units are
 never split recursively.
 
-## Public readiness report (2026-09-29)
+## Public semantic report (2026-09-30)
 
-A readiness `YELLOW` is not an arbiter finding. The public report explicitly
-states that semantic review found no blocking translation defects and that
-required CI has not yet confirmed merge readiness. It does not expose a raw
-snapshot such as `check not started`. The actionable next step is to wait for
-`build-docs` and apply the `doc_verify` label. `doc_continue` is offered only
-for a semantic RED that has a durable continuation checkpoint; it cannot be
-truthfully offered for a readiness-only YELLOW.
+The QA comment reports translation quality only. Its GREEN/RED is the arbiter
+verdict; a translation-specific probable-duplicate warning may produce YELLOW.
+Repository CI, `build-docs`, `doc_verify` check-runs and merge readiness are
+separate GitHub signals. The reporter neither reads nor waits for them, and
+their state cannot downgrade an arbiter GREEN or upgrade an arbiter RED.
 
-When `doc_verify` publishes an editor correction, that push creates a new head
-after the previous `build-docs` result. The reporter therefore polls boundedly
-for `build-docs` on the exact published SHA before writing its final comment.
-This wait performs no model calls. A failed check produces RED; a timeout keeps
-the explicit readiness YELLOW.
+`doc_continue` is offered only with a semantic RED and its durable checkpoint.
+GREEN contains no CI instructions and no unusable continuation recipe.
 # Explicit translation-plan boundary (2026-09-30)
 
 The source PR file inventory is the workflow input boundary. A pure

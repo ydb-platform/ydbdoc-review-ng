@@ -637,13 +637,14 @@ def test_initial_translate_without_target_still_creates_branch():
     )
 
 
-def test_green_review_waiting_for_ci_reports_yellow_and_closes_semantic_checkpoint():
+def test_green_review_reports_green_independently_of_ci_and_closes_checkpoint():
     services = ReviewServices(names=("a", "b"))
     saved = services.start_review()
     services.waiting_ci = True
     result = services.resume()
     assert result.verdict is Verdict.GREEN
-    assert services.comments[0]["body"].startswith("🟡 YELLOW\n")
+    assert services.comments[0]["body"].startswith("🟢 GREEN\n")
+    assert "build-docs" not in services.comments[0]["body"]
     assert services.rows[saved.continuation_id]["status"] == "closed"
 
 

@@ -76,47 +76,9 @@ _PLAN_FAILURE_MESSAGES = {
 
 
 @dataclass(frozen=True, slots=True)
-class CheckResult:
-    name: str
-    head_sha: GitSha
-    status: str
-
-
-@dataclass(frozen=True, slots=True)
-class Readiness:
-    status: str
-    reason: str
-
-
-@dataclass(frozen=True, slots=True)
 class ProbableDuplicate:
     new_target_path: RepoPath
     existing_target_path: RepoPath
-
-
-def merge_readiness(head: GitSha, checks: tuple[CheckResult, ...]) -> Readiness:
-    reasons = []
-    failed = False
-    waiting = False
-    for name in ("doc_verify", "build-docs"):
-        named = tuple(check for check in checks if check.name == name)
-        current = tuple(check for check in named if check.head_sha == head)
-        if not current:
-            reasons.append(
-                f"{name}: устаревший результат" if named else f"{name}: не запускалась"
-            )
-            waiting = True
-        elif any(
-            check.status in {"failure", "cancelled", "timed_out", "error"} for check in current
-        ):
-            reasons.append(f"{name}: завершилась с ошибкой")
-            failed = True
-        elif any(check.status != "success" for check in current):
-            reasons.append(f"{name}: выполняется")
-            waiting = True
-        else:
-            reasons.append(f"{name}: успешно")
-    return Readiness("RED" if failed else "YELLOW" if waiting else "GREEN", "; ".join(reasons))
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,12 +137,12 @@ def _finding_lines(review: QualityReviewResult) -> list[str]:
 
 def render_report(
     review: QualityReviewResult,
-    commit_sha: GitSha,
     context: ReportContext,
-    checks: tuple[CheckResult, ...],
 ) -> str:
-    readiness = merge_readiness(commit_sha, checks)
-    status = "RED" if review.final.verdict is Verdict.RED else readiness.status
+    # The QA comment is the semantic translation verdict. Repository build and
+    # merge-readiness checks have their own GitHub UI and must never change an
+    # arbiter verdict or delay its publication.
+    status = review.final.verdict.value
     if status == "GREEN" and context.probable_duplicates:
         status = "YELLOW"
     cost = "неизвестна" if context.job_cost_rub is None else f"{context.job_cost_rub} RUB"
@@ -209,46 +171,11 @@ def render_report(
                 f"- Создана новая статья `{warning.new_target_path.value}`, но, возможно, "
                 f"она дублирует существующую `{warning.existing_target_path.value}`."
             )
-        if readiness.status != "GREEN":
-            lines.append(f"Проверки: {readiness.reason}.")
         lines.append(
-            "Разберитесь вручную с возможным дубликатом, затем повторно запустите `doc_verify`."
-        )
-    elif readiness.status == "GREEN":
-        lines.append("Перевод проверен. Исправления не требуются.")
-    elif readiness.status == "YELLOW":
-        lines.extend(
-            (
-                "### Почему YELLOW",
-                (
-                    "Арбитр не нашёл блокирующих ошибок в переводе, но обязательные "
-                    "CI-проверки текущего коммита ещё не подтвердили готовность к слиянию."
-                ),
-                "### Что делать",
-                (
-                    "Дождитесь завершения `build-docs`, затем поставьте label "
-                    "`doc_verify`. Он проверит текущий коммит и обновит этот вердикт."
-                ),
-                (
-                    "`doc_continue` сейчас не требуется: он используется только когда "
-                    "в отчёте перечислены замечания арбитра и сохранён checkpoint."
-                ),
-                "### Как воспользоваться `doc_continue`",
-                (
-                    "После RED оставьте комментарий, первая строка которого — "
-                    "`/ydbdoc continue`, следующими строками опишите нужные исправления, "
-                    "затем поставьте label `doc_continue`."
-                ),
-            )
+            "Проверьте возможный дубликат вручную."
         )
     else:
-        lines.extend(
-            (
-                "### Что исправить",
-                f"- Обязательные проверки: {readiness.reason}.",
-                "Исправьте ошибку проверки и повторно запустите `doc_verify`.",
-            )
-        )
+        lines.append("Перевод проверен. Исправления не требуются.")
     return "\n".join(lines)
 
 
@@ -272,33 +199,15 @@ class QAReporter:
         backend: CommentBackend,
         publisher: GitPublicationAdapter,
         report_context: Callable[[], ReportContext],
-        checks: Callable[[], tuple[CheckResult, ...]],
         *,
         verification_context: PublicationContext | None = None,
         current_head: Callable[[], GitSha | None] | None = None,
-        readiness_wait: Callable[[float], None] | None = None,
-        readiness_poll_attempts: int = 0,
-        readiness_poll_seconds: float = 10.0,
     ) -> None:
         self._backend = backend
         self._publisher = publisher
         self._report_context = report_context
-        self._checks = checks
         self._verification_context = verification_context
         self._current_head = current_head
-        self._readiness_wait = readiness_wait
-        self._readiness_poll_attempts = readiness_poll_attempts
-        self._readiness_poll_seconds = readiness_poll_seconds
-
-    @staticmethod
-    def _with_current_verify_success(
-        checks: tuple[CheckResult, ...], commit_sha: GitSha
-    ) -> tuple[CheckResult, ...]:
-        return tuple(
-            check
-            for check in checks
-            if check.name != "doc_verify" or check.head_sha != commit_sha
-        ) + (CheckResult("doc_verify", commit_sha, "success"),)
 
     def report_failure(self, source_pr_number: int, diagnostic: str, /) -> None:
         failure = _SCOPE_FAILURE_MESSAGES.get(diagnostic)
@@ -356,21 +265,8 @@ class QAReporter:
         ):
             raise PublicationError("report_context_mismatch")
         try:
-            checks = self._checks()
-            if mode is Mode.DOC_VERIFY:
-                checks = self._with_current_verify_success(checks, commit_sha)
-                attempts = self._readiness_poll_attempts
-                while (
-                    review.final.verdict is not Verdict.RED
-                    and merge_readiness(commit_sha, checks).status == "YELLOW"
-                    and attempts > 0
-                    and self._readiness_wait is not None
-                ):
-                    self._readiness_wait(self._readiness_poll_seconds)
-                    checks = self._with_current_verify_success(self._checks(), commit_sha)
-                    attempts -= 1
             report_context = self._report_context()
-            body = render_report(review, commit_sha, report_context, checks)
+            body = render_report(review, report_context)
             body += "\n" + QA_MARKER
             if self._publisher.context is not None and not self._publisher.noop:
                 if self._current_head is not None and self._current_head() != commit_sha:
