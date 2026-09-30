@@ -1663,6 +1663,97 @@ def test_pr50839_full_runtime_plan_publishes_exact_complete_toc() -> None:
     assert b"BlobDepot decommit" not in en_expected
 
 
+def test_verify_replays_pinned_toc_plan_instead_of_translated_h1() -> None:
+    from ydbdoc_review_ng.application import VerifyWorkflowInput
+    from ydbdoc_review_ng.domain import GitSha
+    from ydbdoc_review_ng.runtime import RuntimeSource
+    from ydbdoc_review_ng.runtime_content import RuntimeContent, unpack
+    from ydbdoc_review_ng.runtime_github import GitHubBackend
+
+    directory = "ydb/docs/{}/core/maintenance/manual/"
+
+    class Services(RuntimeServices):
+        def __init__(self) -> None:
+            super().__init__()
+            self.branch_head = self.translated
+            self.ref_files = {
+                self.source: {
+                    directory.format("ru") + "blobdepot_decommit.md": b"# Decommission source\n",
+                    directory.format("ru") + "toc_i.yaml": (
+                        "items:\n  - name: Декомиссия BlobDepot\n"
+                        "    href: blobdepot_decommit.md\n"
+                    ).encode(),
+                },
+                self.base: {
+                    directory.format("en") + "blobdepot_decommit.md": (
+                        b"# Group Decommissioning\n"
+                    ),
+                    directory.format("en") + "toc_i.yaml": (
+                        b"items:\n  - name: BlobDepot decommit\n"
+                        b"    href: blobdepot_decommit.md\n"
+                    ),
+                },
+                self.translated: {
+                    # A translated heading is prose and may use different
+                    # capitalization than the already frozen navigation label.
+                    directory.format("en") + "blobdepot_decommit.md": (
+                        b"# Group decommissioning\n"
+                    ),
+                    directory.format("en") + "toc_i.yaml": (
+                        b'items:\n  - name: "Group Decommissioning"\n'
+                        b"    href: blobdepot_decommit.md\n"
+                    ),
+                },
+            }
+
+        def github(self, method, path, payload):
+            if path.endswith("/pulls/42"):
+                result = super().github(method, path, payload)
+                return {**result, "changed_files": 2}
+            if path.endswith("/pulls/42/files?per_page=100"):
+                return [
+                    {"status": "modified", "filename": directory.format("ru") + name}
+                    for name in ("blobdepot_decommit.md", "toc_i.yaml")
+                ]
+            relative = path.removeprefix("/repos/ydb-platform/ydb")
+            if relative.startswith("/contents/"):
+                name, ref = relative[10:].split("?ref=", 1)
+                content = self.ref_files.get(ref, {}).get(name)
+                return (
+                    None
+                    if content is None
+                    else {
+                        "type": "file",
+                        "encoding": "base64",
+                        "content": base64.b64encode(content).decode(),
+                    }
+                )
+            return super().github(method, path, payload)
+
+    class Models:
+        def invoke(self, request):
+            raise AssertionError("candidate loading must not call models")
+
+    services = Services()
+    source = RuntimeSource(
+        {"GITHUB_ACTOR": "maintainer", "YDBDOC_ALLOWED_ACTORS": "maintainer"},
+        GitHubBackend(services.github),
+    )
+    request = VerifyWorkflowInput(
+        43, GitSha(services.source), GitSha(services.translated)
+    )
+
+    authorized = source.authorize_verify(request)
+    snapshot = source.snapshot_verify(authorized)
+    candidate = RuntimeContent(source, Models(), {}).load_verification_candidate(snapshot)
+    files = unpack(candidate.content)
+
+    assert b'"Group Decommissioning"' in files[directory.format("en") + "toc_i.yaml"]
+    assert files[directory.format("en") + "blobdepot_decommit.md"] == (
+        b"# Group decommissioning\n"
+    )
+
+
 @pytest.mark.parametrize("operation", ["added", "removed", "renamed"])
 def test_runtime_canonical_file_operations_have_shipped_producer(operation):
     from ydbdoc_review_ng.application import TranslateWorkflowInput

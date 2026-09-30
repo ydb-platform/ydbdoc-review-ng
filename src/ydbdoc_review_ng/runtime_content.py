@@ -905,13 +905,18 @@ class RuntimeContent:
             for entry in self.entries:
                 self._metadata(metadata_preparation, entry, files)
         else:
-            missing_metadata: dict[str, bytes | None] = {}
+            noop_metadata: dict[str, bytes | None] = {}
             for entry in self.entries:
-                self._metadata(preparation, entry, missing_metadata, verify_noop=True)
-            if missing_metadata:
+                if entry.operation is FileOperation.NOOP_TARGET_ALREADY_RENAMED:
+                    self._metadata(
+                        preparation, entry, noop_metadata, verify_noop=True
+                    )
+            if noop_metadata:
                 raise RuntimeBoundaryError("verification_metadata_mismatch")
             # A verify checkpoint must reproduce the same complete file set as
-            # translation replay, including metadata generated from the pinned base.
+            # translation replay from the pinned base. Never derive a new TOC
+            # expectation from the translated candidate's H1: navigation
+            # wording and heading capitalization are independent.
             for entry in self.entries:
                 self._metadata(metadata_preparation, entry, files)
             for metadata_path, expected in files.items():
