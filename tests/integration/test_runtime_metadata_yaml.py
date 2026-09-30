@@ -119,7 +119,7 @@ def test_modified_page_repairs_missing_target_toc_entry_from_existing_target_h1(
         ),
         (SOURCE, "ydb/docs/ru/core/maintenance/manual/toc_i.yaml"): (
             b"items:\n- name: BlobDepot\n  href: blobdepot.md\n"
-            b"- name: Decommission BlobDepot\n  href: blobdepot_decommit.md\n"
+            b"- name: \xd0\x94\xd0\xb5\xd0\xba\xd0\xbe\xd0\xbc\xd0\xb8\xd1\x81\xd1\x81\xd0\xb8\xd1\x8f BlobDepot\n  href: blobdepot_decommit.md\n"
         ),
         (TARGET, "ydb/docs/en/core/maintenance/manual/toc_i.yaml"): (
             b"items:\n- name: BlobDepot\n  href: blobdepot.md\n"
@@ -149,18 +149,21 @@ def test_modified_page_repairs_missing_target_toc_entry_from_existing_target_h1(
     assert b"href: blobdepot_decommit.md" in changes[0].after
 
 
-def test_modified_page_with_existing_target_toc_entry_is_a_noop() -> None:
+def test_modified_source_toc_repairs_existing_target_name() -> None:
     files = {
         (SOURCE, "ydb/docs/ru/core/toc_p.yaml"): (
             b"items:\n- include:\n    mode: link\n    path: maintenance/manual/toc_i.yaml\n"
         ),
         (SOURCE, "ydb/docs/ru/core/maintenance/manual/toc_i.yaml"): (
             b"items:\n- name: BlobDepot\n  href: blobdepot.md\n"
-            b"- name: Decommission BlobDepot\n  href: blobdepot_decommit.md\n"
+            b"- name: \xd0\x94\xd0\xb5\xd0\xba\xd0\xbe\xd0\xbc\xd0\xb8\xd1\x81\xd1\x81\xd0\xb8\xd1\x8f BlobDepot\n  href: blobdepot_decommit.md\n"
         ),
         (TARGET, "ydb/docs/en/core/maintenance/manual/toc_i.yaml"): (
             b"items:\n- name: BlobDepot\n  href: blobdepot.md\n"
             b"- name: BlobDepot decommit\n  href: blobdepot_decommit.md\n"
+        ),
+        (TARGET, "ydb/docs/en/core/maintenance/manual/blobdepot_decommit.md"): (
+            b"# Group Decommissioning\n\nExisting English article.\n"
         ),
     }
 
@@ -173,6 +176,36 @@ def test_modified_page_with_existing_target_toc_entry_is_a_noop() -> None:
         SOURCE,
         TARGET,
         (RepoPath("ydb/docs/ru/core/maintenance/manual/toc_i.yaml"),),
+    ).changes(
+        RepoPath("ydb/docs/ru/core/maintenance/manual/blobdepot_decommit.md"),
+        RepoPath("ydb/docs/en/core/maintenance/manual/blobdepot_decommit.md"),
+    )
+
+    assert len(changes) == 1
+    assert changes[0].path == RepoPath("ydb/docs/en/core/maintenance/manual/toc_i.yaml")
+    assert b'name: "Group Decommissioning"' in changes[0].after
+    assert b"name: BlobDepot decommit" not in changes[0].after
+
+
+def test_modified_source_toc_with_correct_target_name_is_a_noop() -> None:
+    files = {
+        (SOURCE, "ydb/docs/ru/core/maintenance/manual/toc_i.yaml"): (
+            b"items:\n- name: \xd0\x94\xd0\xb5\xd0\xba\xd0\xbe\xd0\xbc\xd0\xb8\xd1\x81\xd1\x81\xd0\xb8\xd1\x8f BlobDepot\n  href: blobdepot_decommit.md\n"
+        ),
+        (TARGET, "ydb/docs/en/core/maintenance/manual/toc_i.yaml"): (
+            b"items:\n- name: Group Decommissioning\n  href: blobdepot_decommit.md\n"
+        ),
+        (TARGET, "ydb/docs/en/core/maintenance/manual/blobdepot_decommit.md"): (
+            b"# Group Decommissioning\n"
+        ),
+    }
+
+    class Reader:
+        def read_bytes(self, snapshot, path):
+            return files.get((snapshot, path.value))
+
+    changes = MetadataProducer(
+        Reader(), SOURCE, TARGET, (RepoPath("ydb/docs/ru/core/maintenance/manual/toc_i.yaml"),)
     ).changes(
         RepoPath("ydb/docs/ru/core/maintenance/manual/blobdepot_decommit.md"),
         RepoPath("ydb/docs/en/core/maintenance/manual/blobdepot_decommit.md"),

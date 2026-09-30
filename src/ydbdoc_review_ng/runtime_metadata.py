@@ -30,6 +30,7 @@ _ROOT_TOC_NAMES = (
 )
 _MAX_LOCAL_TOC_FILES = 100
 _ATX_H1 = re.compile(rb"(?m)^# [ \t]*(?P<title>[^\r\n]+?)[ \t]*(?:\r?$)")
+_CYRILLIC = re.compile(r"[А-Яа-яЁё]")
 
 
 @dataclass(frozen=True)
@@ -171,6 +172,46 @@ def _append_toc(toc: _Toc, relative: str, title: str) -> bytes:
     return output
 
 
+def _entry_name(toc: _Toc, href: Any, error: str) -> Any:
+    """Return the scalar name next to one exact href node."""
+    stack = [toc.items]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, yaml.MappingNode):
+            values = {
+                key.value: value
+                for key, value in node.value
+                if isinstance(key, yaml.ScalarNode)
+            }
+            if values.get("href") is href:
+                name = values.get("name")
+                if (
+                    not isinstance(name, yaml.ScalarNode)
+                    or name.tag != "tag:yaml.org,2002:str"
+                    or not name.value.strip()
+                ):
+                    raise RuntimeBoundaryError(error)
+                return name
+            stack.extend(value for _key, value in node.value)
+        elif isinstance(node, yaml.SequenceNode):
+            stack.extend(node.value)
+    raise RuntimeBoundaryError(error)
+
+
+def _replace_toc_name(toc: _Toc, node: Any, title: str) -> bytes:
+    if node.style == "'":
+        replacement = "'" + title.replace("'", "''") + "'"
+    else:
+        replacement = json.dumps(title, ensure_ascii=False)
+    result = (
+        toc.text[: node.start_mark.index]
+        + replacement
+        + toc.text[node.end_mark.index :]
+    ).encode("utf-8")
+    _toc(result, "unsupported_target_toc")
+    return result
+
+
 def _scalar(value: bytes) -> str:
     text = value.decode().strip()
     if text.startswith('"'):
@@ -232,6 +273,10 @@ class MetadataProducer:
                 if title:
                     return title
         return posixpath.basename(target_path.value).removesuffix(".md")
+
+    def _toc_title(self, source_toc: _Toc, source_href: Any, target_path: RepoPath) -> str:
+        source_name = _entry_name(source_toc, source_href, "unsupported_source_toc").value.strip()
+        return self._target_title(target_path) if _CYRILLIC.search(source_name) else source_name
 
     def _nearest_target_toc(
         self, target_root: str, target_toc: RepoPath
@@ -408,12 +453,29 @@ class MetadataProducer:
                         raise RuntimeBoundaryError("unsupported_target_toc")
                     target_toc, target_bytes, target_toc_view = fallback
                 relative = posixpath.relpath(target_path.value, posixpath.dirname(target_toc.value))
-                if any(node.value == relative for node in target_toc_view.hrefs):
+                target_matches = [node for node in target_toc_view.hrefs if node.value == relative]
+                if target_matches:
+                    if len(target_matches) != 1 or len(matches) != 1:
+                        raise RuntimeBoundaryError("ambiguous_toc_preimage")
+                    if source_toc not in {path.value for path in self.changed_paths}:
+                        continue
+                    assert source_toc_view is not None
+                    desired_title = self._toc_title(
+                        source_toc_view, matches[0], target_path
+                    )
+                    target_name = _entry_name(
+                        target_toc_view, target_matches[0], "unsupported_target_toc"
+                    )
+                    if target_name.value.strip() == desired_title:
+                        continue
+                    after = _replace_toc_name(target_toc_view, target_name, desired_title)
+                    changes.append(FileChange(target_toc, target_bytes, after))
                     continue
+                assert source_toc_view is not None
                 after = _append_toc(
                     target_toc_view,
                     relative,
-                    self._target_title(target_path),
+                    self._toc_title(source_toc_view, matches[0], target_path),
                 )
             changes.append(FileChange(target_toc, target_bytes, after))
         if old is not None:
