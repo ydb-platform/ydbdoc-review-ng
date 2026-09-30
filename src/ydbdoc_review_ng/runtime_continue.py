@@ -27,11 +27,16 @@ from ydbdoc_review_ng.direction import (
     DirectionSelectionResult,
     DirectionSelectionState,
 )
-from ydbdoc_review_ng.domain import GitSha
+from ydbdoc_review_ng.domain import GitSha, RepoPath
 from ydbdoc_review_ng.persistence import ContinuationCheckpoint
 from ydbdoc_review_ng.runtime_github import GitHubBackend, RuntimeBoundaryError
 from ydbdoc_review_ng.scope import FileOperation, ScopeOrigin
-from ydbdoc_review_ng.translation_plan import TranslationPlanError, translation_plan_sha256
+from ydbdoc_review_ng.translation_plan import (
+    PathKind,
+    TranslationPlanError,
+    classify_path,
+    translation_plan_sha256,
+)
 
 if TYPE_CHECKING:
     from ydbdoc_review_ng.runtime_content import (
@@ -146,13 +151,25 @@ def replay_continue(
         RestoredPlan(document.entry.pair.target_path, document.source, document.plan)
         for document in plans.documents
     )
-    validate_restored_documents(state, restored)
+    metadata_paths = (
+        tuple(
+            RepoPath(path)
+            for path, value in plans.fixed_files
+            if value is not None
+            and classify_path(content.roots, RepoPath(path)).kind is PathKind.TOC
+        )
+        if state.stage is ContinuationStage.REVIEW
+        else ()
+    )
+    validate_restored_documents(state, restored, metadata_paths=metadata_paths)
     required = {
         document.entry.pair.target_path
         for document in plans.documents
         if document.entry.operation is not FileOperation.RENAME_TARGET
     }
-    reviewable = {document.entry.pair.target_path for document in plans.documents}
+    reviewable = {document.entry.pair.target_path for document in plans.documents} | set(
+        metadata_paths
+    )
     if (
         not required <= referenced <= reviewable
         or (state.stage is not ContinuationStage.REVIEW and required != referenced)

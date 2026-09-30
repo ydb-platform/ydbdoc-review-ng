@@ -514,7 +514,11 @@ def checkpoint_scope_sha256(
 
 
 def validate_restored_documents(
-    state: ContinuationState, restored_plans: tuple[RestoredPlan, ...], /
+    state: ContinuationState,
+    restored_plans: tuple[RestoredPlan, ...],
+    /,
+    *,
+    metadata_paths: tuple[RepoPath, ...] = (),
 ) -> None:
     """Bind every saved full-document path back to an authoritative source plan."""
     _exact(state, ContinuationState)
@@ -529,11 +533,11 @@ def validate_restored_documents(
         | set(state.pending_paths)
         | set(state.review_paths)
     )
-    if not referenced.issubset(plans):
+    metadata = set(_exact_paths(metadata_paths))
+    if not referenced.issubset(set(plans) | metadata) or set(state.pending_paths) & metadata:
         raise _fail()
     try:
         for accepted in state.accepted_documents:
-            plans[accepted.target_path]
             accepted.translated_markdown.encode("utf-8")
     except (KeyError, TypeError, UnicodeError, ValueError):
         raise _fail() from None

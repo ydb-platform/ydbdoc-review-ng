@@ -6,6 +6,8 @@ transactions, retries, and workflow sequencing belong outside this module.
 
 from __future__ import annotations
 
+import posixpath
+import re
 from collections.abc import Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field, replace
@@ -157,7 +159,31 @@ class ContinuationCheckpoint:
             | set(self.state.pending_paths)
             | set(self.state.review_paths)
         )
-        if not referenced.issubset(self.scope_target_paths):
+        metadata = set()
+        selected = {path.value for path in self.scope_target_paths}
+        if self.state.stage is ContinuationStage.REVIEW:
+            from ydbdoc_review_ng.runtime_github import RuntimeBoundaryError
+            from ydbdoc_review_ng.runtime_metadata import _toc
+
+            try:
+                for accepted in self.state.accepted_documents:
+                    path = accepted.target_path
+                    if not re.fullmatch(
+                        r"toc(?:_[A-Za-z0-9-]+)?\.ya?ml", posixpath.basename(path.value)
+                    ):
+                        continue
+                    toc = _toc(accepted.translated_markdown.encode("utf-8"), "invalid_checkpoint_toc")
+                    if any(
+                        posixpath.normpath(posixpath.join(posixpath.dirname(path.value), node.value))
+                        in selected
+                        for node in toc.hrefs
+                    ):
+                        metadata.add(path)
+            except (RuntimeBoundaryError, UnicodeError):
+                raise PersistenceError("invalid continuation metadata") from None
+        # The manifest lists document operations, not their TOCs. Replay binds
+        # these full-content records to exact deterministic metadata outputs.
+        if not referenced.issubset(set(self.scope_target_paths) | metadata):
             raise PersistenceError("continuation scope selection omits state paths")
 
     @property

@@ -205,9 +205,42 @@ class CaptureServices(RuntimeServices):
                     text = "[[YDBDOC_PROTECTED_9999]]"
                 if self.stop == "translation_assembly" and self.translations >= 2:
                     text = "[[YDBDOC_PROTECTED_9999]]"
-        elif set((schema := schema_wrapper["schema"])["properties"]) == {
-            "corrected_markdown"
-        }:
+        elif "files" in (schema := schema_wrapper["schema"])["properties"]:
+            role = "critic"
+            self.critics += 1
+            files = json.loads(raw_repair_context(prompt, "translation-pr-files"))
+            if self.stop == "review":
+                path = "ydb/docs/en/core/a.md"
+                files[path] = rewrite_markdown(files[path], "Corrected")
+            values = {"files": files}
+            if self.failure == "repair" and self.stop == "review":
+                self.roles.append(role)
+                raise TimeoutError("transport failed")
+        elif "findings" in schema["properties"] and "<translation-pr-files>" in prompt:
+            role = "arbiter"
+            files = json.loads(raw_repair_context(prompt, "translation-pr-files"))
+            paths = (
+                list(files)
+                if self.stop == "rename_red"
+                else [path for path in files if path.endswith("/b.md")]
+                if self.stop == "review"
+                else []
+            )
+            values = {
+                "verdict": "RED" if paths else "GREEN",
+                "findings": [
+                    {
+                        "reason": "The meaning is incomplete. Prior arbiter sentinel.",
+                        "expected_correction": "Restore the missing meaning.",
+                        "searchable_snippet": files[path].splitlines()[0],
+                        "repairable": False,
+                        "target_path": path,
+                        "target_line": 1,
+                    }
+                    for path in paths
+                ],
+            }
+        elif set(schema["properties"]) == {"corrected_markdown"}:
             role = "critic"
             self.critics += 1
             current = raw_repair_context(prompt, "final-target")
@@ -421,7 +454,9 @@ def test_provider_non_final_translation_is_rejected_before_publication():
             if "choices" in payload:
                 payload["choices"][0]["finish_reason"] = "length"
             else:
-                payload["result"]["alternatives"][0]["status"] = "ALTERNATIVE_STATUS_TRUNCATED_FINAL"
+                payload["result"]["alternatives"][0]["status"] = (
+                    "ALTERNATIVE_STATUS_TRUNCATED_FINAL"
+                )
             return HttpResponse(200, json.dumps(payload).encode(), Decimal("0.01"))
 
     services = NonFinalServices(names=("a",))

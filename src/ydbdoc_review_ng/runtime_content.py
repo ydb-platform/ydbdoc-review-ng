@@ -624,9 +624,7 @@ class RuntimeContent:
         self.fallback_model = environment.get("YDBDOC_MODEL_FALLBACK") or "yandexgpt-5.1"
         self.critic_model = environment.get("YDBDOC_MODEL_CRITIC") or "yandexgpt-5.1"
         self.arbiter_model = environment.get("YDBDOC_MODEL_ARBITER") or self.model
-        self.critic_fallback_model = (
-            environment.get("YDBDOC_MODEL_CRITIC_FALLBACK") or self.model
-        )
+        self.critic_fallback_model = environment.get("YDBDOC_MODEL_CRITIC_FALLBACK") or self.model
         self.wikipedia = WikipediaLanglinks()
         self.roots = LocaleRoots(RepoPath("ydb/docs/ru/core"), RepoPath("ydb/docs/en/core"))
         self.documents: tuple[Document, ...] = ()
@@ -743,7 +741,10 @@ class RuntimeContent:
                 if parsed.path or not parsed.fragment:
                     continue
                 existing = overrides.get(destination)
-                if existing is not None and urllib.parse.urlsplit(existing).fragment not in self_anchors:
+                if (
+                    existing is not None
+                    and urllib.parse.urlsplit(existing).fragment not in self_anchors
+                ):
                     overrides.pop(destination)
                 if destination not in overrides and parsed.fragment not in self_anchors:
                     replacement = closest_target_anchor(parsed.fragment, self_anchors)
@@ -981,9 +982,7 @@ class RuntimeContent:
         toc_postconditions: dict[RepoPath, bytes] = {}
         toc_source_snapshots: dict[RepoPath, tuple[bytes | None, bytes]] = {}
         if selection.manifest is not None:
-            source_locale = (
-                "ru" if selection.manifest.direction is Direction.RU_TO_EN else "en"
-            )
+            source_locale = "ru" if selection.manifest.direction is Direction.RU_TO_EN else "en"
             target_root = self.roots.en if source_locale == "ru" else self.roots.ru
             base_snapshot = SnapshotRef(
                 snapshots.source_snapshot.repository,
@@ -991,10 +990,7 @@ class RuntimeContent:
             )
             for raw in preparation.inventory.files:
                 classified = classify_path(self.roots, raw.path)
-                if (
-                    classified.locale != source_locale
-                    or classified.kind is not PathKind.TOC
-                ):
+                if classified.locale != source_locale or classified.kind is not PathKind.TOC:
                     continue
                 assert classified.relative is not None
                 source_after = self.source.github.read_bytes(
@@ -1083,9 +1079,10 @@ class RuntimeContent:
                 plan,
                 files,
             ):
-                if not translate and self.source.github.read_bytes(
-                    target_snapshot, asset.path
-                ) != asset.after:
+                if (
+                    not translate
+                    and self.source.github.read_bytes(target_snapshot, asset.path) != asset.after
+                ):
                     raise RuntimeBoundaryError("verification_asset_mismatch")
                 files[asset.path.value] = asset.after
             request = build_translation_request(source, plan)
@@ -1214,6 +1211,7 @@ class RuntimeContent:
         operator_context: str,
     ) -> WorkflowCandidate:
         plans = replay.plans
+        self.review_operator_context = operator_context
         if checkpoint.state.stage is ContinuationStage.REVIEW:
             if plans is None:
                 raise RuntimeBoundaryError("continue_review_plans_missing")
@@ -1236,7 +1234,6 @@ class RuntimeContent:
             self.accepted_maps = replay.accepted_maps
             self.accepted_documents = replay.accepted_documents
             self.review_paths = checkpoint.state.review_paths
-            self.review_operator_context = operator_context
             return candidate
         if checkpoint.state.stage is ContinuationStage.DIRECTION:
             plans = self.select_source(replay.preparation, operator_context=operator_context)
@@ -1426,7 +1423,9 @@ class RuntimeContent:
                         "placeholders; the runtime restores them."
                     )
                     if previous_response is not None:
-                        prompt += "\n<PREVIOUS_RESPONSE>\n" + previous_response + "\n</PREVIOUS_RESPONSE>"
+                        prompt += (
+                            "\n<PREVIOUS_RESPONSE>\n" + previous_response + "\n</PREVIOUS_RESPONSE>"
+                        )
                 request = ModelRequest(
                     segment_request.role,
                     segment_request.model,
@@ -1515,6 +1514,7 @@ class RuntimeContent:
                     chunk,
                     chunk_index,
                 )
+
         def assembly_failure(stage: str, error: Exception) -> None:
             write_trace(
                 "translation",
@@ -1591,11 +1591,24 @@ class RuntimeContent:
         /,
     ) -> tuple[AcceptedMap, ...]:
         by_path = {document.entry.pair.target_path: document for document in plans.documents}
+        metadata = {
+            RepoPath(path): value
+            for path, value in plans.fixed_files
+            if value is not None and classify_path(self.roots, RepoPath(path)).kind is PathKind.TOC
+        }
         restored: list[AcceptedMap] = []
         try:
             for accepted in accepted_documents:
-                document = by_path[accepted.target_path]
                 target = accepted.translated_markdown.encode("utf-8")
+                if accepted.target_path in metadata:
+                    self._validate_toc_correction(
+                        plans.preparation.snapshots.source_snapshot,
+                        accepted.target_path,
+                        metadata[accepted.target_path],
+                        target,
+                    )
+                    continue
+                document = by_path[accepted.target_path]
                 target_plan = build_markdown_plan(
                     document.plan.source_snapshot, accepted.target_path, target
                 )
@@ -1970,21 +1983,25 @@ class RuntimeContent:
             if self.source.github.read_bytes(published, RepoPath(path)) != content:
                 raise RuntimeBoundaryError("review_checkpoint_candidate_mismatch")
         unresolved = {RepoPath(item.target_path) for item in review.final.findings}
-        review_paths = (
-            tuple(path for path in self.review_paths if path in unresolved)
-            if self.review_paths is not None
-            else tuple(sorted(unresolved, key=lambda path: path.value))
+        previous = tuple(path for path in self.review_paths or () if path in unresolved)
+        review_paths = previous + tuple(
+            sorted(unresolved - set(previous), key=lambda path: path.value)
         )
-        if not set(review_paths).issubset(doc.entry.pair.target_path for doc in plans.documents):
+        reviewable = {doc.entry.pair.target_path for doc in plans.documents} | {
+            RepoPath(path)
+            for path, value in plans.fixed_files
+            if value is not None and classify_path(self.roots, RepoPath(path)).kind is PathKind.TOC
+        }
+        if not set(review_paths).issubset(reviewable):
             raise RuntimeBoundaryError("review_checkpoint_path_mismatch")
         files = unpack(review.final_candidate)
         accepted_documents = tuple(
             AcceptedDocument(
-                document.entry.pair.target_path,
-                cast(bytes, files[document.entry.pair.target_path.value]).decode("utf-8"),
+                path,
+                cast(bytes, files[path.value]).decode("utf-8"),
             )
-            for document in plans.documents
-            if files.get(document.entry.pair.target_path.value) is not None
+            for path in reviewable
+            if files.get(path.value) is not None
         )
         state = ContinuationState(
             STATE_VERSION,

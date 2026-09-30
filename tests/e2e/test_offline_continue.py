@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from datetime import timedelta
 from pathlib import Path
@@ -10,6 +11,7 @@ import pytest
 
 # Reuse the substantive pinned-snapshot service fixtures used by integration tests.
 sys.path.insert(0, str(Path(__file__).parents[1] / "integration"))
+from _runtime_services import raw_repair_context
 from test_continue_review import ReviewServices
 from test_continue_translation import CONTEXT, EN, RU, ContinueServices
 
@@ -47,24 +49,20 @@ def test_pending_cli_continuation_reuses_green_map_and_source_only_protected_byt
         tree[EN + "a.md"] = b"# Poison\n```sql\nDROP TABLE t;\n```\n"
     old = services.stop_and_continue()
     assert invoke(services) == 0
-    assert services.roles == [
-        "translate", "critic", "arbiter", "critic", "arbiter"
-    ]
+    assert services.roles == ["translate", "critic", "arbiter"]
     assert services.files[EN + "a.md"] == b"# Translated\n" + protected
     assert services.files[EN + "b.md"] == b"# Resumed b\n"
     assert services.rows[old.continuation_id]["status"] == "closed"
     assert CONTEXT in services.prompts[0][1]
     assert all(
-        CONTEXT not in prompt
-        for role, prompt in services.prompts
-        if role in {"critic", "arbiter"}
+        CONTEXT in prompt for role, prompt in services.prompts if role in {"critic", "arbiter"}
     )
     assert not any("SUM" in query for query, _ in services.operations)
     job = list(services.jobs.values())[-1]
     assert job["mode"] == "doc_continue" and job["status"] == "succeeded"
 
 
-def test_review_cli_repairs_only_unresolved_path_then_updates_one_verdict(capsys):
+def test_review_cli_reviews_all_files_without_retranslation_then_updates_one_verdict(capsys):
     services = ReviewServices(names=("a", "b"))
     old = services.start_review()
     green = services.files[EN + "a.md"]
@@ -73,7 +71,30 @@ def test_review_cli_repairs_only_unresolved_path_then_updates_one_verdict(capsys
     services.outcomes = {EN + "b.md": ["repair"]}
     assert invoke(services, 43) == 0
     assert services.roles == ["critic", "arbiter"]
-    assert {path for _, path, _ in services.calls} == {EN + "b.md"}
+    assert [paths for _, paths, _ in services.calls] == [(EN + "a.md", EN + "b.md")] * 2
+    for role, prompt in services.prompts:
+        sources = json.loads(raw_repair_context(prompt, "source-pr-files"))
+        targets = json.loads(raw_repair_context(prompt, "translation-pr-files"))
+        glossary = json.loads(raw_repair_context(prompt, "project-glossary"))
+        assert sources == {
+            RU + "a.md": "# Source a\n\n```sql\nSELECT 1;\n```\n",
+            RU + "b.md": "# Source b\n\nSource detail b\n",
+        }
+        assert targets == {
+            EN + "a.md": "# Corrected\n\n```sql\nSELECT 1;\n```\n",
+            EN + "b.md": "# Translated\n\nTranslated\n"
+            if role == "critic"
+            else "# Repaired b\n\nTranslated\n",
+        }
+        assert glossary == {
+            RU + "concepts/glossary.md": "# Glossary RU\n" + "Definition\n" * 900,
+            EN + "concepts/glossary.md": "# Glossary EN\nFull definition\n",
+        }
+        assert CONTEXT in prompt
+        assert "Prior arbiter sentinel" not in prompt
+        assert all(
+            CONTEXT not in text for files in (sources, targets, glossary) for text in files.values()
+        )
     assert services.files[EN + "a.md"] == green
     assert services.files[EN + "b.md"] == b"# Repaired b\n\nTranslated\n"
     assert services.timeline == [

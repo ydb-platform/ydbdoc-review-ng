@@ -39,6 +39,8 @@ class ReviewServices(LifecycleServices):
         for tree in [self.files, *self.snapshots.values()]:
             tree[RU + "a.md"] += b"\n```sql\nSELECT 1;\n```\n"
             tree[RU + "b.md"] += b"\nSource detail b\n"
+            tree[RU + "concepts/glossary.md"] = ("# Glossary RU\n" + "Definition\n" * 900).encode()
+            tree[EN + "concepts/glossary.md"] = b"# Glossary EN\nFull definition\n"
 
     def start_review(self):
         assert self.translate().verdict is Verdict.RED
@@ -82,98 +84,69 @@ class ReviewServices(LifecycleServices):
         if not self.continuing:
             return super().model(request)
         body = json.loads(request.body)
-        schema_wrapper = request_schema(body)
-        schema = schema_wrapper["schema"] if schema_wrapper is not None else None
+        schema = request_schema(body)["schema"]
         prompt = request_prompt(body)
-        path = prompt.split("Target path: ", 1)[1].split("\n", 1)[0]
-        role = (
-            "repair"
-            if schema is None
-            else (
-                "critic"
-                if "corrected_markdown" in schema["properties"]
-                else "arbiter"
-            )
-        )
+        role = "critic" if "files" in schema["properties"] else "arbiter"
+        files = json.loads(raw_repair_context(prompt, "translation-pr-files"))
+        sources = json.loads(raw_repair_context(prompt, "source-pr-files"))
         self.roles.append(role)
         self.prompts.append((role, prompt))
-        self.calls.append((role, path, schema))
+        self.calls.append((role, tuple(files), schema))
         self.timeline.append(role)
         if self.failure == role:
             raise TimeoutError("model unavailable")
-        if role in {"critic", "arbiter"}:
-            outcomes = self.outcomes.get(path, [])
+        findings = []
+        for path, current in files.items():
             if role == "critic":
+                outcomes = self.outcomes.get(path, [])
                 outcome = outcomes.pop(0) if outcomes else "green"
                 self.arbiter_outcomes[path] = outcome
-            else:
-                outcome = self.arbiter_outcomes.get(path, "green")
-            findings: list[dict[str, object]] = []
-            values: dict[str, object] = {"findings": findings}
-            if role == "arbiter" and outcome == "red":
-                target = self.snapshots[self.branch_head][path].decode()
-                finding = {
-                    "reason": "Missing meaning in the heading.",
-                    "expected_correction": "Restore the full meaning.",
-                    "searchable_snippet": target.splitlines()[0].removeprefix("# "),
-                }
-                finding.update(
+                if outcome == "repair" and not self.repair_uses_current_values:
+                    source = sources[path.replace("/en/", "/ru/")]
+                    if current.startswith("# Whole pinned translation"):
+                        files[path] = source.replace("Source", "Repaired")
+                    else:
+                        files[path] = source.splitlines(keepends=True)[0].replace(
+                            "Source", "Repaired"
+                        ) + "".join(current.splitlines(keepends=True)[1:])
+                if outcome == "repair" and self.failure == "repair":
+                    raise TimeoutError("model unavailable")
+                if outcome == "repair" and self.move_after == "repair":
+                    self.branch_head = "f" * 40
+                    self.snapshots[self.branch_head] = dict(self.files)
+            elif self.arbiter_outcomes.get(path) in {"red", "yellow"}:
+                findings.append(
                     {
+                        "reason": "Missing meaning in the heading.",
+                        "expected_correction": "Restore the full meaning.",
+                        "searchable_snippet": current.splitlines()[0],
                         "repairable": False,
                         "target_path": path,
                         "target_line": 1,
                     }
                 )
-                findings.append(finding)
-            if role == "critic":
-                current = raw_repair_context(prompt, "final-target")
-                source = raw_repair_context(prompt, "authoritative-source")
-                if outcome != "repair" or self.repair_uses_current_values:
-                    correction = current
-                elif current.startswith("# Whole pinned translation"):
-                    correction = source.replace("Source", "Repaired")
-                else:
-                    repaired_heading = source.splitlines(keepends=True)[0].replace(
-                        "Source", "Repaired"
-                    )
-                    correction = repaired_heading + "".join(
-                        current.splitlines(keepends=True)[1:]
-                    )
-                values = {
-                    "corrected_markdown": (
-                        self.repair_payload if self.repair_payload is not None else correction
-                    )
-                }
-                if self.failure == "repair" and outcome == "repair":
-                    raise TimeoutError("model unavailable")
-                if self.move_after == "repair" and outcome == "repair":
-                    self.branch_head = "f" * 40
-                    self.snapshots[self.branch_head] = dict(self.files)
-            else:
-                values["verdict"] = "RED" if findings else "GREEN"
-        else:
-            current = raw_repair_context(prompt, "current-target")
-            source = raw_repair_context(prompt, "authoritative-source")
-            if self.repair_uses_current_values:
-                raw = current
-            elif current.startswith("# Whole pinned translation"):
-                raw = source.replace("Source", "Repaired")
-            else:
-                repaired_heading = source.splitlines(keepends=True)[0].replace(
-                    "Source", "Repaired"
-                )
-                raw = repaired_heading + "".join(current.splitlines(keepends=True)[1:])
+        values = (
+            {"files": files}
+            if role == "critic"
+            else {
+                "verdict": (
+                    "RED"
+                    if any(self.arbiter_outcomes.get(p) == "red" for p in files)
+                    else "YELLOW"
+                    if findings
+                    else "GREEN"
+                ),
+                "findings": findings,
+            }
+        )
         if self.move_after == role:
             self.branch_head = "f" * 40
             self.snapshots[self.branch_head] = dict(self.files)
-        if role in {"critic", "arbiter"}:
-            raw = (
-                self.repair_payload
-                if role == "critic" and self.repair_payload is not None
-                else json.dumps(values)
-            )
-        elif self.repair_payload is not None:
-            raw = self.repair_payload
+        raw = (
+            self.repair_payload
+            if role == "critic" and self.repair_payload is not None
+            else json.dumps(values)
+        )
         return HttpResponse(
             200,
             json.dumps(
@@ -196,6 +169,90 @@ class ReviewServices(LifecycleServices):
         )
 
 
+def test_continue_yellow_closes_checkpoint_without_repair():
+    services = ReviewServices(names=("a", "b"))
+    saved = services.start_review()
+    services.outcomes = {EN + "b.md": ["yellow"]}
+    result = services.resume()
+    assert result.verdict is Verdict.YELLOW
+    assert services.rows[saved.continuation_id]["status"] == "closed"
+    assert services.roles == ["critic", "arbiter"]
+    assert services.commits == services.initial_commits
+    assert "Missing meaning in the heading." in services.comments[0]["body"]
+
+
+def metadata_review_services(toc_name="toc.yaml", href="a.md"):
+    services = ReviewServices(names=("a", "b"))
+    services.changes.append({"status": "modified", "filename": RU + toc_name})
+    for tree in [services.files, *services.snapshots.values()]:
+        tree[RU + toc_name] = f"items:\n  - name: Source title\n    href: {href}\n".encode()
+        tree[EN + toc_name] = b"items: []\n"
+    services.changes[0]["status"] = "added"
+    services.snapshots[services.base][RU + toc_name] = b"items:\n"
+    return services
+
+
+@pytest.mark.parametrize("toc_name,href", [("toc.yaml", "a.md"), ("nav/toc.yaml", "../a.md")])
+def test_continue_preserves_complete_corrected_toc_with_residual_finding(toc_name, href):
+    services = metadata_review_services(toc_name, href)
+    saved = services.start_review()
+    corrected = f"items:\n  - name: Corrected complete title\n    href: {href}\n"
+    services.repair_payload = json.dumps(
+        {
+            "files": {
+                EN + "a.md": services.files[EN + "a.md"].decode(),
+                EN + "b.md": services.files[EN + "b.md"].decode(),
+                EN + toc_name: corrected,
+            }
+        }
+    )
+    services.outcomes = {EN + toc_name: ["red"]}
+    assert services.resume().verdict is Verdict.RED
+    following = services.checkpoint()
+    assert following.expires_at == saved.expires_at
+    assert {
+        item.target_path.value: item.translated_markdown
+        for item in following.state.accepted_documents
+    }[EN + toc_name] == corrected
+    services.repair_payload = None
+    services.prompts.clear()
+    assert services.resume().verdict is Verdict.GREEN
+    for _, prompt in services.prompts:
+        assert (
+            json.loads(raw_repair_context(prompt, "translation-pr-files"))[EN + toc_name]
+            == corrected
+        )
+    assert services.files[EN + toc_name].decode() == corrected
+
+
+@pytest.mark.parametrize("fault", ["navigation", "invalid_yaml", "outside", "binary"])
+def test_review_metadata_replay_rejects_tampering_before_models(fault):
+    from ydbdoc_review_ng.continuation import candidate_sha256
+    from ydbdoc_review_ng.runtime_content import pack
+
+    services = metadata_review_services()
+    saved = services.start_review()
+    row = services.rows[saved.continuation_id]
+    state = json.loads(row["state"])
+    documents = state["accepted_documents"]
+    if fault == "navigation":
+        documents[EN + "toc.yaml"] = documents[EN + "toc.yaml"].replace("a.md", "outside.md")
+    elif fault == "invalid_yaml":
+        documents[EN + "toc.yaml"] = "items: ["
+    else:
+        path = EN + ("toc_other.yaml" if fault == "outside" else "asset.png")
+        documents[path] = documents.pop(EN + "toc.yaml")
+    candidate = {path: text.encode() for path, text in documents.items()}
+    state["candidate_sha256"] = candidate_sha256(pack(candidate)).value
+    services.snapshots[saved.target_sha.value].update(candidate)
+    row["state"] = json.dumps(state).encode()
+    with pytest.raises(application.WorkflowError):
+        services.resume()
+    assert services.roles == []
+    assert not any(method in {"POST", "PATCH"} for method, _ in services.events)
+    assert services.rows[saved.continuation_id]["status"] == "open"
+
+
 def test_green_review_only_updates_current_verdict_and_consumes_without_commit(capsys):
     services = ReviewServices(names=("a", "b"))
     saved = services.start_review()
@@ -204,7 +261,7 @@ def test_green_review_only_updates_current_verdict_and_consumes_without_commit(c
     result = services.resume(43)
     assert result.verdict is Verdict.GREEN and result.final_commit_sha == saved.target_sha
     assert services.roles == ["critic", "arbiter"]
-    assert [path for _, path, _ in services.calls] == [EN + "b.md", EN + "b.md"]
+    assert [paths for _, paths, _ in services.calls] == [(EN + "a.md", EN + "b.md")] * 2
     assert services.files == before
     assert services.files[EN + "a.md"] == b"# Corrected\n\n```sql\nSELECT 1;\n```\n"
     assert services.rows[saved.continuation_id]["state"] == saved_state
@@ -216,8 +273,13 @@ def test_green_review_only_updates_current_verdict_and_consumes_without_commit(c
     assert len(services.comments) == 1 and services.comments[0]["body"].startswith("🟢 GREEN\n")
     assert all(CONTEXT in prompt for _, prompt in services.prompts)
     prompt = services.prompts[0][1]
-    source = prompt.split("<authoritative-source>\n")[1].split("</authoritative-source>")[0]
-    assert source == "# Source b\n\nSource detail b\n"
+    source = json.loads(raw_repair_context(prompt, "source-pr-files"))
+    assert source[RU + "b.md"] == "# Source b\n\nSource detail b\n"
+    assert source[RU + "a.md"] == "# Source a\n\n```sql\nSELECT 1;\n```\n"
+    for _, prompt in services.prompts:
+        assert "Prior arbiter sentinel" not in prompt
+        for tag in ("source-pr-files", "translation-pr-files", "project-glossary"):
+            assert CONTEXT not in raw_repair_context(prompt, tag)
     assert CONTEXT not in services.comments[0]["body"]
     assert CONTEXT not in capsys.readouterr().out
     attempts = [params for _, params in services.operations if "attempt_id" in params]
@@ -250,8 +312,8 @@ def test_critic_editor_merges_complete_document_and_finishes_green():
     assert services.files[EN + "b.md"] == b"# Repaired b\n\nTranslated\n"
     repair_prompt = services.prompts[0][1]
     assert services.calls[0][2] is not None
-    assert "Source b" in raw_repair_context(repair_prompt, "authoritative-source")
-    assert "Translated" in raw_repair_context(repair_prompt, "final-target")
+    assert "Source b" in raw_repair_context(repair_prompt, "source-pr-files")
+    assert "Translated" in raw_repair_context(repair_prompt, "translation-pr-files")
     assert "Source detail b" in repair_prompt
     assert services.rows[saved.continuation_id]["status"] == "closed"
     assert services.parents == [[saved.target_sha.value]]
@@ -275,15 +337,15 @@ def test_continuation_repair_publishes_exact_model_markdown():
                 replacement = "* Parent translated\n* Nested translated item\n"
             elif role == "critic" and self.continuing and "Nested source item" in prompt:
                 values = json.loads(response_text(response.body))
-                values["corrected_markdown"] = (
-                    "* Parent corrected\n* Nested translated item\n"
-                )
+                values["files"][EN + "b.md"] = "* Parent corrected\n* Nested translated item\n"
                 return HttpResponse(
                     200, replace_response_text(response.body, json.dumps(values)), Decimal("0.01")
                 )
             if replacement is None:
                 return response
-            return HttpResponse(200, replace_response_text(response.body, replacement), Decimal("0.01"))
+            return HttpResponse(
+                200, replace_response_text(response.body, replacement), Decimal("0.01")
+            )
 
     services = FormattingReviewServices(names=("a", "b"))
     source = b"* Parent\n  * Nested source item\n"
@@ -302,7 +364,7 @@ def test_continuation_repair_publishes_exact_model_markdown():
     assert services.snapshots[result.final_commit_sha.value][EN + "b.md"] == expected
 
 
-def test_saved_order_and_one_critic_edit_per_unresolved_document():
+def test_saved_review_paths_do_not_narrow_the_complete_review():
     services = ReviewServices()
     saved = services.start_review()
     row = services.rows[saved.continuation_id]
@@ -313,10 +375,8 @@ def test_saved_order_and_one_critic_edit_per_unresolved_document():
     result = services.resume()
     assert result.verdict is Verdict.GREEN
     assert [(role, path) for role, path, _ in services.calls] == [
-        ("critic", EN + "c.md"),
-        ("arbiter", EN + "c.md"),
-        ("critic", EN + "b.md"),
-        ("arbiter", EN + "b.md"),
+        ("critic", (EN + "a.md", EN + "b.md", EN + "c.md")),
+        ("arbiter", (EN + "a.md", EN + "b.md", EN + "c.md")),
     ]
     assert services.files[EN + "c.md"] == b"# Repaired c\n"
     assert services.files[EN + "b.md"] == b"# Repaired b\n\nTranslated\n"
@@ -341,16 +401,9 @@ def test_repeated_red_preserves_unresolved_path_order_for_the_next_continue():
     assert following.target_sha == saved.target_sha
     assert following.state.candidate_sha256 == saved.state.candidate_sha256
     assert services.resume().verdict is Verdict.GREEN
-    assert [path for _, path, _ in services.calls] == [
-        EN + "c.md",
-        EN + "c.md",
-        EN + "b.md",
-        EN + "b.md",
-        EN + "c.md",
-        EN + "c.md",
-        EN + "b.md",
-        EN + "b.md",
-    ]
+    assert [paths for _, paths, _ in services.calls] == [
+        (EN + "a.md", EN + "b.md", EN + "c.md")
+    ] * 4
 
 
 @pytest.mark.parametrize("repair", [False, True])
@@ -376,6 +429,7 @@ def test_pinned_rename_review_never_derives_maps_from_target_and_replays_metadat
     assert [item.target_path.value for item in saved.state.accepted_documents] == [
         EN + "a.md",
         EN + "b.md",
+        EN + "toc.yaml",
     ]
     metadata = {path: value for path, value in services.files.items() if path.endswith(".yaml")}
 
@@ -391,18 +445,12 @@ def test_pinned_rename_review_never_derives_maps_from_target_and_replays_metadat
     services.outcomes = {EN + "a.md": ["repair", "red"] if repair else ["red"]}
     result = services.resume()
     assert result.verdict is (Verdict.GREEN if repair else Verdict.RED)
-    assert services.roles == [
-        "critic", "arbiter", "critic", "arbiter"
-    ]
+    assert services.roles == ["critic", "arbiter"]
     if repair:
         repair_prompt = services.prompts[0][1]
         assert services.calls[0][2] is not None
-        assert "Source detail a" in raw_repair_context(
-            repair_prompt, "authoritative-source"
-        )
-        assert "Whole pinned detail" in raw_repair_context(
-            repair_prompt, "final-target"
-        )
+        assert "Source detail a" in raw_repair_context(repair_prompt, "source-pr-files")
+        assert "Whole pinned detail" in raw_repair_context(repair_prompt, "translation-pr-files")
     assert services.files[EN + "a.md"] == (
         b"# Repaired a\n\nRepaired detail a\n\n```sql\nSELECT 1;\n```\n" if repair else pinned
     )
@@ -417,7 +465,7 @@ def test_pinned_rename_review_never_derives_maps_from_target_and_replays_metadat
     else:
         following = services.checkpoint()
         assert following.state.review_paths == saved.state.review_paths[:1]
-        assert len(following.state.accepted_documents) == 2
+        assert len(following.state.accepted_documents) == 3
         assert services.resume().verdict is Verdict.GREEN
 
 
@@ -491,7 +539,7 @@ def test_invalid_critic_edit_fails_closed_without_arbiter():
     services.repair_payload = json.dumps({})
     with pytest.raises(application.WorkflowError):
         services.resume()
-    assert services.roles == ["critic", "critic"]
+    assert services.roles == ["critic"]
     assert services.files == before and services.commits == services.initial_commits
     assert services.checkpoint().state.accepted_documents == saved.state.accepted_documents
 
@@ -604,11 +652,7 @@ def test_pinned_branch_change_during_repair_commit_cannot_create_or_update_ref(m
                     saved.target_sha,
                 )
             )
-    assert services.roles == (
-        ["critic", "arbiter"]
-        if mode == "continue"
-        else ["critic", "arbiter", "critic", "arbiter"]
-    )
+    assert services.roles == ["critic", "arbiter"]
     assert services.timeline[-1] == "commit"
     assert services.commits == services.initial_commits + 1
     assert services.branch_head == new_head
@@ -628,9 +672,7 @@ def test_initial_translate_without_target_still_creates_branch():
     result = services.translate()
     assert result.verdict is Verdict.GREEN
     assert services.branch_head == result.final_commit_sha.value
-    assert services.roles == [
-        "translate", "translate", "critic", "arbiter", "critic", "arbiter"
-    ]
+    assert services.roles == ["translate", "translate", "critic", "arbiter"]
     assert (
         sum(method == "POST" and path.endswith("/git/refs") for method, path in services.events)
         == 1
