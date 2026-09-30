@@ -14,9 +14,8 @@ text files включая index/TOC, allowed paths, exact snapshots/candidate di
 
 Один PR editor возвращает strict path-to-complete-file map ровно всех editable
 text paths. Missing/unknown/duplicate/malformed/partial/binary/deletion/traversal/
-out-of-scope entries отвергаются. Порядок: atomic in-memory apply → deterministic
-validation и полный Diplodoc build → один независимый read-only arbiter exact
-built PR → одна publication. GREEN требует валидного полного ответа, пустых
+out-of-scope entries отвергаются. Порядок: runtime проверяет и применяет исправленные файлы → один независимый
+read-only arbiter проверяет окончательный полный результат → semantic verdict. GREEN требует валидного полного ответа, пустых
 findings, полного непустого coverage и matching digest; editor byte changes,
 пустые ответы и missing arbiter не дают GREEN.
 
@@ -34,8 +33,9 @@ Pending-only translation сохраняется. Любой semantic review вк
 в том числе accepted files. Новая checkpoint contract version связывает
 source/candidate/glossary manifests и digests; старые chunk-review checkpoints
 fail closed. PR attempts имеют NULL target_path, явный PR scope/context digest
-и полный cost audit. QA GREEN независим от external CI, но mandatory локальный
-build должен предшествовать arbiter.
+и полный cost audit. GREEN означает корректный перевод; RED findings идут непосредственно в отчёт,
+автоматически не исправляются и никуда не передаются. Build/CI не участвуют
+в семантическом вердикте.
 
 ## Зафиксированный witness и следующий implementation gate
 

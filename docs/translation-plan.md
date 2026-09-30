@@ -38,8 +38,10 @@ state was already satisfied.
    index/TOC, allowed paths/operations, exact snapshot/candidate digests, both
    complete pinned RU/EN glossaries and technical validation data. One editor
    returns all editable target text paths as complete files. Apply atomically,
-   reconcile/validate and run a full build, then send the exact built candidate
-   to one independent full PR arbiter before one publication/checkpoint.
+   reconcile/validate and send the complete final candidate to one independent
+   full PR arbiter. RED findings go directly to the report and are never
+   automatically repaired or passed onward. Build/CI do not participate in
+   the semantic verdict.
 8. Persist and hash the canonical plan. `doc_continue` and `doc_verify` replay
    that exact plan; they do not rediscover scope using the same mutable rules.
 
@@ -145,8 +147,8 @@ the original plan and correction provenance. Dropping the expected digest or
 allowing arbitrary YAML overwrite is forbidden; unsupported corrections stop
 with a typed blocked correction/RED.
 
-The full build runs after editor and before arbiter. The arbiter sees the exact
-built candidate with full glossary; GREEN requires valid full output, empty
+The arbiter sees the complete final candidate with full glossary after runtime
+checks and applies critic corrections; GREEN requires valid full output, empty
 findings, complete nonempty coverage and matching digest. Empty responses,
 missing arbiter, editor changes or a checked-noop plan do not imply GREEN.
 Review checks cross-file terminology/entity identity without requiring an exact

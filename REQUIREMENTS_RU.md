@@ -13,7 +13,7 @@
 
 - `doc_translate`: получить source PR/snapshot, проверить дневной бюджет,
   определить направление и scope, перевести, собрать полный candidate, выполнить
-  PR editor → deterministic validation/full build → PR arbiter → одну публикацию;
+  PR editor → runtime validation/apply → PR arbiter → semantic verdict;
 - `doc_verify`: проверить текущее состояние существующей translation branch без
   обязательного повторного перевода;
 - `doc_continue`: продолжить явно сохранённую как продолжаемую job после
@@ -302,6 +302,21 @@ code по-прежнему защищены. Семантическую неиз
 
 ## 5. Полный PR editor и независимый arbiter
 
+Семантический процесс:
+
+1. Берём полные актуальные файлы исходного PR, не diff и не версии до изменения.
+2. Берём полные соответствующие файлы переводного PR.
+3. Передаём полный glossary.
+4. Один критик сравнивает исходные файлы с переводом, находит все ошибки и сразу
+   возвращает полностью исправленные файлы. Никаких findings для другой модели
+   и никаких repair-loop.
+5. Runtime проверяет и применяет исправления критика.
+6. Независимый арбитр проверяет окончательный результат: GREEN означает, что
+   перевод корректен; при RED найденные остаточные проблемы идут непосредственно
+   в отчёт.
+7. Замечания арбитра автоматически не исправляются и никуда не передаются.
+8. Build/CI не участвуют в семантическом вердикте.
+
 Единица semantic review для `doc_translate`, `doc_verify` и review-stage
 `doc_continue`: весь исходный PR и весь candidate/translation PR. Translator
 остаётся whole-file/source-only с внутренними structural chunks и prose segment
@@ -341,10 +356,9 @@ Missing/unknown/duplicate keys, malformed/partial/empty files, extra fields,
 отвергаются fail closed. Findings-only ответ, patch и отдельный repair call
 не заменяют полные готовые файлы.
 
-Runtime атомарно применяет всю карту к копии candidate в памяти. После этого
-проверяет source-owned technical values, Markdown/YFM, разрешённые paths и
-операции, plan coverage, metadata и assets, затем выполняет один полный
-Diplodoc build. No-op editor также проходит все проверки и build.
+Runtime проверяет source-owned technical values, Markdown/YFM, разрешённые
+paths и операции, plan coverage, metadata и assets и атомарно применяет
+всю карту к копии candidate в памяти.
 Модель видит реальные literals и окружающую Markdown-разметку; source-owned
 значения команд, параметров, identifiers, templates, URLs/path/query менять
 нельзя. Безопасное оформление technical literals допустимо при эквивалентных
@@ -359,9 +373,9 @@ digest или разрешать произвольную перезапись Y
 
 ### Полная независимая проверка
 
-После успешного validation/build один независимый read-only arbiter получает
-полный контекст уже исправленного и собранного PR с обоими полными glossary.
-Он проверяет ровно built candidate bytes, не editor findings и не translator
+После проверки и применения исправлений runtime один независимый read-only arbiter
+получает полный окончательный результат с обоими полными glossary.
+Он проверяет точные окончательные bytes, не editor findings и не translator
 chunks. Его строгий финальный ответ содержит verdict/findings, полный coverage
 и привязку к candidate/context digest. Finding содержит runtime-validated path,
 точный searchable current snippet и конкретную русскую правку; межфайловый
@@ -372,7 +386,8 @@ GREEN требует валидный полный ответ arbiter, verdict G
 response, отсутствующий arbiter и пустой checked set никогда не означают GREEN.
 RED с пустыми/невалидными findings также невалиден. Findings не обрезаются для
 внутреннего решения; ограничения пользовательского отображения независимы.
-Semantic RED не запускает автоматический repair loop. По умолчанию editor:
+Остаточные проблемы при RED идут непосредственно в отчёт. Замечания arbiter
+автоматически не исправляются и никуда не передаются. По умолчанию editor:
 YandexGPT 5.1 (`YDBDOC_MODEL_CRITIC`), arbiter: модель переводчика DeepSeek V4
 Flash (`YDBDOC_MODEL_ARBITER` позволяет явно выбрать независимую модель).
 
@@ -418,7 +433,7 @@ attempt `YDBDOC_MODEL_CRITIC_FALLBACK`, если этот путь оставл�
 
 Live model-contract probe через production builders/parsers обязан проверить
 translator segment map, полный multi-file editor с исправлением минимум двух
-файлов и межфайлового дефекта, затем полный read-only arbiter на exact built
+файлов и межфайлового дефекта, затем полный read-only arbiter на окончательном
 candidate; fallback проверяется, только если этот production путь сохранён.
 Offline fakes подтверждают orchestration, но не качество модели. Требуются
 real-provider full-context probe и независимая проверка полных результатов до
@@ -427,9 +442,9 @@ semantic acceptance. Исторические whole-excerpt probes и лимит
 225432 UTF-8 bytes, ещё до PR/instructions; bytes не равны tokens/characters.
 
 До editor допустимы локальная проверка segment response, source-only assembly и
-безопасная нормализация. Полный draft build между translator и editor запрещён.
-Порядок неизменен: PR editor → atomic in-memory apply → deterministic validation
-и полный build → PR arbiter → одна публикация/verdict. Любое изменение bytes
+безопасная нормализация.
+Семантический порядок: PR editor → runtime validation/apply → PR arbiter → verdict.
+Build/CI не участвуют в семантическом вердикте. Любое изменение bytes
 после arbiter требует новой полной проверки. Ни один непроверенный или
 невалидный candidate не публикуется. Валидный semantic RED может быть опубликован
 с RED и continuation checkpoint по существующей политике.
@@ -454,10 +469,11 @@ semantic acceptance. Исторические whole-excerpt probes и лимит
    повторная попытка по правилам раздела 4.
 6. Выполнить локальные структурные проверки и безопасную нормализацию, собрать
    весь candidate и один закрытый PRReviewContext. Выполнить admission и один
-   полный PR editor call. Полный build черновика до editor не запускать.
-7. Атомарно применить полные файлы, выполнить deterministic validation и один
-   полный Diplodoc build, затем admission и полный независимый PR arbiter.
-   Verdict относится к точному built candidate и всему PR.
+   полный PR editor call.
+7. Проверить и атомарно применить полные исправленные файлы, затем выполнить
+   admission и полный независимый PR arbiter.
+   Verdict относится к окончательному candidate и всему PR. RED findings идут
+   непосредственно в отчёт, автоматически не исправляются и никуда не передаются.
 8. Сделать не более одного commit/push в translation branch.
 9. Создать или обновить translation PR, записать актуальный verdict и terminal
    job status.
@@ -469,8 +485,7 @@ semantic acceptance. Исторические whole-excerpt probes и лимит
 2. Получить соответствующий authoritative source snapshot.
 3. Без нового перевода построить полный PRReviewContext текущего translation
    head, включая index/TOC; один PR editor возвращает все editable text files.
-4. Атомарно применить карту, выполнить deterministic validation/full build,
-   затем полный PR arbiter. Сделать не более одного commit в ту же branch
+4. Проверить и атомарно применить карту, затем выполнить полный PR arbiter. Сделать не более одного commit в ту же branch
    с exact-head guard и без изменений candidate после arbiter.
 5. Создать или обновить один актуальный PR comment с итоговым verdict и
    записать terminal job status.
@@ -507,8 +522,8 @@ semantic acceptance. Исторические whole-excerpt probes и лимит
    protected fragments восстанавливаются из source. Существующий target допустим
    как точный ранее опубликованный candidate для critic-editor, но не как шаблон склейки или источник технических
    fragments.
-7. Применить полный editor file map атомарно, выполнить deterministic
-   validation/full build, затем полный PR arbiter. Сохранить проверенные bytes
+7. Проверить и атомарно применить полный editor file map, затем выполнить
+   полный PR arbiter. Сохранить проверенные bytes
    одним exact-head non-force commit в ту же branch и обновить единый verdict.
    GREEN закрывает
    checkpoint. Если остаётся поддерживаемое семантическое препятствие, записать
@@ -688,12 +703,7 @@ gate не выполняется. Конкурентная атомарная re
 - Маркеры provenance и строка `Checked translation commit` в существующем
   translation PR обновляются до SHA фактически опубликованного candidate.
 - Commit/push выполняется только после обязательных локальных проверок.
-- В `doc_translate` до любых model calls (включая определение направления)
-  выполняется полный build trusted checkout. Ошибка исходной сборки останавливает
-  job в `prepare`, фиксируется как `trusted_base_build` и не расходует model budget.
-  Сначала требуется исправить исходную документацию; такая проверка не заменяет
-  обязательный build готового candidate.
-- После editor и до arbiter/единственного commit/push финальный candidate накладывается на
+- Финальный candidate накладывается на
   trusted checkout base-ветки и полностью собирается официальным Diplodoc CLI
   той же stable-линии, что использует `build-docs` YDB. Любая строка `ERR`,
   ненулевой exit либо невозможность запустить compiler запрещает публикацию.
@@ -710,10 +720,10 @@ gate не выполняется. Конкурентная атомарная re
 - После публикации translation PR в исходном PR создаётся или обновляется один
   короткий комментарий со ссылкой на translation PR. Повторный `doc_translate`
   не создаёт дубликаты этого комментария.
-- QA `GREEN` означает полную semantic проверку точного built candidate по
+- QA `GREEN` означает полную semantic проверку окончательного candidate по
   разделу 5, независимо от external CI. Только после валидного полного arbiter
   допустимо сообщить, что исправления не требуются. Ошибка или неполнота review
-  не превращается в GREEN. Локальный build обязателен как publication gate.
+  не превращается в GREEN. Build/CI не участвуют в семантическом вердикте.
   `YELLOW` допустим только для проблемы самого перевода, например вероятного
   дубликата новой симметричной статьи, и должен называть конкретную причину.
   Для `RED` каждая показанная
@@ -764,7 +774,7 @@ gate не выполняется. Конкурентная атомарная re
   witness с настоящим inline code; исторический EN не задаёт byte baseline.
 - Offline replay через production context/schema/parser/apply/validation и
   publication fake доказывает orchestration: все файлы/glossary без усечения,
-  несколько исправленных файлов, exact built bytes у arbiter и один publish.
+  несколько исправленных файлов, точные окончательные bytes у arbiter и один publish.
   Negative replay сохраняет defects и получает RED. Это не semantic acceptance:
   нужны real-provider full-context probe и независимый content review.
 - Missing file/glossary/arbiter, empty checked set/response, malformed map,

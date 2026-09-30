@@ -14,7 +14,7 @@ provider-validated. Описанные ниже новые acceptance witnesses 
 - Fixture добавляется для конкретного requirement, а не ради размера матрицы.
 - Новый live model-contract probe обязан использовать production context
   builders/parsers: translator segment map, полный multi-file editor с
-  исправлением двух файлов и межфайлового дефекта, validation/full build и
+  исправлением двух файлов и межфайлового дефекта, runtime validation/apply и
   независимый полный PR arbiter. Полный pinned glossary включается в оба calls.
   Проверяются все реально используемые providers; optional fallback только если
   этот путь сохранён. Старые synthetic excerpt probes исторические и недостаточны.
@@ -127,14 +127,16 @@ Witness checks:
   target-only navigation сохраняется. Искусственное равенство всех множеств
   index/TOC links запрещено: некоторые ссылки закономерно находятся вне TOC.
 - Positive offline replay использует production context builder/schema/parser,
-  atomic apply, validation/build и publication fake. Fake editor возвращает
-  независимо проверенные полные файлы, fake arbiter проверяет exact built bytes,
+  runtime validation/apply и publication fake. Fake editor возвращает
+  независимо проверенные полные файлы, fake arbiter проверяет окончательные bytes,
   все четыре paths и оба полных glossary, включая tail markers. Negative replay
   оставляет старые defects и получает RED.
 - Runtime отвергает missing/unknown/duplicate/malformed/partial file maps,
   binary/deletion/traversal/out-of-scope entries, пустой ответ/checked set,
   missing arbiter, невалидный RED, digest mismatch и unvalidated metadata.
-  Editor changes и no-op не подменяют полный arbiter.
+  Editor changes и no-op не подменяют полный arbiter. RED findings идут
+  непосредственно в отчёт, автоматически не исправляются и никуда не передаются.
+  Build/CI не участвуют в семантическом вердикте.
 - Verified input/context/output capacity резервируется для точных serialized
   requests и полных outputs. Unknown capability, oversize, failed validation/
   build или moved head дают ноль publication calls с terminal audit/cost.

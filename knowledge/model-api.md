@@ -22,10 +22,9 @@ provider-validated на baseline `2a1c268`. Возможности моделе�
   с `additionalProperties=false`, ровно все editable text paths, включая unchanged.
   Missing/unknown/duplicate/malformed/partial/empty entries, binary, deletion,
   traversal, out-of-scope paths и extra fields отвергаются fail closed.
-- Runtime атомарно применяет карту в памяти, сохраняет source-owned technical
-  values и metadata/plan constraints, выполняет deterministic validation и один
-  полный Diplodoc build. После этого независимый read-only arbiter видит полный
-  исправленный PR с полным glossary и точными built bytes.
+- Runtime проверяет source-owned technical values и metadata/plan constraints
+  и атомарно применяет карту в памяти. Независимый read-only arbiter видит полный
+  окончательный результат с полным glossary.
 - Arbiter возвращает строгие verdict/findings с полным coverage и runtime-verified
   context/candidate digest. GREEN требует валидный полный финальный ответ, пустые
   findings, полное непустое coverage и совпадение digest. Editor byte changes,
@@ -34,8 +33,10 @@ provider-validated на baseline `2a1c268`. Возможности моделе�
   значения не меняются; active checks включают межфайловую entity identity даже
   без exact glossary mapping, completeness, commands/parameters, readable
   technical formatting, links/anchors, H1/index/TOC и PR operations.
-- Полный editor → validation/build → полный arbiter → одна publication.
-  No-op editor всё равно требует build/arbiter. Semantic RED не вызывает loop.
+- Полный editor → runtime validation/apply → полный arbiter → semantic verdict.
+  No-op editor не отменяет arbiter. GREEN означает корректный перевод; RED
+  findings идут непосредственно в отчёт, автоматически не исправляются и никуда
+  не передаются. Build/CI не участвуют в семантическом вердикте.
 
 ## Capacity и одна bounded retry policy
 
@@ -76,7 +77,7 @@ Pinned witness glossary уже содержит 225432 UTF-8 bytes. Истори
 48000 characters и старые whole-excerpt probes не подтверждают вместимость или
 качество нового пути. Production builders/parsers должны пройти real-provider
 full-context probe: translator map, multi-file editor с исправлением двух файлов
-и межфайлового дефекта, validation/build, затем полный read-only arbiter.
+и межфайлового дефекта, runtime validation/apply, затем полный read-only arbiter.
 Каждый реально используемый primary/fallback provider проверяется своим полным
 контрактом; fallback probe нужен только при сохранённом production пути.
 Offline fakes доказывают orchestration. До независимого content review полного

@@ -164,24 +164,24 @@ snapshot, target glossary из pinned translation base. Missing files/glossary
 deletion, traversal, out-of-scope и extra entries. Findings, patch и отдельный
 repair call не заменяют полные готовые файлы.
 
-Runtime атомарно применяет карту в памяти, проверяет source-owned technical
-values, Markdown/YFM, links/anchors, metadata/plan constraints и assets,
-затем запускает один полный Diplodoc build. Полный draft build до editor
-запрещён. Technical literals видны с реальной окружающей разметкой:
+Runtime проверяет source-owned technical values, Markdown/YFM, links/anchors,
+metadata/plan constraints и assets и атомарно применяет карту в памяти. Technical literals видны с реальной окружающей разметкой:
 разрешено безопасно улучшить inline-code оформление без изменения значения,
 нельзя подменить URL, commands, identifiers или templates. TOC name corrections
 допускаются только в явно разрешённом plan, с planner-owned пересчётом artifact
 digest и provenance; structure/href/остальные rows, включая target-only navigation,
 сохраняются. Arbitrary metadata overwrite запрещён.
 
-После build один независимый read-only arbiter получает полный исправленный PR
-и оба полных glossary. Он проверяет ровно built bytes. GREEN требует полного
+После проверки и применения исправлений runtime один независимый read-only
+arbiter получает полный окончательный результат и оба полных glossary. GREEN требует полного
 валидного финального ответа, пустых findings, полного непустого coverage и
-совпадающего context/candidate digest. No-op editor не отменяет build/arbiter;
+совпадающего context/candidate digest. No-op editor не отменяет arbiter;
 editor byte changes, пустой ответ, отсутствующий arbiter или пустой checked set
 не дают GREEN. Findings связываются с валидными paths/current snippets и
-конкретной правкой. Semantic RED не запускает автоматический repair loop.
-Публикация одна, после editor → validation/full build → arbiter. Изменение bytes
+конкретной правкой. GREEN означает корректный перевод. RED findings идут непосредственно в отчёт,
+автоматически не исправляются и никуда не передаются.
+Семантический порядок: editor → runtime validation/apply → arbiter → verdict.
+Build/CI не участвуют в семантическом вердикте. Изменение bytes
 после arbiter требует нового полного review.
 
 Оба prompt активно проверяют полноту/смысл, межфайловую терминологию и
@@ -218,6 +218,6 @@ full-context provider probe и независимой проверки полн�
 невалидный chunk не публикуется. Каждый отказ пишет безопасный код валидации
 без model response и source prose; успешные соседние chunks не повторяются.
 
-Текущий утверждённый порядок quality stage: полный PR editor, затем
-строгий Diplodoc build и только после него полный PR arbiter перед публикацией. По умолчанию переводчик — DeepSeek V4 Flash, critic-editor —
+Текущий утверждённый порядок quality stage: полный PR editor, затем runtime
+проверяет и применяет исправления, затем полный PR arbiter. По умолчанию переводчик — DeepSeek V4 Flash, critic-editor —
 YandexGPT 5.1 (`YDBDOC_MODEL_CRITIC` позволяет явно выбрать модель).

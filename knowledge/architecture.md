@@ -24,12 +24,12 @@
 
 `doc_translate` идёт линейно: create job audit → authorize → snapshot →
 budget → direction/scope → parse → translate → local structural validation and
-safe Markdown normalization → full PR editor → atomic apply → full validation/Diplodoc build → full PR arbiter → one commit/push
-→ PR verdict → terminal job status.
+safe Markdown normalization → full PR editor → runtime validation/apply → full PR arbiter → semantic verdict.
+Build/CI не участвуют в семантическом вердикте. RED findings идут непосредственно
+в отчёт, автоматически не исправляются и никуда не передаются.
 
 `doc_verify` создаёт job audit, берёт текущую translation branch и authoritative
-source и запускает полный PR editor → atomic apply → validators/full build →
-полный PR arbiter. Валидные изменения публикуются одним exact-head non-force
+source и запускает полный PR editor → runtime validation/apply → полный PR arbiter. Валидные изменения публикуются одним exact-head non-force
 commit в ту же branch, затем обновляются verdict и terminal job status.
 Budget gate у него отсутствует.
 
@@ -46,7 +46,7 @@ acknowledgement, но не разрешает recovery через широкий
 Для source PR неоднозначность остаётся fail-closed.
 Replay читает только сохранённые source/base SHA и проверяет scope/field IDs
 и exact translation head. Три stage: direction retry, перевод pending документов
-с accepted maps и полный PR editor/build/arbiter при любом semantic review.
+с accepted maps и полный PR critic/runtime/arbiter при любом semantic review.
 Review paths служат диагностикой. Новый review contract version связывает
 source/candidate/glossary manifests и digests; старые chunk-review checkpoints
 отвергаются fail closed. Source-only
@@ -150,7 +150,10 @@ Filtering by remote diff omitted unchanged TOC/assets on reruns and skipped all
 validation for unchanged candidates. Build overlays and restores the full plan;
 Git publication still uses real diffs for commit/no-op decisions.
 
-## Translation baseline preflight (2026-09-28)
+## Historical translation baseline preflight (2026-09-28)
+
+This records the old implementation, not the active semantic process. Build/CI
+do not participate in the semantic verdict.
 
 Production RuntimeContent receives DiplodocBuildValidator.validate_baseline when
 YDBDOC_DOCS_ROOT is configured. doc_translate invokes it before prepare_source,
@@ -172,24 +175,24 @@ to the exact newly published SHA. This prevents reruns from producing a branch
 that is both behind and ahead of the current base while preserving concurrent
 manual edits.
 
-## Full PR editor, build and independent arbiter (approved 2026-09-30)
+## Full PR editor, runtime and independent arbiter (approved 2026-09-30)
 
 One editor call returns a strict `{"files": {path: complete_text}}` map of exactly
 all editable target text paths, including unchanged files. Runtime rejects
 missing, unknown, duplicate, malformed, partial, binary, deletion, traversal or
-out-of-scope entries. It applies the entire map atomically in memory, enforces
-source-owned technical values and metadata/plan constraints, then runs
-deterministic validation and one full Diplodoc build. A no-op edit still requires
-the build and arbiter. A full draft build before editor is forbidden.
+out-of-scope entries. It checks source-owned technical values and metadata/plan constraints and
+applies the entire map atomically in memory. A no-op edit still receives the
+independent arbiter review.
 
-One independent read-only arbiter reviews the exact built candidate as a complete
+One independent read-only arbiter reviews the complete final candidate as a complete
 PR with both complete glossaries. GREEN requires a valid full final response,
 empty findings, complete nonempty coverage and matching candidate/context digest.
 Changed editor bytes, empty responses or a missing arbiter never imply GREEN.
 The prompts actively check semantic completeness, cross-file terminology/entity
 identity even without exact glossary mappings, commands/parameters/identifiers,
 technical-literal boundaries/readability, links/anchors, H1/index/TOC consistency
-and every planned PR operation. Semantic RED does not trigger another repair loop.
+and every planned PR operation. RED findings go directly to the report and are never automatically repaired
+or passed onward. Build/CI do not participate in the semantic verdict.
 No bytes may change after arbiter without a new full review.
 
 Translator chunking and retries remain translator-only. Editor/arbiter context

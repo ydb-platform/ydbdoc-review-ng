@@ -84,22 +84,23 @@ model calls and audit, never the report. RED exits 1 in every CLI mode.
 
 The approved pipeline builds one closed PRReviewContext after pair discovery,
 direction, scope/preflight and whole-file translation. It contains complete
-inventory/operations, all review-owned source and candidate text files including
+inventory/operations, complete current source PR files (not diffs or pre-change
+versions) and complete corresponding translation PR files including
 index/TOC, allowed paths, exact snapshots/digests, both full pinned RU/EN glossaries
 and technical-fragment validation data. One editor returns exactly all editable
 text paths as complete files; malformed, missing, extra, duplicate, partial,
 binary, deletion, traversal and out-of-scope entries fail closed. Runtime applies
 the map atomically in memory, enforces source-owned technical values and metadata
-plan constraints, then runs deterministic validation and one full Diplodoc build.
-Only then does the independent read-only arbiter review the exact built candidate
+plan constraints and validates the corrections. The independent read-only
+arbiter reviews the complete final candidate
 with the full context/glossary. A valid full response, empty findings, complete
 nonempty coverage and matching digest are all required for GREEN. Editor changes,
 empty response or absent arbiter never imply GREEN. One guarded publication
 follows; branch movement blocks stale updates. QA describes semantic quality
-independently of external CI. There is no semantic repair loop.
+independently of build/CI. RED findings go directly to the report and are never
+automatically repaired or passed onward. There is no semantic repair loop.
 
-Before editor only local structural checks and safe normalization run; a full
-draft build must not block editorial repair. After arbiter any byte change needs
+Before editor only local structural checks and safe normalization run. After arbiter any byte change needs
 another full review. Review input cannot be split, summarized or given a filtered
 glossary. The witness glossary alone is 225432 UTF-8 bytes. Each exact editor and
 post-edit arbiter request needs verified input/output capacity, including the

@@ -8,7 +8,7 @@
 
 - `architecture.md`: границы системы и неизменяемые инварианты.
 - `translation-algorithm.md`: whole-file/source-only translation с внутренними
-  structural chunks и отдельный полный PR editor/build/arbiter contract.
+  structural chunks и отдельный полный PR critic/runtime/arbiter contract.
 - `model-api.md`: проверенные возможности и ограничения моделей Yandex Cloud.
 - `testing.md`: правила тестирования и независимой приёмки.
 - `delivery.md`: локальный конвейер разработки и коммитов.

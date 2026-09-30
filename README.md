@@ -12,8 +12,12 @@
 Реализованы parser, проверка ответов моделей и protected fragments,
 audit/budget adapters, линейная оркестрация и атомарная публикация candidate.
 Утверждённый 2026-09-30 новый semantic contract ещё не реализован и не проверен
-реальными providers: один editor полного PR → deterministic validation/full
-Diplodoc build → независимый arbiter точного built PR → одна публикация.
+реальными providers: полные актуальные source PR files, полные соответствующие
+translation PR files и полный glossary → один critic/editor возвращает полные
+исправленные файлы → runtime проверяет и применяет их → независимый arbiter
+проверяет окончательный результат. GREEN означает корректный перевод; RED
+findings идут непосредственно в отчёт, автоматически не исправляются и никуда
+не передаются. Build/CI не участвуют в семантическом вердикте.
 Оба review calls получают полный inventory, все review-owned source/candidate
 text files и оба полных pinned glossary. Editor возвращает строгую карту всех
 editable paths в полные файлы; GREEN требует полного arbiter coverage и
