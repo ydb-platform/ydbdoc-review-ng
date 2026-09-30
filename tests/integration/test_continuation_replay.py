@@ -103,7 +103,11 @@ class ReplayServices(RuntimeServices):
                     "ref": "source",
                     "repo": {"full_name": "ydb-platform/ydb"},
                 },
-                "base": {"ref": "main", "repo": {"full_name": "ydb-platform/ydb"}},
+                "base": {
+                    "ref": "main",
+                    "sha": self.base,
+                    "repo": {"full_name": "ydb-platform/ydb"},
+                },
                 "changed_files": len(self.inventory),
             }
         if short == "/pulls/42/files?per_page=100":
@@ -211,6 +215,7 @@ def accepted(document):
 
 def checkpoint(source, plans):
     from ydbdoc_review_ng.continuation import checkpoint_scope_sha256
+    from ydbdoc_review_ng.translation_plan import translation_plan_sha256
 
     assert plans.manifest is not None
     page = next(
@@ -233,7 +238,11 @@ def checkpoint(source, plans):
             STATE_VERSION,
             ContinuationStage.TRANSLATION,
             plans.manifest.direction,
-            checkpoint_scope_sha256(plans.manifest, source.inventory),
+            checkpoint_scope_sha256(
+                plans.manifest,
+                source.inventory,
+                translation_plan_sha256(plans.translation_plan),
+            ),
             (accepted(page),),
             tuple(
                 document.entry.pair.target_path

@@ -163,6 +163,7 @@ class RuntimeSource:
         self.context: PublicationContext
         self.inventory = SourceChangeInventory(())
         self.metadata_snapshot: SnapshotRef
+        self.source_base_snapshot: SnapshotRef
         self.source_pr = 0
         self.continue_target_sha: GitSha | None = None
         self.probable_duplicates: tuple[ProbableDuplicate, ...] = ()
@@ -233,6 +234,10 @@ class RuntimeSource:
             raise RuntimeBoundaryError("base_missing")
         repository = RepositoryId(self.github.repository)
         base_snapshot = SnapshotRef(repository, tip)
+        try:
+            source_base_snapshot = SnapshotRef(repository, GitSha(pr["base"]["sha"]))
+        except (KeyError, TypeError, ValueError):
+            raise RuntimeBoundaryError("source_base_missing") from None
         merged = bool(pr["merged"])
         original = SnapshotRef(
             repository, GitSha(pr["merge_commit_sha"] if merged else pr["head"]["sha"])
@@ -262,7 +267,11 @@ class RuntimeSource:
         self.inventory = normalize_source_inventory(changes)
         # Reject source movement while resolving the diff inventory.
         fresh = self.github.request("GET", f"/pulls/{source_pr}")
-        if fresh["head"]["sha"] != pr["head"]["sha"] or fresh["base"]["ref"] != base.value:
+        if (
+            fresh["head"]["sha"] != pr["head"]["sha"]
+            or fresh["base"]["ref"] != base.value
+            or fresh["base"].get("sha") != source_base_snapshot.commit_sha.value
+        ):
             raise RuntimeBoundaryError("source_pr_changed")
         head = self.github.head(authorization.branch)
         if (
@@ -286,6 +295,7 @@ class RuntimeSource:
             expected_branch_head=head,
         )
         self.metadata_snapshot = SnapshotRef(repository, self.context.current_head)
+        self.source_base_snapshot = source_base_snapshot
         self.source_pr = source_pr
         self.github.source_pr = source_pr
         self.github.source_sha = source.commit_sha
@@ -322,6 +332,13 @@ class RuntimeSource:
         repository = RepositoryId(self.github.repository)
         source = SnapshotRef(repository, checkpoint.source_sha)
         base = SnapshotRef(repository, checkpoint.base_sha)
+        raw = self.github.request("GET", f"/pulls/{checkpoint.source_pr}")
+        try:
+            self.source_base_snapshot = SnapshotRef(
+                repository, GitSha(raw["base"]["sha"])
+            )
+        except (KeyError, TypeError, ValueError):
+            raise RuntimeBoundaryError("source_base_missing") from None
         self.snapshots = ResolvedRepositorySnapshots(
             PullRequestState.OPEN,
             BaseBranch(pr.base_branch),

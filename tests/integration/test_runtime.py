@@ -1588,6 +1588,7 @@ def test_pr50839_full_runtime_plan_publishes_exact_complete_toc() -> None:
 
     directory = "ydb/docs/{}/core/maintenance/manual/"
     fixture_root = Path(__file__).parents[1] / "fixtures"
+    ru_toc_before = (fixture_root / "pr50839_ru_toc_i_before.yaml").read_bytes()
     ru_toc = (fixture_root / "pr50839_ru_toc_i.yaml").read_bytes()
     en_before = (fixture_root / "pr50839_en_toc_i_before.yaml").read_bytes()
     en_expected = (fixture_root / "pr50839_en_toc_i_expected.yaml").read_bytes()
@@ -1597,6 +1598,7 @@ def test_pr50839_full_runtime_plan_publishes_exact_complete_toc() -> None:
             super().__init__()
             self.blobs: dict[str, bytes] = {}
             self.published: dict[str, bytes | None] = {}
+            self.ru_toc_before = ru_toc_before
             for name, ru_heading, en_heading in (
                 ("blobdepot.md", "BlobDepot", "BlobDepot"),
                 (
@@ -1613,6 +1615,13 @@ def test_pr50839_full_runtime_plan_publishes_exact_complete_toc() -> None:
 
         def github(self, method, path, payload):
             normalized = path.removeprefix("/repos/ydb-platform/ydb")
+            source_toc = directory.format("ru") + "toc_i.yaml"
+            if normalized == f"/contents/{source_toc}?ref={self.base}":
+                return {
+                    "type": "file",
+                    "encoding": "base64",
+                    "content": base64.b64encode(self.ru_toc_before).decode(),
+                }
             if normalized == "/pulls/42":
                 result = super().github(method, path, payload)
                 result["changed_files"] = 4
@@ -1685,6 +1694,7 @@ def test_verify_replays_pinned_toc_plan_instead_of_translated_h1() -> None:
                     ).encode(),
                 },
                 self.base: {
+                    directory.format("ru") + "toc_i.yaml": b"items:\n",
                     directory.format("en") + "blobdepot_decommit.md": (
                         b"# Group Decommissioning\n"
                     ),

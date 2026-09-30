@@ -13,10 +13,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 from hashlib import sha256
+from typing import Any
+
+import yaml  # type: ignore[import-untyped]
 
 from ydbdoc_review_ng.continuation import SourceChange, SourceChangeInventory
 from ydbdoc_review_ng.direction import Direction
-from ydbdoc_review_ng.domain import RepoPath
+from ydbdoc_review_ng.domain import ContentHash, RepoPath
 from ydbdoc_review_ng.errors import SafeDiagnosticError
 from ydbdoc_review_ng.locales import LocaleRoots, PairKey
 from ydbdoc_review_ng.scope import (
@@ -77,6 +80,8 @@ class PlannedInput:
     target_path: RepoPath | None
     outputs: tuple[RepoPath, ...]
     expected_sha256: str | None = None
+    source_before_sha256: str | None = None
+    source_after_sha256: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,6 +99,138 @@ class TranslationPlan:
         claimed = tuple(path for item in self.inputs for path in item.outputs)
         if not set(claimed).issubset(self.outputs):
             raise TranslationPlanError("translation_plan_outputs_incomplete")
+
+
+def _yaml_mapping(node: Any) -> dict[str, Any]:
+    if not isinstance(node, yaml.MappingNode) or node.tag != "tag:yaml.org,2002:map":
+        raise TranslationPlanError("translation_plan_toc_delta_unsupported")
+    values: dict[str, Any] = {}
+    for key, value in node.value:
+        if (
+            not isinstance(key, yaml.ScalarNode)
+            or key.tag != "tag:yaml.org,2002:str"
+            or key.value in values
+        ):
+            raise TranslationPlanError("translation_plan_toc_delta_unsupported")
+        values[key.value] = value
+    return values
+
+
+def _yaml_fingerprint(node: Any, active: set[int] | None = None) -> tuple[object, ...]:
+    """Canonicalize a safe YAML node while rejecting aliases and exotic tags."""
+    active = set() if active is None else active
+    if id(node) in active:
+        raise TranslationPlanError("translation_plan_toc_delta_unsupported")
+    active.add(id(node))
+    try:
+        if isinstance(node, yaml.ScalarNode):
+            if node.tag not in {
+                "tag:yaml.org,2002:" + suffix
+                for suffix in ("str", "null", "bool", "int", "float", "timestamp")
+            }:
+                raise TranslationPlanError("translation_plan_toc_delta_unsupported")
+            return ("scalar", node.tag, node.value)
+        if isinstance(node, yaml.SequenceNode):
+            if node.tag != "tag:yaml.org,2002:seq":
+                raise TranslationPlanError("translation_plan_toc_delta_unsupported")
+            return ("sequence", tuple(_yaml_fingerprint(item, active) for item in node.value))
+        values = _yaml_mapping(node)
+        return (
+            "mapping",
+            tuple(
+                (key, _yaml_fingerprint(value, active))
+                for key, value in sorted(values.items())
+            ),
+        )
+    finally:
+        active.remove(id(node))
+
+
+def _compose_toc(content: bytes) -> tuple[Any, tuple[Any, ...]]:
+    try:
+        root = yaml.compose(content.decode("utf-8"), Loader=yaml.SafeLoader)
+        values = _yaml_mapping(root)
+        items = values.get("items")
+        if isinstance(items, yaml.ScalarNode) and items.tag == "tag:yaml.org,2002:null":
+            return root, ()
+        if not isinstance(items, yaml.SequenceNode) or items.tag != "tag:yaml.org,2002:seq":
+            raise TranslationPlanError("translation_plan_toc_delta_unsupported")
+        return root, tuple(items.value)
+    except TranslationPlanError:
+        raise
+    except (UnicodeError, yaml.YAMLError, TypeError, ValueError, RecursionError):
+        raise TranslationPlanError("translation_plan_toc_delta_unsupported") from None
+
+
+def _planned_toc_additions(
+    path: RepoPath, before: bytes | None, after: bytes, /
+) -> tuple[RepoPath, ...]:
+    """Return the complete supported source delta: simple Markdown entry additions.
+
+    Existing nodes must remain a byte-independent semantic subsequence. Any
+    removal, edit, move, include/group change or comment-only rewrite is rejected
+    until it has a dedicated executor.
+    """
+    after_root, after_items = _compose_toc(after)
+    if before is None:
+        before_root, before_items = None, ()
+    else:
+        # The currently shipped executor can prove only byte-preserving appends.
+        # This also prevents an otherwise invisible comment/style edit from
+        # hitching a ride with a semantically valid entry addition.
+        if not after.startswith(before):
+            raise TranslationPlanError("translation_plan_toc_delta_unsupported")
+        before_root, before_items = _compose_toc(before)
+        before_values = _yaml_mapping(before_root)
+        after_values = _yaml_mapping(after_root)
+        if {
+            key: _yaml_fingerprint(value)
+            for key, value in before_values.items()
+            if key != "items"
+        } != {
+            key: _yaml_fingerprint(value)
+            for key, value in after_values.items()
+            if key != "items"
+        }:
+            raise TranslationPlanError("translation_plan_toc_delta_unsupported")
+
+    before_fingerprints = tuple(map(_yaml_fingerprint, before_items))
+    added: list[Any] = []
+    before_index = 0
+    item: Any
+    for item in after_items:
+        fingerprint = _yaml_fingerprint(item)
+        if (
+            before_index < len(before_fingerprints)
+            and fingerprint == before_fingerprints[before_index]
+        ):
+            before_index += 1
+        else:
+            added.append(item)
+    if before_index != len(before_fingerprints) or not added:
+        raise TranslationPlanError("translation_plan_toc_delta_unsupported")
+
+    directory = posixpath.dirname(path.value)
+    resolved: list[RepoPath] = []
+    for node in added:
+        values = _yaml_mapping(node)
+        if set(values) != {"href", "name"}:
+            raise TranslationPlanError("translation_plan_toc_delta_unsupported")
+        href, name = values["href"], values["name"]
+        if any(
+            not isinstance(value, yaml.ScalarNode)
+            or value.tag != "tag:yaml.org,2002:str"
+            or not value.value.strip()
+            for value in (href, name)
+        ):
+            raise TranslationPlanError("translation_plan_toc_delta_unsupported")
+        destination = RepoPath(posixpath.normpath(posixpath.join(directory, href.value)))
+        if not destination.value.endswith(".md"):
+            raise TranslationPlanError("translation_plan_toc_delta_unsupported")
+        resolved.append(destination)
+    if len(resolved) != len(set(resolved)):
+        raise TranslationPlanError("translation_plan_toc_delta_unsupported")
+    return tuple(sorted(resolved, key=lambda item: item.value))
 
 
 def _locale_root(core_root: RepoPath) -> RepoPath:
@@ -294,6 +431,7 @@ def build_translation_plan(
     /,
     *,
     toc_postconditions: Mapping[RepoPath, bytes] | None = None,
+    toc_source_snapshots: Mapping[RepoPath, tuple[bytes | None, bytes]] | None = None,
 ) -> TranslationPlan:
     """Build intent before metadata/model execution and cover every inventory row."""
     complete = _complete_pairs(inventory, roots)
@@ -349,6 +487,29 @@ def build_translation_plan(
             expected = None if toc_postconditions is None else toc_postconditions.get(target)
             if expected is None:
                 raise TranslationPlanError("translation_plan_toc_postcondition_missing")
+            snapshots = (
+                None if toc_source_snapshots is None else toc_source_snapshots.get(change.path)
+            )
+            if snapshots is None:
+                raise TranslationPlanError("translation_plan_toc_source_snapshot_missing")
+            before, after = snapshots
+            if change.status == "added" and before is not None:
+                raise TranslationPlanError("translation_plan_toc_delta_unsupported")
+            if change.status == "modified" and before is None:
+                raise TranslationPlanError("translation_plan_toc_delta_unsupported")
+            additions = _planned_toc_additions(change.path, before, after)
+            planned_sources = {
+                entry.pair.source_path
+                for entry in manifest.entries
+                if entry.operation
+                in {
+                    FileOperation.TRANSLATE,
+                    FileOperation.RENAME_TARGET,
+                    FileOperation.RENAME_TARGET_AND_TRANSLATE,
+                }
+            }
+            if not set(additions).issubset(planned_sources):
+                raise TranslationPlanError("translation_plan_toc_delta_uncovered")
             item = PlannedInput(
                 change,
                 current.kind,
@@ -356,6 +517,8 @@ def build_translation_plan(
                 target,
                 (target,),
                 sha256(expected).hexdigest(),
+                None if before is None else sha256(before).hexdigest(),
+                sha256(after).hexdigest(),
             )
         else:
             raise TranslationPlanError("translation_plan_localized_file_unsupported")
@@ -382,6 +545,38 @@ def build_translation_plan(
     )
     outputs = tuple(sorted(scope_outputs | generated, key=lambda path: path.value))
     return TranslationPlan(direction, tuple(planned), outputs)
+
+
+def translation_plan_sha256(plan: TranslationPlan, /) -> ContentHash:
+    """Hash the canonical cross-file plan for continuation replay."""
+    import json
+
+    payload = {
+        "direction": None if plan.direction is None else plan.direction.value,
+        "inputs": [
+            {
+                "path": item.change.path.value,
+                "status": item.change.status,
+                "previous_path": (
+                    None
+                    if item.change.previous_path is None
+                    else item.change.previous_path.value
+                ),
+                "rename_changed": item.change.rename_changed,
+                "kind": item.kind.value,
+                "action": item.action.value,
+                "target_path": None if item.target_path is None else item.target_path.value,
+                "outputs": [path.value for path in item.outputs],
+                "expected_sha256": item.expected_sha256,
+                "source_before_sha256": item.source_before_sha256,
+                "source_after_sha256": item.source_after_sha256,
+            }
+            for item in plan.inputs
+        ],
+        "outputs": [path.value for path in plan.outputs],
+    }
+    canonical = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    return ContentHash(sha256(canonical.encode("utf-8")).hexdigest())
 
 
 def reconcile_fixed_outputs(

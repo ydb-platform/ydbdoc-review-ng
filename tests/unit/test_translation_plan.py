@@ -24,6 +24,7 @@ from ydbdoc_review_ng.translation_plan import (
     preflight_inventory,
     reconcile_candidate_outputs,
     reconcile_fixed_outputs,
+    translation_plan_sha256,
 )
 
 ROOTS = LocaleRoots(RepoPath("ydb/docs/ru/core"), RepoPath("ydb/docs/en/core"))
@@ -122,6 +123,20 @@ def manifest(*entries: ScopeEntry, complete: tuple[str, ...] = ()) -> ScopeManif
 
 def toc_postcondition(relative: str, content: bytes = b"items:\n") -> dict[RepoPath, bytes]:
     return {RepoPath(ROOTS.en.value + "/" + relative): content}
+
+
+def toc_source_snapshots(
+    relative: str,
+    *added: tuple[str, str],
+    new: bool = False,
+) -> dict[RepoPath, tuple[bytes | None, bytes]]:
+    before = b"items:\n"
+    after = b"items:\n" + b"".join(
+        f"- name: {name}\n  href: {href}\n".encode() for name, href in added
+    )
+    return {
+        RepoPath(ROOTS.ru.value + "/" + relative): (None if new else before, after)
+    }
 
 
 @pytest.mark.parametrize(
@@ -286,6 +301,9 @@ def test_supported_toc_write_is_an_independent_planned_input(name: str, status: 
         ROOTS,
         manifest(document),
         toc_postconditions=toc_postcondition(f"manual/{name}"),
+        toc_source_snapshots=toc_source_snapshots(
+            f"manual/{name}", ("Page", "page.md"), new=status == "added"
+        ),
     )
     planned = {item.change.path: item for item in plan.inputs}
     toc = planned[source_toc.path]
@@ -398,6 +416,15 @@ def test_pr50839_plan_contains_three_documents_and_its_toc() -> None:
         toc_postconditions=toc_postcondition(
             "maintenance/manual/toc_i.yaml", expected_toc
         ),
+        toc_source_snapshots={
+            RepoPath("ydb/docs/ru/core/maintenance/manual/toc_i.yaml"): (
+                b"items:\n",
+                (
+                    b"items:\n- name: BlobDepot\n  href: blobdepot.md\n"
+                    b"- name: Decommission\n  href: blobdepot_decommit.md\n"
+                ),
+            )
+        },
     )
     assert {item.action for item in plan.inputs} == {
         PlanAction.TRANSLATE_DOCUMENT,
@@ -415,6 +442,93 @@ def test_pr50839_plan_contains_three_documents_and_its_toc() -> None:
         plan,
         (("ydb/docs/en/core/maintenance/manual/toc_i.yaml", expected_toc),),
     )
+
+
+def test_toc_delta_rejects_an_unplanned_second_entry_even_when_target_file_exists() -> None:
+    document = entry("manual/page.md")
+    source_toc = "manual/toc_i.yaml"
+    with pytest.raises(TranslationPlanError, match="toc_delta_uncovered"):
+        build_translation_plan(
+            inventory(
+                change(document.pair.source_path.value),
+                change("ydb/docs/ru/core/manual/toc_i.yaml"),
+            ),
+            ROOTS,
+            manifest(document),
+            toc_postconditions=toc_postcondition(
+                source_toc,
+                b"items:\n- name: Page\n  href: page.md\n"
+                b"- name: Forgotten\n  href: forgotten.md\n",
+            ),
+            toc_source_snapshots=toc_source_snapshots(
+                source_toc,
+                ("Page", "page.md"),
+                ("Forgotten", "forgotten.md"),
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    "before,after",
+    [
+        (
+            b"items:\n- name: Old\n  href: page.md\n",
+            b"items:\n- name: New\n  href: page.md\n",
+        ),
+        (
+            b"items:\n- name: Page\n  href: page.md\n",
+            b"items: []\n",
+        ),
+        (
+            b"items:\n- name: A\n  href: a.md\n- name: B\n  href: b.md\n",
+            b"items:\n- name: B\n  href: b.md\n- name: A\n  href: a.md\n",
+        ),
+        (b"items: []\n", b"items: [] # changed comment\n"),
+        (
+            b"items:\n- name: Existing\n  href: existing.md\n",
+            (
+                b"items:\n# changed comment\n- name: Existing\n  href: existing.md\n"
+                b"- name: Page\n  href: page.md\n"
+            ),
+        ),
+    ],
+)
+def test_toc_edits_removals_moves_and_comment_only_changes_fail_closed(
+    before: bytes, after: bytes
+) -> None:
+    document = entry("manual/page.md")
+    source_path = RepoPath("ydb/docs/ru/core/manual/toc_i.yaml")
+    with pytest.raises(TranslationPlanError, match="toc_delta_unsupported"):
+        build_translation_plan(
+            inventory(change(document.pair.source_path.value), change(source_path.value)),
+            ROOTS,
+            manifest(document),
+            toc_postconditions=toc_postcondition("manual/toc_i.yaml"),
+            toc_source_snapshots={source_path: (before, after)},
+        )
+
+
+def test_translation_plan_hash_binds_source_toc_head() -> None:
+    document = entry("manual/page.md")
+    source_path = RepoPath("ydb/docs/ru/core/manual/toc_i.yaml")
+
+    def planned(name: bytes):
+        return build_translation_plan(
+            inventory(change(document.pair.source_path.value), change(source_path.value)),
+            ROOTS,
+            manifest(document),
+            toc_postconditions=toc_postcondition("manual/toc_i.yaml"),
+            toc_source_snapshots={
+                source_path: (
+                    b"items:\n",
+                    b"items:\n- name: " + name + b"\n  href: page.md\n",
+                )
+            },
+        )
+
+    left = planned(b"Page")
+    right = planned(b"Other page")
+    assert translation_plan_sha256(left) != translation_plan_sha256(right)
 
 
 def test_same_counterpart_changed_in_both_locales_is_a_collision() -> None:
@@ -449,6 +563,9 @@ def test_reconciliation_requires_changed_toc_result_not_unrelated_output() -> No
         ROOTS,
         manifest(document),
         toc_postconditions=toc_postcondition("manual/toc_i.yaml", expected_toc),
+        toc_source_snapshots=toc_source_snapshots(
+            "manual/toc_i.yaml", ("Page", "page.md")
+        ),
     )
     with pytest.raises(TranslationPlanError, match="translation_plan_toc_uncovered"):
         reconcile_fixed_outputs(plan, ((document.pair.target_path.value, b"translated"),))

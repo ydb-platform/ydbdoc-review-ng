@@ -42,6 +42,15 @@ _PLAN_FAILURE_MESSAGES = {
     "translation_plan_toc_postcondition_missing": (
         "для изменённого TOC не удалось построить точное ожидаемое содержимое"
     ),
+    "translation_plan_toc_source_snapshot_missing": (
+        "для изменённого TOC отсутствует закреплённый source base или source head"
+    ),
+    "translation_plan_toc_delta_unsupported": (
+        "изменение TOC содержит пока неподдерживаемую операцию кроме добавления страниц"
+    ),
+    "translation_plan_toc_delta_uncovered": (
+        "изменение TOC затрагивает страницу, отсутствующую в плане перевода"
+    ),
     "translation_plan_toc_operation_unsupported": (
         "операция над TOC пока не поддерживается безопасным планировщиком"
     ),

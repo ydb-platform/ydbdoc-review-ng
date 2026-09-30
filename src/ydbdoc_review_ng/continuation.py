@@ -488,13 +488,23 @@ def scope_sha256(manifest: ScopeManifest, /) -> ContentHash:
 
 
 def checkpoint_scope_sha256(
-    manifest: ScopeManifest, inventory: SourceChangeInventory, /
+    manifest: ScopeManifest,
+    inventory: SourceChangeInventory,
+    translation_plan_sha256: ContentHash | None = None,
+    /,
 ) -> ContentHash:
-    """Bind a checkpoint's scope to the exact metadata and PR-file provenance."""
+    """Bind a checkpoint to exact scope, inventory and cross-file execution plan."""
+    if translation_plan_sha256 is not None:
+        _exact(translation_plan_sha256, ContentHash)
     canonical = json.dumps(
         {
             "scope_sha256": scope_sha256(manifest).value,
             "source_inventory": json.loads(encode_source_inventory(inventory)),
+            "translation_plan_sha256": (
+                None
+                if translation_plan_sha256 is None
+                else translation_plan_sha256.value
+            ),
         },
         ensure_ascii=False,
         separators=(",", ":"),

@@ -118,11 +118,13 @@ from ydbdoc_review_ng.translation.document import (
 from ydbdoc_review_ng.translation_plan import (
     PathKind,
     TranslationPlan,
+    TranslationPlanError,
     build_translation_plan,
     classify_path,
     preflight_inventory,
     reconcile_candidate_outputs,
     reconcile_fixed_outputs,
+    translation_plan_sha256,
 )
 
 if TYPE_CHECKING:
@@ -928,6 +930,7 @@ class RuntimeContent:
                 ):
                     raise RuntimeBoundaryError("verification_metadata_mismatch")
         toc_postconditions: dict[RepoPath, bytes] = {}
+        toc_source_snapshots: dict[RepoPath, tuple[bytes | None, bytes]] = {}
         if selection.manifest is not None:
             source_locale = (
                 "ru" if selection.manifest.direction is Direction.RU_TO_EN else "en"
@@ -945,6 +948,15 @@ class RuntimeContent:
                 ):
                     continue
                 assert classified.relative is not None
+                source_after = self.source.github.read_bytes(
+                    snapshots.source_snapshot, raw.path
+                )
+                if source_after is None:
+                    raise TranslationPlanError("translation_plan_toc_source_snapshot_missing")
+                source_before = self.source.github.read_bytes(
+                    self.source.source_base_snapshot, raw.path
+                )
+                toc_source_snapshots[raw.path] = (source_before, source_after)
                 target_path = RepoPath(target_root.value + "/" + classified.relative)
                 expected = files.get(target_path.value)
                 if target_path.value not in files:
@@ -958,6 +970,7 @@ class RuntimeContent:
             self.roots,
             selection.manifest,
             toc_postconditions=toc_postconditions,
+            toc_source_snapshots=toc_source_snapshots,
         )
         documents = []
         target_snapshot = SnapshotRef(
@@ -1228,7 +1241,11 @@ class RuntimeContent:
                     STATE_VERSION,
                     ContinuationStage.TRANSLATION,
                     plans.manifest.direction,
-                    checkpoint_scope_sha256(plans.manifest, plans.preparation.inventory),
+                    checkpoint_scope_sha256(
+                        plans.manifest,
+                        plans.preparation.inventory,
+                        translation_plan_sha256(plans.translation_plan),
+                    ),
                     self.accepted_documents,
                     tuple(doc.entry.pair.target_path for doc in documents[index:]),
                     (),
@@ -1886,7 +1903,11 @@ class RuntimeContent:
             STATE_VERSION,
             ContinuationStage.REVIEW,
             plans.manifest.direction,
-            checkpoint_scope_sha256(plans.manifest, plans.preparation.inventory),
+            checkpoint_scope_sha256(
+                plans.manifest,
+                plans.preparation.inventory,
+                translation_plan_sha256(plans.translation_plan),
+            ),
             tuple(sorted(accepted_documents, key=lambda item: item.target_path.value)),
             (),
             review_paths,

@@ -97,17 +97,23 @@ outputs claimed by the completed plan. Unsupported localized inputs and
 unsupported statuses stop the job rather than publish an incomplete translation.
 
 For the currently supported TOC migration path, metadata planning freezes the
-SHA-256 of the complete expected target TOC before document-model calls. Both
-fixed-output and final-candidate reconciliation require that exact digest; a
-non-empty but stale or unrelated TOC cannot satisfy the plan. PR #50839 has a
-full runtime golden built from the recorded complete RU/EN files and proves
-that target-only EN navigation is preserved while `BlobDepot decommit` becomes
-`Group Decommissioning`.
+SHA-256 of the complete expected target TOC before document-model calls. It
+also reads the pinned source PR base and head and proves that the complete YAML
+delta consists only of byte-preserving appended `name + href` Markdown entries. Every
+added href must resolve to a document already present in the selected plan.
+Edits, removals, moves, include/group changes, comments-only changes and an
+unplanned second entry fail closed. Both fixed-output and final-candidate
+reconciliation require the exact target digest; a non-empty but stale or
+unrelated TOC cannot satisfy the plan. The source base/head digests and target
+postcondition are part of the canonical plan hash checked by `doc_continue`.
+PR #50839 has a full runtime golden built from the recorded source base/head
+and complete EN file and proves that target-only EN navigation is preserved
+while `BlobDepot decommit` becomes `Group Decommissioning`.
 
 This is still a deliberately narrow supported subset. Markdown lifecycle and
-the target-H1-backed TOC migration associated with selected Markdown are
-executable. Direct asset/redirect work, metadata-only direction, general TOC
-prose translation, TOC remove/rename/copy and persisted plan replay remain
+the target-H1-backed TOC entry-addition migration associated with selected
+Markdown are executable. Direct asset/redirect work, metadata-only direction,
+general TOC prose translation and TOC edit/remove/rename/copy remain
 fail-closed. They must be
 implemented with source-base snapshots and per-entry results before support is
 advertised. The legacy TOC title repair still uses an established target H1 and
@@ -122,10 +128,10 @@ effort.
 1. **Blocker — inventory filtering.** `prepare_source()` turns only changed
    Markdown paths into scope inputs. Every other file kind used to disappear
    before direction selection and publication.
-2. **Blocker — no source-delta snapshot.** The runtime keeps the source head and
-   current translation base, but not the immutable source PR base as a planning
-   input. Consequently it cannot distinguish a TOC addition/removal/reorder
-   from a legitimate pre-existing difference between locales.
+2. **Resolved for the supported subset — source-delta snapshot.** The runtime
+   pins and reads the source PR base and head. The plan accepts only provable
+   simple entry additions and hashes both snapshots. Unsupported delta shapes
+   stop before model calls.
 3. **Blocker — metadata is a side effect.** TOC and redirect edits are emitted
    while iterating selected Markdown entries. A TOC-only or redirects-only PR
    has no document entry which can trigger that code.
@@ -149,9 +155,10 @@ effort.
 8. **High — verify shares discovery blind spots.** `doc_verify` reconstructs
    scope with the same rules. It can confirm consistency with the generator
    without proving that the original PR inventory was completely handled.
-9. **High — the plan is not persisted.** Checkpoints hash the Markdown scope and
-   source inventory, not a canonical cross-file execution plan. Continue and
-   verify therefore rediscover implicit metadata work.
+9. **Resolved — continuation plan identity.** Checkpoints bind the canonical
+   cross-file plan hash, including source TOC base/head and target
+   postconditions. Continue reconstructs the plan from pinned inputs and rejects
+   any mismatch before model calls.
 10. **Medium — no user-visible plan.** Reports do not show which source files
    translated, deleted, synchronized, proved no-op, or were rejected. This made
    a correct no-op and a forgotten file indistinguishable to a reviewer.

@@ -144,7 +144,11 @@ class RuntimeServices:
                     "ref": "source",
                     "repo": {"full_name": "ydb-platform/ydb"},
                 },
-                "base": {"ref": "main", "repo": {"full_name": "ydb-platform/ydb"}},
+                "base": {
+                    "ref": "main",
+                    "sha": self.base,
+                    "repo": {"full_name": "ydb-platform/ydb"},
+                },
                 "changed_files": 1,
             }
         if path == "/pulls/43":
@@ -154,7 +158,11 @@ class RuntimeServices:
                     "ref": "translation/pr-42",
                     "repo": {"full_name": "ydb-platform/ydb"},
                 },
-                "base": {"ref": "main", "repo": {"full_name": "ydb-platform/ydb"}},
+                "base": {
+                    "ref": "main",
+                    "sha": self.base,
+                    "repo": {"full_name": "ydb-platform/ydb"},
+                },
                 "body": "<!-- ydbdoc-source-pr:42 -->\n<!-- ydbdoc-source-sha:"
                 + self.source
                 + " -->",
