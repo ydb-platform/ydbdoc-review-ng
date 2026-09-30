@@ -389,13 +389,28 @@ class GitHubBackend:
         )
 
     def list_comments(self, pr_number: int, /) -> tuple[Comment, ...]:
-        publisher = self.transport("GET", "/user", None)
-        if not isinstance(publisher, dict) or type(publisher.get("id")) is not int:
-            raise RuntimeBoundaryError("github_publisher_identity_invalid")
-        publisher_id = publisher["id"]
+        publisher_id: int | None = None
+        try:
+            publisher = self.transport("GET", "/user", None)
+            if not isinstance(publisher, dict) or type(publisher.get("id")) is not int:
+                raise RuntimeBoundaryError("github_publisher_identity_invalid")
+            publisher_id = publisher["id"]
+        except RuntimeBoundaryError:
+            # GitHub App installation tokens (including Actions GITHUB_TOKEN)
+            # cannot call the user endpoint. Their repository mutations have
+            # the stable github-actions[bot] actor instead. Marker filtering in
+            # the reporter still prevents unrelated bot comments from matching.
+            pass
         rows = self.request("GET", f"/issues/{pr_number}/comments?per_page=100")
         return tuple(
-            Comment(int(row["id"]), row["user"].get("id") == publisher_id, row["body"])
+            Comment(
+                int(row["id"]),
+                row["user"].get("id") == publisher_id
+                if publisher_id is not None
+                else row["user"].get("login") == "github-actions[bot]"
+                and row["user"].get("type") == "Bot",
+                row["body"],
+            )
             for row in rows
         )
 

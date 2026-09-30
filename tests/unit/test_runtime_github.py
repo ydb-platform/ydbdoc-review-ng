@@ -290,6 +290,34 @@ def test_comment_ownership_uses_mutation_identity_while_comment_list_uses_read_t
     ]
 
 
+def test_actions_installation_token_uses_bot_comment_identity_without_user_endpoint() -> None:
+    def transport(method, path, payload):
+        if path == "/user":
+            raise RuntimeBoundaryError("github_request_failed")
+        if path.endswith("/issues/42/comments?per_page=100"):
+            return [
+                {
+                    "id": 7,
+                    "user": {
+                        "id": 41898282,
+                        "type": "Bot",
+                        "login": "github-actions[bot]",
+                    },
+                    "body": "<!-- ydbdoc-qa-report -->",
+                },
+                {
+                    "id": 8,
+                    "user": {"id": 1, "type": "User", "login": "maintainer"},
+                    "body": "human comment",
+                },
+            ]
+        raise AssertionError((method, path, payload))
+
+    comments = GitHubBackend(transport).list_comments(42)
+
+    assert [item.authored_by_publisher for item in comments] == [True, False]
+
+
 def test_immutable_content_reads_are_cached_but_new_snapshots_are_read():
     import base64
 
