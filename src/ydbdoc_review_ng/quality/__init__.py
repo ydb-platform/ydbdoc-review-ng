@@ -4,9 +4,11 @@ from ydbdoc_review_ng.quality.critic import (
     CriticResponseError,
     CriticResponseErrorReason,
     build_critic_request,
+    build_pr_arbiter_request,
     build_pr_critic_request,
     critic_schema,
     parse_critic_response,
+    parse_pr_arbiter_response,
     parse_pr_critic_response,
 )
 from ydbdoc_review_ng.quality.repair import (
@@ -35,9 +37,11 @@ __all__ = [
     "RepairErrorReason",
     "Verdict",
     "build_critic_request",
+    "build_pr_arbiter_request",
     "build_pr_critic_request",
     "critic_schema",
     "parse_critic_response",
+    "parse_pr_arbiter_response",
     "parse_pr_critic_response",
     "review_translation",
 ]

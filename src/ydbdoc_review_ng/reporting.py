@@ -131,7 +131,7 @@ def _finding_lines(review: QualityReviewResult) -> list[str]:
     if omitted_files:
         lines.append(f"Ещё {omitted_files} затронутых файлов не показаны.")
     if not findings:
-        lines.append("- Проверка вернула RED без конкретного замечания.")
+        lines.append(f"- Проверка вернула {review.final.verdict.value} без конкретного замечания.")
     return lines
 
 
@@ -152,8 +152,9 @@ def render_report(
     ]
     if context.source_pr_number is not None:
         lines.append(f"Перевод PR #{context.source_pr_number}")
-    if review.final.verdict is Verdict.RED:
+    if review.final.verdict in (Verdict.YELLOW, Verdict.RED):
         lines.extend(_finding_lines(review))
+    if review.final.verdict is Verdict.RED:
         lines.extend(
             (
                 "### Как продолжить",
@@ -174,7 +175,7 @@ def render_report(
         lines.append(
             "Проверьте возможный дубликат вручную."
         )
-    else:
+    elif review.final.verdict is Verdict.GREEN:
         lines.append("Перевод проверен. Исправления не требуются.")
     return "\n".join(lines)
 

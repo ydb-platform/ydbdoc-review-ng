@@ -10,6 +10,7 @@ from ydbdoc_review_ng.continuation import AcceptedMap
 
 class Verdict(str, Enum):
     GREEN = "GREEN"
+    YELLOW = "YELLOW"
     RED = "RED"
 
 

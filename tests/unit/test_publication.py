@@ -513,6 +513,33 @@ def test_red_report_is_short_russian_and_actionable_without_internal_details():
     assert SECRET not in report
 
 
+@pytest.mark.parametrize("verdict,icon", [("YELLOW", "🟡"), ("RED", "🔴")])
+def test_residual_findings_keep_arbiter_status_and_red_only_continue_recipe(verdict, icon):
+    finding = Finding(
+        True,
+        "Название расходится со статьёй",
+        "Используйте одно название",
+        "Article",
+        PATH.value,
+        2,
+    )
+    report = render_report(
+        review(Verdict(verdict), (finding,)), ReportContext(SOURCE, TARGET, Decimal("1.25"))
+    )
+    assert report.startswith(f"{icon} {verdict}")
+    for value in (
+        PATH.value,
+        "строка 2",
+        "Article",
+        "Название расходится со статьёй",
+        "Используйте одно название",
+    ):
+        assert value in report
+    assert ("/ydbdoc continue" in report) is (verdict == "RED")
+    assert ("doc_continue" in report) is (verdict == "RED")
+    assert "Исправления не требуются" not in report
+
+
 def test_red_report_renders_every_finding_for_each_file() -> None:
     other = "ydb/docs/en/core/other.md"
     findings = tuple(

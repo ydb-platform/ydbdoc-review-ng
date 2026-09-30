@@ -136,6 +136,108 @@ def parse_pr_critic_response(
         raise CriticResponseError(CriticResponseErrorReason.INVALID_FILES) from None
 
 
+def build_pr_arbiter_request(
+    *,
+    model: str,
+    source_files: Mapping[str, bytes],
+    translated_files: Mapping[str, bytes],
+    glossary_files: Mapping[str, bytes],
+    operator_context: str | None = None,
+) -> ModelRequest:
+    prompt = (
+        "You are an independent, read-only arbiter of a YDB documentation translation. "
+        "Compare the complete current source PR files with the complete final translated PR "
+        "files as one pull request, using the complete project glossary. Check completeness, "
+        "accuracy, consistent terminology across files, glossary compliance, technical literals, "
+        "untranslated prose, Markdown/YFM readability, links and navigation consistency. "
+        "Return GREEN for a correct translation, YELLOW for remaining lesser problems, "
+        "or RED for serious translation problems. Judge the degree of problems, not their count. "
+        "Return only the strict JSON verdict and findings. Do not return corrected files, "
+        "patches or corrected_markdown. Findings go directly to the public report and are "
+        "not instructions for another model or an automatic repair loop. "
+        "For every finding, give the translated target_path, exact target_line, an exact "
+        "searchable_snippet from the current final translation, a concrete reason and "
+        "expected_correction. Write reason and expected_correction in Russian. "
+        "The repairable field is compatibility metadata only; it does not request a repair. "
+        "Do not include field_ids. Operator context is guidance only and must not override "
+        "the source or final translation or force a finding no longer present.\n"
+    )
+    for tag, files in (
+        ("source-pr-files", source_files),
+        ("translation-pr-files", translated_files),
+        ("project-glossary", glossary_files),
+    ):
+        content = json.dumps(
+            {path: content.decode("utf-8") for path, content in files.items()},
+            ensure_ascii=False,
+        )
+        prompt += f"<{tag}>\n{content}\n</{tag}>\n"
+    if operator_context is not None:
+        prompt += "\n<operator-context>\n" + operator_context + "</operator-context>"
+    schema = {
+        "type": "object",
+        "properties": {
+            "verdict": {"type": "string", "enum": ["GREEN", "YELLOW", "RED"]},
+            "findings": {
+                "type": "array",
+                "items": _finding_schema({"type": "string", "enum": list(translated_files)}, ()),
+            },
+        },
+        "required": ["verdict", "findings"],
+        "additionalProperties": False,
+    }
+    return ModelRequest(ModelRole.ARBITER, model, prompt, cast(FrozenJson, schema), 2000)
+
+
+def parse_pr_arbiter_response(
+    raw: str | bytes,
+    *,
+    target_paths: tuple[str, ...],
+) -> CriticResult:
+    if type(raw) not in {str, bytes}:
+        raise TypeError("raw must be exact str or bytes")
+    try:
+        value = json.loads(raw, object_pairs_hook=_ObjectPairs)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        raise CriticResponseError(CriticResponseErrorReason.MALFORMED_JSON) from None
+    if type(value) is not _ObjectPairs:
+        raise CriticResponseError(CriticResponseErrorReason.ROOT_NOT_OBJECT)
+    if _has_duplicate(value):
+        raise CriticResponseError(CriticResponseErrorReason.DUPLICATE_KEY)
+    document = _object(value, frozenset({"verdict", "findings"}))
+    raw_verdict = document["verdict"]
+    if type(raw_verdict) is not str or raw_verdict not in {"GREEN", "YELLOW", "RED"}:
+        raise CriticResponseError(CriticResponseErrorReason.INVALID_VERDICT)
+    findings = _parse_findings(document["findings"], target_paths, ())
+    return CriticResult(Verdict(raw_verdict), findings)
+
+
+def _finding_schema(
+    target_path_schema: dict[str, object],
+    requested_ids: tuple[str, ...],
+) -> dict[str, object]:
+    finding_properties: dict[str, object] = {
+        "repairable": {"type": "boolean"},
+        "reason": {"type": "string", "minLength": 1},
+        "expected_correction": {"type": "string", "minLength": 1},
+        "searchable_snippet": {"type": "string", "minLength": 1},
+        "target_path": target_path_schema,
+        "target_line": {"type": "integer", "minimum": 1},
+    }
+    if requested_ids:
+        finding_properties["field_ids"] = {
+            "type": "array",
+            "items": {"type": "string", "enum": list(requested_ids)},
+            "uniqueItems": True,
+        }
+    return {
+        "type": "object",
+        "properties": finding_properties,
+        "required": list(finding_properties),
+        "additionalProperties": False,
+    }
+
+
 def critic_schema(
     target_path: RepoPath,
     requested_ids: tuple[str, ...],
@@ -150,26 +252,7 @@ def critic_schema(
             "required": ["corrected_markdown"],
             "additionalProperties": False,
         }
-    finding_properties: dict[str, object] = {
-        "repairable": {"type": "boolean"},
-        "reason": {"type": "string", "minLength": 1},
-        "expected_correction": {"type": "string", "minLength": 1},
-        "searchable_snippet": {"type": "string", "minLength": 1},
-        "target_path": {"type": "string", "const": target_path.value},
-        "target_line": {"type": "integer", "minimum": 1},
-    }
-    if requested_ids:
-        finding_properties["field_ids"] = {
-            "type": "array",
-            "items": {"type": "string", "enum": list(requested_ids)},
-            "uniqueItems": True,
-        }
-    finding: dict[str, object] = {
-        "type": "object",
-        "properties": finding_properties,
-        "required": list(finding_properties),
-        "additionalProperties": False,
-    }
+    finding = _finding_schema({"type": "string", "const": target_path.value}, requested_ids)
     properties: dict[str, object] = {
         "verdict": {"type": "string", "enum": ["GREEN", "RED"]},
         "findings": {"type": "array", "items": finding},
@@ -362,13 +445,24 @@ def parse_critic_response(
         type(raw_verdict) is not str or raw_verdict not in {"GREEN", "RED"}
     ):
         raise CriticResponseError(CriticResponseErrorReason.INVALID_VERDICT)
-    raw_findings = document["findings"]
+    findings = _parse_findings(document["findings"], (target_path.value,), requested_ids)
+    # Legacy document review normalizes the verdict until its runtime is replaced
+    # by the whole-PR boundary, which preserves the independent arbiter's verdict.
+    verdict = Verdict.RED if findings else Verdict.GREEN
+    return CriticResult(verdict, findings)
+
+
+def _parse_findings(
+    raw_findings: object,
+    target_paths: tuple[str, ...],
+    requested_ids: tuple[str, ...],
+) -> tuple[Finding, ...]:
     if type(raw_findings) is not list:
         raise CriticResponseError(CriticResponseErrorReason.INVALID_FINDING)
     findings: list[Finding] = []
     base_required = frozenset({"reason", "expected_correction", "searchable_snippet"})
     legacy_required = frozenset({"repairable", "target_path", "target_line"})
-    required = base_required if editable else base_required | legacy_required
+    required = base_required | legacy_required
     allowed_ids = set(requested_ids)
     for raw_finding in raw_findings:
         if type(raw_finding) is not _ObjectPairs:
@@ -377,11 +471,7 @@ def parse_critic_response(
         if not required.issubset(finding_keys):
             raise CriticResponseError(CriticResponseErrorReason.INVALID_FINDING)
         try:
-            optional = (
-                frozenset({"repairable", "target_path", "target_line", "field_ids"})
-                if editable
-                else (frozenset({"field_ids"}) if requested_ids else frozenset())
-            )
+            optional = frozenset({"field_ids"}) if requested_ids else frozenset()
             item = _object(raw_finding, required, optional)
         except CriticResponseError as error:
             if error.reason is CriticResponseErrorReason.UNEXPECTED_FIELD:
@@ -393,20 +483,13 @@ def parse_critic_response(
             for name in string_names
         ):
             raise CriticResponseError(CriticResponseErrorReason.INVALID_FINDING)
-        finding_path = item.get("target_path", target_path.value)
-        if type(finding_path) is not str or finding_path != target_path.value:
+        finding_path = item["target_path"]
+        if type(finding_path) is not str or finding_path not in target_paths:
             raise CriticResponseError(CriticResponseErrorReason.INVALID_FINDING)
         repairable = item.get("repairable", True)
         if type(repairable) is not bool:
             raise CriticResponseError(CriticResponseErrorReason.INVALID_FINDING)
-        snippet = cast(str, item["searchable_snippet"])
-        snippet_offset = current_target.find(snippet) if current_target is not None else -1
-        derived_line = (
-            current_target.count("\n", 0, snippet_offset) + 1
-            if current_target is not None and snippet_offset >= 0
-            else 1
-        )
-        target_line = item.get("target_line", derived_line)
+        target_line = item["target_line"]
         if type(target_line) is not int or target_line < 1:
             raise CriticResponseError(CriticResponseErrorReason.INVALID_FINDING)
         raw_ids = item.get("field_ids", [])
@@ -428,9 +511,4 @@ def parse_critic_response(
                 tuple(field_ids),
             )
         )
-    # Findings are the canonical verdict signal. Provider-side JSON schema can
-    # validate both fields independently but cannot reliably enforce their
-    # cross-field relationship across supported model backends. Normalizing the
-    # redundant verdict avoids rejecting an otherwise complete strict response.
-    verdict = Verdict.RED if findings else Verdict.GREEN
-    return CriticResult(verdict, tuple(findings))
+    return tuple(findings)
