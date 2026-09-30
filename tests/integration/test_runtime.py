@@ -1699,7 +1699,9 @@ def test_verify_replays_pinned_toc_plan_instead_of_translated_h1() -> None:
             self.branch_head = self.translated
             self.ref_files = {
                 self.source: {
-                    directory.format("ru") + "blobdepot_decommit.md": b"# Decommission source\n",
+                    directory.format("ru") + "blobdepot_decommit.md": (
+                        b"# Decommission source\n\nCurrent source.\n\nUnchanged paragraph.\n"
+                    ),
                     directory.format("ru") + "toc_i.yaml": (
                         "items:\n  - name: Декомиссия BlobDepot\n"
                         "    href: blobdepot_decommit.md\n"
@@ -1719,7 +1721,7 @@ def test_verify_replays_pinned_toc_plan_instead_of_translated_h1() -> None:
                     # A translated heading is prose and may use different
                     # capitalization than the already frozen navigation label.
                     directory.format("en") + "blobdepot_decommit.md": (
-                        b"# Group decommissioning\n"
+                        b"# Group decommissioning\n\nCurrent translation.\n\nUnchanged paragraph.\n"
                     ),
                     directory.format("en") + "toc_i.yaml": (
                         b'items:\n  - name: "Group Decommissioning"\n'
@@ -1767,13 +1769,35 @@ def test_verify_replays_pinned_toc_plan_instead_of_translated_h1() -> None:
 
     authorized = source.authorize_verify(request)
     snapshot = source.snapshot_verify(authorized)
-    candidate = RuntimeContent(source, Models(), {}).load_verification_candidate(snapshot)
+    content = RuntimeContent(source, Models(), {})
+    candidate = content.load_verification_candidate(snapshot)
     files = unpack(candidate.content)
 
     assert b'"Group Decommissioning"' in files[directory.format("en") + "toc_i.yaml"]
     assert files[directory.format("en") + "blobdepot_decommit.md"] == (
-        b"# Group decommissioning\n"
+        b"# Group decommissioning\n\nCurrent translation.\n\nUnchanged paragraph.\n"
     )
+    source_files, translated_files, glossary_files = content._pr_review_inputs(candidate)
+    assert source_files == {
+        directory.format("ru") + "blobdepot_decommit.md": (
+            b"# Decommission source\n\nCurrent source.\n\nUnchanged paragraph.\n"
+        ),
+        directory.format("ru") + "toc_i.yaml": (
+            "items:\n  - name: Декомиссия BlobDepot\n"
+            "    href: blobdepot_decommit.md\n"
+        ).encode(),
+    }
+    assert translated_files == {
+        directory.format("en") + "blobdepot_decommit.md": (
+            b"# Group decommissioning\n\nCurrent translation.\n\nUnchanged paragraph.\n"
+        ),
+        directory.format("en") + "toc_i.yaml": (
+            b'items:\n  - name: "Group Decommissioning"\n'
+            b"    href: blobdepot_decommit.md\n"
+        ),
+    }
+    assert glossary_files == {}
+    assert all(method == "GET" for method, _ in services.events)
 
 
 @pytest.mark.parametrize("operation", ["added", "removed", "renamed"])

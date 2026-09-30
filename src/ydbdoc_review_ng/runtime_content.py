@@ -638,6 +638,53 @@ class RuntimeContent:
         ] = {}
         self.publisher: GitPublicationAdapter
 
+    def _pr_review_inputs(
+        self, candidate: WorkflowCandidate
+    ) -> tuple[dict[str, bytes], dict[str, bytes], dict[str, bytes]]:
+        """Read complete pinned PR text and glossary without expanding translation scope."""
+        plans = self.plans
+        if plans is None or plans.manifest is None:
+            raise RuntimeBoundaryError("review_inputs_missing_scope")
+        preparation = plans.preparation
+        source_snapshot = preparation.snapshots.source_snapshot
+        source_root, target_root = (
+            (self.roots.ru, self.roots.en)
+            if plans.manifest.direction is Direction.RU_TO_EN
+            else (self.roots.en, self.roots.ru)
+        )
+        source_locale = "ru" if plans.manifest.direction is Direction.RU_TO_EN else "en"
+        candidate_files = unpack(candidate.content)
+        source_files: dict[str, bytes] = {}
+        translated_files: dict[str, bytes] = {}
+        for change in preparation.inventory.files:
+            classified = classify_path(self.roots, change.path)
+            if (
+                classified.locale != source_locale
+                or classified.kind not in {PathKind.MARKDOWN, PathKind.TOC}
+                or change.status == "removed"
+            ):
+                continue
+            source = self.source.github.read_bytes(source_snapshot, change.path)
+            if source is None:
+                continue
+            source_files[change.path.value] = source
+            assert classified.relative is not None
+            target_path = f"{target_root.value}/{classified.relative}"
+            target = candidate_files.get(target_path)
+            if target is not None:
+                translated_files[target_path] = target
+
+        glossary_files: dict[str, bytes] = {}
+        for root, snapshot in (
+            (source_root, source_snapshot),
+            (target_root, preparation.metadata_snapshot),
+        ):
+            path = RepoPath(f"{root.value}/concepts/glossary.md")
+            glossary = self.source.github.read_bytes(snapshot, path)
+            if glossary is not None:
+                glossary_files[path.value] = glossary
+        return source_files, translated_files, glossary_files
+
     def _terminology_context(
         self,
         document: Document,
