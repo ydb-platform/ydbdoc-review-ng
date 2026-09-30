@@ -6,15 +6,6 @@ factory returns real `LinearWorkflows`. Construction performs no I/O; each
 instance is one job. Tests replace only `github_transport`, `model_transport`
 and `ydb_executor`. No separate deployment Python module must be authored.
 
-## Approved review contract and implementation status
-
-The full PR review contract approved on 2026-09-30 is not implemented or
-provider-validated at baseline `2a1c268`. The deployment settings below do not
-prove compliance. Whole-file/source-only translation remains; old target prose
-is never a translation or repair source. Before semantic acceptance, the new
-production path needs a real-provider full-context probe and independent content
-review of the #50839/#54590 witness. Prior excerpt probes are historical only.
-
 ## Environment
 
 | Setting | Meaning |
@@ -25,9 +16,7 @@ review of the #50839/#54590 witness. Prior excerpt probes are historical only.
 | `YANDEX_API_KEY`, `YANDEX_FOLDER_ID` | Native Yandex model credentials. |
 | `YDBDOC_MODEL` | Optional translation model name, default `deepseek-v4-flash`. DeepSeek uses the Yandex Cloud OpenAI-compatible endpoint. |
 | `YDBDOC_MODEL_CRITIC` | Semantic critic-editor, default `yandexgpt-5.1`, independently selected from the translator. |
-| `YDBDOC_MODEL_ARBITER` | Independent read-only arbiter, default `YDBDOC_MODEL`. Only its findings define GREEN/RED. |
-| `YDBDOC_MODEL_CRITIC_FALLBACK` | Optional one-attempt editor fallback after exhausted content filter. The approved contract requires the identical complete PR/glossary/schema and a fresh provider-capacity admission, never translator units. Not yet implemented. |
-| `YDBDOC_MAX_CRITIC_REQUEST_CHARACTERS` | Historical excerpt limit, default `48000`; insufficient for full PR review. New admission must verify input/context/output capabilities for the exact serialized request and complete-file response reserve. Unknown capability or oversize is terminal before publication. |
+| `YDBDOC_MODEL_ARBITER` | Independent read-only arbiter, default `YDBDOC_MODEL`. Reviews the final complete result and returns GREEN/YELLOW/RED by degree of problems. Residual findings go directly to the report. |
 | `YDBDOC_MODEL_FALLBACK` | Optional fallback model name, default `yandexgpt-5.1`. Used when the primary model returns a provider failure or content filter. |
 | `YDB_ENDPOINT`, `YDB_DATABASE`, `YDB_TOKEN` | Optional YDB endpoint, database path and access token. Connection is lazy. |
 | `YDB_SA_KEY` | Existing inline Yandex Cloud service-account JSON. Used when `YDB_TOKEN` is absent; endpoint/database default to the deployed documentation database and remain overridable by `YDB_ENDPOINT`/`YDB_DATABASE`. |
@@ -45,13 +34,11 @@ Current-job cost is unknown if any attempt cost is unknown. The daily budget
 uses all known costs across all three modes and all roles.
 DeepSeek V4 Flash responses are priced from provider usage at the published
 rates (0.3 RUB/1000 input, 0.075 RUB/1000 cached input, 0.5 RUB/1000 output),
-so an ordinary DeepSeek response has a numeric cost. Translate retains article
-`target_path`. Under the approved contract PR editor/arbiter use NULL plus an
-explicit PR scope, contract version and context digest; they must not be assigned
-to an arbitrary article or mixed with unattributed historical rows. All attempts
-remain auditable and included in costs for pinned `source_sha`. The public QA
-comment reports current-job cost; detailed attribution stays in audit. Unknown
-and not-called costs are never rendered as zero.
+so an ordinary DeepSeek response has a numeric cost. Translate attempts retain
+their article `target_path`; direction remains PR-wide. The QA comment reads cumulative costs
+for the pinned `source_sha`, breaks them down by article and role, and lists old
+rows without a path as unattributed. Unknown and not-called costs are never
+rendered as zero.
 
 ## Pinned content and publication
 
@@ -73,40 +60,24 @@ then an allowed actor applies label `doc_continue`. The latest eligible comment
 must precede the current label event; later edits also cannot supply context.
 The runtime resumes only a live checkpoint for direction, pending translation,
 or RED review. It validates the saved source/base, exact translation head,
-scope digest and field IDs, then rebuilds from authoritative source. Under the
-approved contract accepted maps are reused for pending-only translation, while
-any semantic review includes the whole PR. Review checkpoints bind a new contract
-version, source/candidate/glossary manifests and digests; incompatible old
-chunk-review checkpoints fail closed. Problem paths are diagnostic hints only. GREEN closes the
+scope digest and field IDs, then rebuilds from authoritative source. Accepted
+maps are reused for translation; semantic review covers the complete PR. GREEN closes the
 checkpoint; another semantic stop keeps the original 14-day expiry. Transport
 and persistence failures require a new run. Context remains private to new
 model calls and audit, never the report. RED exits 1 in every CLI mode.
 
-The approved pipeline builds one closed PRReviewContext after pair discovery,
-direction, scope/preflight and whole-file translation. It contains complete
-inventory/operations, complete current source PR files (not diffs or pre-change
-versions) and complete corresponding translation PR files including
-index/TOC, allowed paths, exact snapshots/digests, both full pinned RU/EN glossaries
-and technical-fragment validation data. One editor returns exactly all editable
-text paths as complete files; malformed, missing, extra, duplicate, partial,
-binary, deletion, traversal and out-of-scope entries fail closed. Runtime applies
-the map atomically in memory, enforces source-owned technical values and metadata
-plan constraints and validates the corrections. The independent read-only
-arbiter reviews the complete final candidate
-with the full context/glossary. A valid full response, empty findings, complete
-nonempty coverage and matching digest are all required for GREEN. Editor changes,
-empty response or absent arbiter never imply GREEN. One guarded publication
-follows; branch movement blocks stale updates. QA describes semantic quality
-independently of build/CI. RED findings go directly to the report and are never
-automatically repaired or passed onward. There is no semantic repair loop.
-
-Before editor only local structural checks and safe normalization run. After arbiter any byte change needs
-another full review. Review input cannot be split, summarized or given a filtered
-glossary. The witness glossary alone is 225432 UTF-8 bytes. Each exact editor and
-post-edit arbiter request needs verified input/output capacity, including the
-complete-file JSON response reserve. Translator splitting remains translator-only.
-Review retries follow REQUIREMENTS_RU.md §5, including at most two primary
-attempts per role and an optional single full-context editor fallback.
+The confirmed semantic process gives one critic the complete current source PR
+files (not diffs or pre-change versions), the complete corresponding translation
+PR files and the complete glossary. The critic compares the whole PR and returns
+complete corrected files without handing findings to another model or starting
+a repair loop. Runtime checks and applies the corrections. One independent
+arbiter reviews the final complete result and returns GREEN/YELLOW/RED by degree
+of problems. Residual findings go directly to the report and are never repaired
+or forwarded. Build/CI do not participate in the semantic verdict. This contract
+is not yet implemented. Validated bytes become Git Data blobs/tree/commit and a
+guarded ref update. Byte-identical output cannot create a PR or comment. Final QA
+follows publication; branch movement blocks stale reporting. An updated PR body records the exact
+new translation commit rather than retaining a prior run's SHA.
 
 Metadata production is narrow: PyYAML's SafeLoader compose API validates the
 complete node structure of pinned source root/changed TOCs before model calls.

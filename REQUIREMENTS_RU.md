@@ -2,8 +2,6 @@
 
 Этот файл является единственным источником действующих требований к конвейеру.
 Исторические спецификации, планы и отчёты не расширяют этот контракт.
-Полный PR review ниже утверждён 2026-09-30, но ещё не реализован и не проверен
-реальными providers. Baseline реализации: `2a1c26806907c2a178b971e8ec3cdbe2223591d1`.
 
 ## 1. Назначение и границы
 
@@ -12,12 +10,12 @@
 Поддерживаются три пользовательских режима:
 
 - `doc_translate`: получить source PR/snapshot, проверить дневной бюджет,
-  определить направление и scope, перевести, собрать полный candidate, выполнить
-  PR editor → runtime validation/apply → PR arbiter → semantic verdict;
+  определить направление и scope, перевести и проверить полный PR по разделу 5;
 - `doc_verify`: проверить текущее состояние существующей translation branch без
   обязательного повторного перевода;
 - `doc_continue`: продолжить явно сохранённую как продолжаемую job после
-  предметного комментария техписа, сохраняя принятые переводы и проверяя весь PR.
+  предметного комментария техписа, не переводя заново принятые документы;
+  семантическая проверка охватывает полный PR.
 
 `doc_continue` реализует исходный операторский сценарий:
 
@@ -27,9 +25,8 @@
   `/ydbdoc continue …` с недостающим контекстом или явным направлением;
 - продолжить можно только job, явно сохранённую как продолжаемую, в пределах
   14-дневного срока её контекста и с прежними зафиксированными source/base SHA;
-- операторский контекст добавляется в новые model calls: переводятся только
-  pending documents, а semantic review повторно охватывает весь PR, включая
-  ранее принятые документы;
+- операторский контекст добавляется в новые model calls; уже принятые
+  сохранённые результаты не переводятся заново, но проверяется полный PR;
 - operator context передаётся в отдельном явно помеченном блоке инструкций,
   не является частью authoritative Markdown и никогда не должен попадать в
   model output или candidate;
@@ -38,7 +35,7 @@
 
 Продолжение не является восстановлением произвольного упавшего процесса.
 Продолжаемыми состояниями являются только `direction_undetermined`, незавершённый
-перевод отдельных документов и semantic RED финального независимого arbiter.
+перевод отдельных документов и RED независимого арбитра.
 Transport, persistence, GitHub и прочие инфраструктурные ошибки завершают job и
 требуют нового запуска после ограниченных локальных повторов. GitHub transport
 повторяет только идемпотентный `GET`: не более двух повторов при network error,
@@ -146,8 +143,8 @@ Markdown/YFM syntax, заголовки, списки, таблицы и пер�
 контексте модели. Существующий target не добавляется в prompt перевода и не
 используется как источник формулировок или protected fragments.
 
-Только переводчик получает релевантные парные фрагменты глоссария YDB.
-Для каждого translator call фрагменты
+Для терминологии только переводчик получает релевантные парные фрагменты
+глоссария YDB. Для каждого translator call фрагменты
 выбираются заново по терминам, встречающимся именно в текущем source-чанке, и
 содержат source- и target-формулировку одного глоссарного раздела. Глоссарий
 является контекстом, а не текстом для вставки.
@@ -156,13 +153,7 @@ Markdown/YFM syntax, заголовки, списки, таблицы и пер�
 anchor. Для малого model request этот предел дополнительно уменьшается так,
 чтобы glossary context вместе с correction prompt не вытеснял сам chunk.
 Жёсткие словарные замены в коде не используются.
-PR editor и arbiter получают оба полных pinned RU/EN project glossary без
-отбора, усечения и лимитов translator glossary. Source glossary читается из
-authoritative source snapshot, target glossary из pinned translation base.
-Это терминологическая справка, а не old target prose для перевода или repair.
-Если glossary входит в candidate, его проверяемая версия передаётся отдельно
-и не становится сама себе безусловным авторитетом. Отсутствующий или нечитаемый
-glossary останавливает review; подстановка пустой строки запрещена.
+Критик и независимый арбитр получают полный glossary.
 
 ### 3.1 Комментарии в fenced code
 
@@ -198,9 +189,8 @@ Markdown-таблица передаётся модели с обычными р
 
 - Для каждого source-документа translate call получает целый подготовленный
   source-документ и явно заданные source и target языки. Модель возвращает
-  строгую JSON-карту prose segments без пояснений и внешнего fenced wrapper;
-  runtime собирает целый переведённый Markdown из этой карты и source-owned
-  protected fragments. Единица перевода остаётся целым source-файлом.
+  только целый переведённый Markdown без JSON, пояснений и внешнего fenced
+  wrapper.
 - Если подготовленный source-документ не помещается в настроенный размер чанка,
   он делится на минимальное число крупных чанков по границам верхнеуровневых
   Markdown/YFM-блоков. Нельзя разрывать fenced block, YFM container, таблицу или
@@ -300,9 +290,7 @@ source echo, а не общий детектор языка; короткие и
 code по-прежнему защищены. Семантическую неизменность числового значения
 проверяет critic; исключение из PATH не объявляет произвольные числа верными.
 
-## 5. Полный PR editor и независимый arbiter
-
-Семантический процесс:
+## 5. Полная проверка PR критиком и независимым арбитром
 
 1. Берём полные актуальные файлы исходного PR, не diff и не версии до изменения.
 2. Берём полные соответствующие файлы переводного PR.
@@ -311,143 +299,90 @@ code по-прежнему защищены. Семантическую неиз
    возвращает полностью исправленные файлы. Никаких findings для другой модели
    и никаких repair-loop.
 5. Runtime проверяет и применяет исправления критика.
-6. Независимый арбитр проверяет окончательный результат: GREEN означает, что
-   перевод корректен; при RED найденные остаточные проблемы идут непосредственно
-   в отчёт.
+6. Независимый арбитр проверяет окончательный результат и возвращает
+   GREEN/YELLOW/RED по степени проблем. GREEN означает корректный перевод;
+   остаточные замечания арбитра идут непосредственно в отчёт.
 7. Замечания арбитра автоматически не исправляются и никуда не передаются.
 8. Build/CI не участвуют в семантическом вердикте.
 
-Единица semantic review для `doc_translate`, `doc_verify` и review-stage
-`doc_continue`: весь исходный PR и весь candidate/translation PR. Translator
-остаётся whole-file/source-only с внутренними structural chunks и prose segment
-map. Старый target prose не является источником перевода или repair. Текущий
-проверяемый candidate передаётся полностью, без старого target baseline.
+### Prompt критика
 
-Runtime строит один закрытый immutable `PRReviewContext`, содержащий:
+```text
+You are a technical editor reviewing a YDB documentation translation.
 
-- версию review contract, repository/PR identity, original source PR base/head
-  SHA, authoritative source snapshot SHA, pinned translation base/head и точный
-  candidate/context digest;
-- полный source PR inventory со statuses, rename pairs и plan disposition,
-  полный candidate inventory со всеми операциями, dependency additions и
-  явно разрешённые editable target paths/operations;
-- полные review-owned source и candidate Markdown/YFM/YAML файлы, включая
-  index и TOC, даже если metadata произведена как fixed file;
-- полные pinned RU и EN glossary с paths, immutable SHA и content hashes;
-- source-owned technical values, результаты проверки links/anchors и данные
-  deterministic validation; binary manifest/digests и доказательство source
-  bytes для assets, отдельный operator context.
+You receive:
 
-Полный PR означает inventory и полные файлы, не patch, summary или excerpts.
-Original PR head не подменяет authoritative snapshot старого merged PR.
-Missing manifest file или glossary останавливает review. Repository content,
-PR description и glossary обрамляются как данные, вложенные инструкции не
-исполняются. Editor и arbiter не имеют GitHub/exec tools. Binary bytes не
-редактируются моделью, semantic verdict не обещает их визуальной проверки.
+1. The complete current source-language files from the source pull request.
+2. The complete corresponding translated files from the translation pull request.
+3. The complete YDB project glossary.
 
-### Editor response и применение
+Your task is to compare the complete source files with the complete translated
+files and correct every translation error you find.
 
-Один успешный editor call возвращает только строгий JSON
-`{"files": {"<allowed target path>": "<complete corrected file>"}}`.
-Карта содержит ровно все editable target text paths, включая неизменённые
-файлы. Runtime задаёт keys и закрытую schema с `additionalProperties=false`.
-Missing/unknown/duplicate keys, malformed/partial/empty files, extra fields,
-нестроковые значения, binary/deletion entries, traversal и out-of-scope paths
-отвергаются fail closed. Findings-only ответ, patch и отдельный repair call
-не заменяют полные готовые файлы.
+Review the translation as one pull request, not as independent fragments.
 
-Runtime проверяет source-owned technical values, Markdown/YFM, разрешённые
-paths и операции, plan coverage, metadata и assets и атомарно применяет
-всю карту к копии candidate в памяти.
-Модель видит реальные literals и окружающую Markdown-разметку; source-owned
-значения команд, параметров, identifiers, templates, URLs/path/query менять
-нельзя. Безопасное оформление technical literals допустимо при эквивалентных
-значениях и успешной проверке границ code/prose.
+Check:
 
-TOC correction ограничена явно запланированными текстовыми `name` corrections.
-Структура, href, порядок и остальные rows, включая valid target-only navigation,
-сохраняются. Planner-owned API пересчитывает проверенный artifact digest,
-сохраняя исходный plan и correction provenance. Нельзя отключать expected
-digest или разрешать произвольную перезапись YAML. Исправление за пределами
-этой политики даёт typed blocked correction/RED без ложного GREEN.
+- completeness: no source information is omitted;
+- accuracy: no meaning is changed, reversed, weakened, strengthened, or invented;
+- terminology: the same technical entity is named consistently across all files;
+- compliance with the supplied glossary;
+- product names, component names, commands, parameters, identifiers, enum values,
+  variables, templates, numbers, and versions;
+- sentences damaged during translation;
+- untranslated source-language prose;
+- Markdown and YFM formatting that affects readability or technical meaning;
+- inline-code formatting of technical literals;
+- links, anchors, headings, lists, tables, code blocks, and navigation entries;
+- consistency between related files such as articles, index files, and TOC files.
 
-### Полная независимая проверка
+The glossary is authoritative where it defines a term. If a term is not present
+in the glossary, still check that the same technical entity has one correct and
+consistent name throughout the translation.
 
-После проверки и применения исправлений runtime один независимый read-only arbiter
-получает полный окончательный результат с обоими полными glossary.
-Он проверяет точные окончательные bytes, не editor findings и не translator
-chunks. Его строгий финальный ответ содержит verdict/findings, полный coverage
-и привязку к candidate/context digest. Finding содержит runtime-validated path,
-точный searchable current snippet и конкретную русскую правку; межфайловый
-finding может ссылаться на несколько разрешённых paths.
+Correct every problem directly in the translated files.
 
-GREEN требует валидный полный ответ arbiter, verdict GREEN, пустые findings,
-полное непустое coverage и совпадающий digest. Изменённые editor bytes, пустой
-response, отсутствующий arbiter и пустой checked set никогда не означают GREEN.
-RED с пустыми/невалидными findings также невалиден. Findings не обрезаются для
-внутреннего решения; ограничения пользовательского отображения независимы.
-Остаточные проблемы при RED идут непосредственно в отчёт. Замечания arbiter
-автоматически не исправляются и никуда не передаются. По умолчанию editor:
-YandexGPT 5.1 (`YDBDOC_MODEL_CRITIC`), arbiter: модель переводчика DeepSeek V4
-Flash (`YDBDOC_MODEL_ARBITER` позволяет явно выбрать независимую модель).
+Return the complete corrected content of every translated file, including files
+that did not require changes.
 
-Оба prompt активно проверяют:
+Do not return:
 
-- смысловую полноту, точность, непереведённую прозу и отсутствие выдуманных фактов;
-- межфайловую терминологию и идентичность сущностей, даже без exact glossary
-  mapping; разные имена одной сущности и смешение BlobDepot/BlobStorage являются
-  дефектами независимо от наличия словарной пары;
-- команды, параметры, identifiers, числа, версии, целостность technical literals
-  и границ code/prose, читаемое Markdown-оформление и структуру инструкций;
-- назначение links/anchors, согласованность H1/index/TOC и полноту всех PR
-  operations с учётом допустимой target-only navigation.
+- findings;
+- explanations;
+- review comments;
+- a verdict;
+- patches or diffs;
+- partial files;
+- Markdown fences around the response.
 
-Понятный текст не переписывается ради литературного стиля. Это не освобождает
-от активной проверки перечисленных технических дефектов и не задаёт GREEN
-по умолчанию.
+Do not ask another model to make corrections.
+Do not create a repair loop.
+Do not modify the source-language files.
 
-### Вместимость, retries и provider acceptance
+Return exactly this JSON object:
 
-Editor/arbiter никогда не получают translator chunks, excerpt pairs или
-filtered glossary. Их вход неделим. Admission проверяет verified capabilities
-конкретной модели: input/context/output capacity для точного полного serialized
-request, включая system instructions, schema, delimiters, operator context,
-glossary и JSON escaping, с достаточным резервом для всех полных output files.
-Для оценки нужен проверенный tokenizer или доказуемо консервативная bound.
-Unknown capability даёт typed configuration failure, превышение input/output:
-`review_context_limit_exceeded` / `review_output_limit_exceeded`.
-Это terminal failure до публикации с безопасными counts/capability в audit.
-Запрещены lossy truncation, summary, glossary slice, chunk fallback и partial GREEN.
-Admission выполняется для фактического editor request и повторно для arbiter
-после edits; предварительная оценка до перевода не заменяет этих проверок.
+{
+  "files": {
+    "<translated-file-path-1>": "<complete corrected file content>",
+    "<translated-file-path-2>": "<complete corrected file content>"
+  }
+}
 
-Review имеет одну общую bounded retry policy: максимум две attempts основной
-модели на роль. После schema-invalid HTTP success разрешён один retry с
-причиной parser-а; после content-filter или non_final/truncated один идентичный
-retry. Смешанные причины не сбрасывают этот предел. Иные provider errors
-терминальны. Только после исчерпанного content-filter editor допускает одну
-attempt `YDBDOC_MODEL_CRITIC_FALLBACK`, если этот путь оставлен: тот же полный
-контекст и schema проходят новый admission для fallback provider.
-Следующая ошибка терминальна. Arbiter fallback и повторная semantic критика
-не вводятся. Translator retry/splitting остаются отдельными правилами раздела 4.
+Every translated file supplied in <translation-pr-files> must appear exactly
+once in "files". Do not add unknown paths.
 
-Live model-contract probe через production builders/parsers обязан проверить
-translator segment map, полный multi-file editor с исправлением минимум двух
-файлов и межфайлового дефекта, затем полный read-only arbiter на окончательном
-candidate; fallback проверяется, только если этот production путь сохранён.
-Offline fakes подтверждают orchestration, но не качество модели. Требуются
-real-provider full-context probe и независимая проверка полных результатов до
-semantic acceptance. Исторические whole-excerpt probes и лимит 48000 characters
-не подтверждают новый контракт: два полных glossary witness уже занимают
-225432 UTF-8 bytes, ещё до PR/instructions; bytes не равны tokens/characters.
+<source-pr-files>
+{{ SOURCE_PR_FILES }}
+</source-pr-files>
 
-До editor допустимы локальная проверка segment response, source-only assembly и
-безопасная нормализация.
-Семантический порядок: PR editor → runtime validation/apply → PR arbiter → verdict.
-Build/CI не участвуют в семантическом вердикте. Любое изменение bytes
-после arbiter требует новой полной проверки. Ни один непроверенный или
-невалидный candidate не публикуется. Валидный semantic RED может быть опубликован
-с RED и continuation checkpoint по существующей политике.
+<translation-pr-files>
+{{ TRANSLATION_PR_FILES }}
+</translation-pr-files>
+
+<project-glossary>
+{{ PROJECT_GLOSSARY }}
+</project-glossary>
+```
 
 ## 6. Линейная оркестрация
 
@@ -467,13 +402,14 @@ Build/CI не участвуют в семантическом вердикте.
 5. Перевести документ или чанки, восстановить protected fragments и проверить
    собранный Markdown/YFM. Для невалидного результата разрешена одна техническая
    повторная попытка по правилам раздела 4.
-6. Выполнить локальные структурные проверки и безопасную нормализацию, собрать
-   весь candidate и один закрытый PRReviewContext. Выполнить admission и один
-   полный PR editor call.
-7. Проверить и атомарно применить полные исправленные файлы, затем выполнить
-   admission и полный независимый PR arbiter.
-   Verdict относится к окончательному candidate и всему PR. RED findings идут
-   непосредственно в отчёт, автоматически не исправляются и никуда не передаются.
+6. Выполнить локальные структурные проверки и безопасную нормализацию Markdown.
+   Передать одному критику полные актуальные исходные файлы, полные
+   соответствующие файлы перевода и полный glossary. Получить полные исправленные
+   файлы, проверить и применить их в runtime.
+7. Независимый арбитр проверяет окончательный полный результат. Арбитр возвращает
+   GREEN/YELLOW/RED по степени проблем; остаточные findings идут непосредственно
+   в отчёт, автоматически
+   не исправляются и никуда не передаются. Build/CI не участвуют в verdict.
 8. Сделать не более одного commit/push в translation branch.
 9. Создать или обновить translation PR, записать актуальный verdict и terminal
    job status.
@@ -483,10 +419,10 @@ Build/CI не участвуют в семантическом вердикте.
 1. Создать job audit record, затем авторизовать запуск и взять текущий SHA
    translation branch.
 2. Получить соответствующий authoritative source snapshot.
-3. Без нового перевода построить полный PRReviewContext текущего translation
-   head, включая index/TOC; один PR editor возвращает все editable text files.
-4. Проверить и атомарно применить карту, затем выполнить полный PR arbiter. Сделать не более одного commit в ту же branch
-   с exact-head guard и без изменений candidate после arbiter.
+3. Без нового перевода выполнить полную проверку PR по разделу 5: один критик
+   возвращает полные исправленные файлы, runtime проверяет и применяет их,
+   независимый арбитр проверяет окончательный результат.
+4. Сделать не более одного commit в ту же branch.
 5. Создать или обновить один актуальный PR comment с итоговым verdict и
    записать terminal job status.
 
@@ -515,16 +451,16 @@ Build/CI не участвуют в семантическом вердикте.
 5. Для `direction_undetermined` повторить только direction call с operator
    context. Для незавершённого перевода вызвать модель только для pending
    документов, объединив новые валидные документы с сохранёнными accepted
-   documents. При любом semantic review оба вызова editor/arbiter повторно
-   охватывают весь PR и оба полных glossary. Problem paths являются подсказкой,
-   не фильтром. Для RED review взять точный candidate checkpoint.
+   documents. Для RED review выполнить полную проверку PR по разделу 5,
+   используя точный опубликованный candidate checkpoint.
 6. Candidate всегда заново собирается из accepted/new полных документов;
    protected fragments восстанавливаются из source. Существующий target допустим
    как точный ранее опубликованный candidate для critic-editor, но не как шаблон склейки или источник технических
    fragments.
-7. Проверить и атомарно применить полный editor file map, затем выполнить
-   полный PR arbiter. Сохранить проверенные bytes
-   одним exact-head non-force commit в ту же branch и обновить единый verdict.
+7. Runtime проверяет и применяет исправления критика; независимый арбитр
+   проверяет окончательный полный результат. Остаточные findings идут непосредственно
+   в отчёт, автоматически не исправляются и никуда не передаются. Валидные
+   изменения сохранить одним commit в ту же branch и обновить verdict.
    GREEN закрывает
    checkpoint. Если остаётся поддерживаемое семантическое препятствие, записать
    следующий checkpoint с тем же первоначальным expiry; продление TTL запрещено.
@@ -571,21 +507,17 @@ GitHub, worktree и model calls.
 ни billable cost, ни достаточного usage. Request и response не выводятся в публичные логи, GitHub comments или
 artifacts.
 
-Каждый translate call сохраняет `target_path` статьи. PR editor/arbiter и
-общий direction call сохраняют `target_path = NULL`. PR review attempts имеют
-явный PR scope, contract version и context digest в audit; их стоимость не
-приписывается произвольной статье и не смешивается с unattributed historical cost.
-Накопительная стоимость полного цикла связывается по
+Каждый вызов translate сохраняет `target_path` статьи. Общий direction call не относится к отдельной статье и сохраняет
+`target_path = NULL`. Накопительная стоимость полного цикла связывается по
 закреплённому `source_sha`, потому что `doc_translate` запускается на исходном
 PR, а `doc_verify` на translation PR. Старые attempts без `target_path` не
 приписываются статье задним числом и показываются отдельно как unattributed
 historical cost.
 
-Только для translator явный provider content-filter допускает один повтор
-идентичного request в пределах `max_attempts = 2`; truncation и прочие non-final
-статусы translator не повторяются. Все attempts аудируются и учитываются в cost.
-Для PR editor/arbiter действует единая bounded policy раздела 5.
-Если собранный из segment map `TRANSLATE` chunk после обычного вызова и correction
+Явный provider content-filter допускает ровно один повтор идентичного request в
+пределах `max_attempts = 2`; обе attempts аудируются и учитываются в cost, а
+truncation и прочие non-final статусы не повторяются.
+Если raw-Markdown `TRANSLATE` chunk после обычного вызова и correction
 остаётся невалидным либо вызов завершён content-filter, он делится на два
 соседних диапазона по ближайшей к середине top-level block boundary. Каждый
 child получает обычный предел `max_attempts = 2` и при той же проблеме делится
@@ -593,9 +525,7 @@ child получает обычный предел `max_attempts = 2` и при 
 source blocks строго уменьшается. Уже успешные chunks не вызываются снова.
 Другие provider errors и chunk без такой boundary
 завершаются ошибкой без публикации
-невалидных bytes. Эти splitting/retry правила относятся только к translator.
-PR editor/arbiter не делят контекст; optional editor fallback получает тот же
-полный PR и glossary после отдельного capacity admission, по разделу 5.
+невалидных bytes.
 
 Для таблиц или строк с текстами настраивается TTL 14 дней средствами YDB.
 Checkpoint state содержит только frozen direction/scope digest, accepted
@@ -605,15 +535,12 @@ Checkpoint state содержит только frozen direction/scope digest, ac
 references, garbage collection, immutable model-call abstraction, pagination
 или event sourcing.
 
-### 7.1 Новый формат continuation state для полного PR review
+### 7.1 Формат continuation state v2
 
 Одна JSON-запись state имеет закрытый versioned schema и проходит strict decode
 до model calls и GitHub mutations:
 
-- `state_version`: новая версия, несовместимая с прежним chunk-review v2;
-  старые checkpoints отвергаются fail closed, их нельзя считать PR review;
-- `review_contract_version`, source/candidate/glossary manifests и их digests,
-  pinned snapshot identities и canonical plan hash связывают точный контекст;
+- `state_version`: ровно `2`; checkpoint прежней схемы не продолжается;
 - `stage`: ровно `direction`, `translation` или `review`;
 - `direction`: `ru_to_en`, `en_to_ru` или `null` только для `direction`;
 - `scope_sha256`: hash канонического frozen scope manifest либо `null` до выбора
@@ -622,8 +549,8 @@ references, garbage collection, immutable model-call abstraction, pagination
   уже локально проверенных полных документов;
 - `pending_paths`: упорядоченный список target paths, для которых новый model
   call ещё требуется;
-- `review_paths`: диагностический список проблемных target paths на stage
-  `review`, который не ограничивает полный контекст editor или arbiter;
+- `review_paths`: упорядоченный список проблемных target paths только на stage
+  `review`;
 - `candidate_sha256`: SHA-256 точного опубликованного candidate на stage
   `review`, иначе `null`.
 
@@ -665,9 +592,7 @@ gate не выполняется. Конкурентная атомарная re
   локальный кэш одной job: до 4096 записей и 16 MiB содержимого. Ветки, статусы
   PR и транспортные ошибки не кэшируются. Это не механизм продолжения job.
 
-- URL скрываются только от translator. PR editor/arbiter видят реальные literals
-  и окружающий Markdown, но source-owned значения менять не могут.
-  Внутренние YDB URL локализуются заменой locale;
+- URL скрываются от переводчика. Внутренние YDB URL локализуются заменой locale;
   path/query защищены, а fragment выбирается только из реально существующих
   target-anchors или сохраняется из валидной существующей target-ссылки на ту
   же страницу. Wikipedia URL разрешаются через официальный `langlinks` с
@@ -680,10 +605,7 @@ gate не выполняется. Конкурентная атомарная re
   target TOC и не создаёт redirect.
 - Переименование обновляет путь в target TOC и добавляет прямой redirect со
   старого target path на новый target path. Redirect chains не создаются.
-- Обычное изменение существующей страницы проверяет симметричную TOC-пару
-  `name + href` по действующему узкому planner: валидная запись сохраняется,
-  отсутствующая добавляется, устаревший label исправляется по target H1.
-  Redirect не создаётся. Это не разрешение общего metadata executor.
+- Обычное изменение существующей страницы не меняет ни TOC, ни redirects.
 
 ## 9. Публикация и отчёт
 
@@ -695,15 +617,14 @@ gate не выполняется. Конкурентная атомарная re
   отдельно и заменяется только при точном совпадении с прочитанным SHA; движение
   или исчезновение ветки останавливает публикацию. Такой контролируемый force
   запрещает накапливать старые translation commits и не перезаписывает
-  параллельную ручную правку. Editor edits входят в единственный candidate
-  commit нового `doc_translate`; `doc_verify` и `doc_continue` остаются
-  обычными non-force обновлениями текущего head с exact-head guard.
+  параллельную ручную правку. Следующие commits critic-editor, `doc_verify` и
+  `doc_continue` остаются обычными non-force обновлениями текущего head.
 - Заголовок создаваемого translation PR имеет формат
   `PR #<source_pr> translation`.
 - Маркеры provenance и строка `Checked translation commit` в существующем
   translation PR обновляются до SHA фактически опубликованного candidate.
 - Commit/push выполняется только после обязательных локальных проверок.
-- Финальный candidate накладывается на
+- Перед единственным commit/push финальный candidate накладывается на
   trusted checkout base-ветки и полностью собирается официальным Diplodoc CLI
   той же stable-линии, что использует `build-docs` YDB. Любая строка `ERR`,
   ненулевой exit либо невозможность запустить compiler запрещает публикацию.
@@ -720,10 +641,8 @@ gate не выполняется. Конкурентная атомарная re
 - После публикации translation PR в исходном PR создаётся или обновляется один
   короткий комментарий со ссылкой на translation PR. Повторный `doc_translate`
   не создаёт дубликаты этого комментария.
-- QA `GREEN` означает полную semantic проверку окончательного candidate по
-  разделу 5, независимо от external CI. Только после валидного полного arbiter
-  допустимо сообщить, что исправления не требуются. Ошибка или неполнота review
-  не превращается в GREEN. Build/CI не участвуют в семантическом вердикте.
+- `GREEN` означает, что независимый арбитр проверил окончательный полный
+  результат и перевод корректен. Build/CI не участвуют в семантическом verdict.
   `YELLOW` допустим только для проблемы самого перевода, например вероятного
   дубликата новой симметричной статьи, и должен называть конкретную причину.
   Для `RED` каждая показанная
@@ -754,33 +673,9 @@ gate не выполняется. Конкурентная атомарная re
 - Acceptance обязательно покрывает: запрет без разрешённого комментария;
   expired/stale checkpoint с нулём model calls и mutations; повтор только
   direction call; повтор только pending translation documents при сохранении
-  accepted documents; полный PR editor/arbiter при любом review; source-only
-  assembly; whole-file translation с внутренними structural chunks и prose
-  segment map; закрытие
+  accepted documents; review полного PR; source-only assembly;
+  перевод целого документа или структурных чанков без field map; закрытие
   checkpoint на GREEN и сохранение первоначального expiry при повторном RED.
-- Реальный witness #50839 → #54590 использует полные `blobdepot.md`,
-  `blobdepot_decommit.md`, `index.md`, `toc_i.yaml` обеих локалей и оба
-  полных glossary. Original PR head: `12c8b806dc4560ff7322cd7464dc2372a1b614c6`;
-  authoritative source: `9191121586f4d8061414d597cdcc2f4ec8d42d20`;
-  bad translation head: `b7b27bcf34d9761f0311011cd3fba051c05cd4ca`.
-  Manifest фиксирует immutable provenance и SHA-256 всех полных файлов.
-- Witness обязан обнаружить fragmentation BlobDepot/Blobovnica/blobber и
-  смешение с BlobStorage без exact glossary mapping, сломанную грамматику
-  `{{ ydb-name }}`, разорванный `BS_CONTROLLER`, склейку
-  `--storage-pool-namein`, нечитаемые границы technical literals и
-  рассогласование H1/index/TOC. Valid target-only navigation сохраняется;
-  равенство всех множеств index/TOC paths не требуется. Старый EN prose не
-  является model input. Потерю исходных backticks проверяет отдельный source
-  witness с настоящим inline code; исторический EN не задаёт byte baseline.
-- Offline replay через production context/schema/parser/apply/validation и
-  publication fake доказывает orchestration: все файлы/glossary без усечения,
-  несколько исправленных файлов, точные окончательные bytes у arbiter и один publish.
-  Negative replay сохраняет defects и получает RED. Это не semantic acceptance:
-  нужны real-provider full-context probe и независимый content review.
-- Missing file/glossary/arbiter, empty checked set/response, malformed map,
-  digest mismatch, unvalidated metadata, failed build или moved head дают
-  fail closed без публикации. Oversize/unknown capability останавливают review
-  до publication без chunk fallback, partial GREEN и потери cost/audit.
 - После admission конкретный checkpoint потребляется атомарно по его точному
   `continuation_id` и полному сохранённому состоянию. Старые независимые живые
   цепочки того же source PR не должны блокировать замену уже выбранного

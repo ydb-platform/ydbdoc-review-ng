@@ -10,23 +10,21 @@
 реализацией production-конвейера.
 
 Реализованы parser, проверка ответов моделей и protected fragments,
-audit/budget adapters, линейная оркестрация и атомарная публикация candidate.
-Утверждённый 2026-09-30 новый semantic contract ещё не реализован и не проверен
-реальными providers: полные актуальные source PR files, полные соответствующие
-translation PR files и полный glossary → один critic/editor возвращает полные
-исправленные файлы → runtime проверяет и применяет их → независимый arbiter
-проверяет окончательный результат. GREEN означает корректный перевод; RED
-findings идут непосредственно в отчёт, автоматически не исправляются и никуда
-не передаются. Build/CI не участвуют в семантическом вердикте.
-Оба review calls получают полный inventory, все review-owned source/candidate
-text files и оба полных pinned glossary. Editor возвращает строгую карту всех
-editable paths в полные файлы; GREEN требует полного arbiter coverage и
-совпадающего digest. Whole-file/source-only translation сохраняется.
-Baseline `2a1c268` ещё содержит прежний chunk review. Production работает
+audit/budget adapters, линейная
+оркестрация и единственная публикация финального candidate
 через внедряемые backend-ы. Поставляемый production factory
 `ydbdoc_review_ng.runtime:create_runtime` соединяет GitHub REST/Git Data через
 stdlib, Yandex transport, YDB query executor и реальные workflow stages.
 Offline tests и installed smoke не вызывают внешние сервисы. Cutover не выполнен.
+
+Подтверждённый semantic contract: полные актуальные source PR files, полные
+соответствующие translation PR files и полный glossary передаются одному критику.
+Он сравнивает весь PR и сразу возвращает полные исправленные файлы без findings
+для другой модели и без repair-loop. Runtime проверяет и применяет исправления.
+Независимый арбитр возвращает GREEN/YELLOW/RED по степени проблем; остаточные
+замечания идут прямо в отчёт, автоматически не исправляются и никуда не
+передаются. Build/CI не участвуют в semantic verdict. Prompt приведён в
+REQUIREMENTS_RU.md; реализация этого контракта ещё не выполнена.
 
 ## Быстрый probe перевода glossary
 
@@ -114,9 +112,7 @@ Verify и continue не имеют budget gate; их costs учитываютс�
 issue events, время и автора комментария. Продолжаются только сохранённые
 direction, pending translation или RED review checkpoints возрастом до 14 дней.
 Source/base SHA берутся из checkpoint; SHA и budget flags запрещены. Уже принятые
-maps используются повторно для pending-only translation. По новому контракту
-любой semantic review заново охватывает весь PR и glossary; старые chunk-review
-checkpoints несовместимы и должны отклоняться fail closed.
+maps используются повторно для перевода, а semantic review охватывает полный PR.
 GREEN закрывает checkpoint, повторная семантическая остановка сохраняет исходный
 expiry. Infrastructure failures требуют нового запуска. Ручная правка translation
 branch с последующим verify также допустима. Подробнее об environment и внешних портах:
@@ -154,9 +150,7 @@ release с continue; тег `v1.1.0` публикуется отдельно п�
 и `doc_verify.yml`, вызывают
 [один composite action](.github/actions/doc-review/README.md). Они устанавливают
 runtime extra и выбирают поставляемый factory. Проверка actors, snapshots,
-модель, metadata producer, публикация и audit реализованы. QA GREEN описывает
-semantic качество точного полностью проверенного candidate независимо от external
-CI; реализация нового полного PR review остаётся отдельной задачей.
+модель, metadata producer, публикация, audit и чтение CI checks реализованы.
 Внешний вызов использует путь
 `ydb-platform/ydbdoc-review-ng/.github/actions/doc-review@<reviewed-commit-sha>`; action всегда
 устанавливает пакет из собственного repository checkout, а не из workspace

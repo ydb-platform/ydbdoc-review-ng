@@ -1,10 +1,5 @@
 # Архитектурные инварианты
 
-Полный PR review ниже утверждён 2026-09-30, но не реализован и не проверен
-реальными providers на baseline `2a1c268`. Факты существующей реализации
-отделены от новых обязательных границ; исторические excerpt probes не являются
-приёмкой этого контракта.
-
 ## Источники данных
 
 - Source читается из immutable snapshot исходного PR или зафиксированного base
@@ -24,14 +19,18 @@
 
 `doc_translate` идёт линейно: create job audit → authorize → snapshot →
 budget → direction/scope → parse → translate → local structural validation and
-safe Markdown normalization → full PR editor → runtime validation/apply → full PR arbiter → semantic verdict.
-Build/CI не участвуют в семантическом вердикте. RED findings идут непосредственно
-в отчёт, автоматически не исправляются и никуда не передаются.
+safe Markdown normalization → один критик полного PR → runtime проверяет и
+применяет полные исправленные файлы → независимый арбитр окончательного
+результата → GREEN/YELLOW/RED по степени проблем. Остаточные замечания идут
+непосредственно в отчёт, автоматически не исправляются и никуда не передаются.
+Build/CI не участвуют в семантическом вердикте.
 
 `doc_verify` создаёт job audit, берёт текущую translation branch и authoritative
-source и запускает полный PR editor → runtime validation/apply → полный PR arbiter. Валидные изменения публикуются одним exact-head non-force
-commit в ту же branch, затем обновляются verdict и terminal job status.
-Budget gate у него отсутствует.
+source, выполняет ту же полную проверку PR критиком и независимым арбитром,
+при необходимости сохраняет валидные исправления одним commit в ту же branch,
+затем обновляет
+verdict и terminal job status. Budget
+gate у него отсутствует.
 
 `doc_continue` в `1.1.0` создаёт audit, проверяет label actor и последний допустимый
 предшествующий `/ydbdoc continue` comment, затем загружает живой checkpoint.
@@ -46,10 +45,7 @@ acknowledgement, но не разрешает recovery через широкий
 Для source PR неоднозначность остаётся fail-closed.
 Replay читает только сохранённые source/base SHA и проверяет scope/field IDs
 и exact translation head. Три stage: direction retry, перевод pending документов
-с accepted maps и полный PR critic/runtime/arbiter при любом semantic review.
-Review paths служат диагностикой. Новый review contract version связывает
-source/candidate/glossary manifests и digests; старые chunk-review checkpoints
-отвергаются fail closed. Source-only
+с accepted maps и полная семантическая проверка PR. Source-only
 assembly и обычные проверки сохраняются. GREEN закрывает checkpoint; повторный
 semantic stop наследует первоначальный expiry. Infrastructure failure не является
 новым semantic checkpoint. Общей resumable state machine нет.
@@ -73,12 +69,9 @@ semantic stop наследует первоначальный expiry. Infrastruc
   URL/path/code относительно вычисленного ожидаемого значения. Глобальный
   navigation graph не строится; узкий resolver знает только YDB locale и
   Wikipedia `langlinks`, результат проверяет полный Diplodoc build.
-- PR editor и arbiter получают весь closed PR context: полный inventory,
-  review-owned source/candidate text files, полный pinned RU/EN glossary,
-  разрешённые paths/operations, snapshot/content digests и technical validation
-  data. Source glossary берётся из authoritative snapshot, target glossary из
-  pinned translation base. Старый target prose не служит материалом repair.
-  Missing files/glossary, oversize или unknown capability останавливают review.
+- Один критик получает полные актуальные source PR files, полные соответствующие
+  translation PR files и полный glossary. Он сравнивает весь PR и сразу возвращает
+  полные исправленные файлы, без findings для другой модели и без repair-loop.
 - Add source-TOC-reachable страницы добавляет target TOC entry без redirect;
   add вне source TOC не обязан менять TOC; rename обновляет target TOC path и
   создаёт прямой redirect old→new. Ordinary edit также проверяет симметричную
@@ -152,8 +145,7 @@ Git publication still uses real diffs for commit/no-op decisions.
 
 ## Historical translation baseline preflight (2026-09-28)
 
-This records the old implementation, not the active semantic process. Build/CI
-do not participate in the semantic verdict.
+This describes the old implementation, not the confirmed semantic process.
 
 Production RuntimeContent receives DiplodocBuildValidator.validate_baseline when
 YDBDOC_DOCS_ROOT is configured. doc_translate invokes it before prepare_source,
@@ -175,47 +167,22 @@ to the exact newly published SHA. This prevents reruns from producing a branch
 that is both behind and ahead of the current base while preserving concurrent
 manual edits.
 
-## Full PR editor, runtime and independent arbiter (approved 2026-09-30)
+## Полная проверка PR
 
-One editor call returns a strict `{"files": {path: complete_text}}` map of exactly
-all editable target text paths, including unchanged files. Runtime rejects
-missing, unknown, duplicate, malformed, partial, binary, deletion, traversal or
-out-of-scope entries. It checks source-owned technical values and metadata/plan constraints and
-applies the entire map atomically in memory. A no-op edit still receives the
-independent arbiter review.
+Подтверждённый процесс описан в REQUIREMENTS_RU.md §5. Критик сравнивает полные
+актуальные исходные файлы с полными соответствующими файлами перевода, используя
+полный glossary, и возвращает полные исправленные файлы. Runtime проверяет и
+применяет их. Независимый арбитр проверяет окончательный результат и возвращает
+GREEN/YELLOW/RED по степени проблем. Остаточные замечания идут только в отчёт,
+автоматически не исправляются и никуда не передаются. Build/CI не участвуют в
+семантическом verdict.
 
-One independent read-only arbiter reviews the complete final candidate as a complete
-PR with both complete glossaries. GREEN requires a valid full final response,
-empty findings, complete nonempty coverage and matching candidate/context digest.
-Changed editor bytes, empty responses or a missing arbiter never imply GREEN.
-The prompts actively check semantic completeness, cross-file terminology/entity
-identity even without exact glossary mappings, commands/parameters/identifiers,
-technical-literal boundaries/readability, links/anchors, H1/index/TOC consistency
-and every planned PR operation. RED findings go directly to the report and are never automatically repaired
-or passed onward. Build/CI do not participate in the semantic verdict.
-No bytes may change after arbiter without a new full review.
-
-Translator chunking and retries remain translator-only. Editor/arbiter context
-is indivisible: no excerpt packing, filtered glossary or lossy fallback. Admission
-reserves verified model input/context/output capacity for the exact serialized
-request and complete-file output, with JSON overhead. Unknown capability or
-oversize is a typed terminal failure before publication. The paired witness
-glossaries already contain 225432 UTF-8 bytes; the historical 48000-character
-excerpt limit and old provider probes are insufficient. Review retry policy is
-the single bounded policy in REQUIREMENTS_RU.md §5: at most two primary attempts
-per role, optional one full-context editor fallback after exhausted content
-filter and fresh capacity admission.
-
-PR review attempts use nullable `target_path` with explicit PR scope, contract
-version and context digest. They retain cost/audit without arbitrary article
-attribution or classification as historical unattributed cost. Real-provider
-full-context probe and independent content review are required before claiming
-semantic acceptance; scripted offline GREEN proves orchestration only.
+Prompt критика живой: его модифицируют при отладке, не меняя orchestration.
+Реализация этого контракта ещё не выполнена.
 
 ## Public semantic report (2026-09-30)
 
-The QA comment reports translation quality only. Its GREEN/RED is the arbiter
-verdict; a translation-specific probable-duplicate warning may produce YELLOW.
+The QA comment reports translation quality only. Its GREEN/YELLOW/RED is the independent arbiter verdict by degree of problems.
 Repository CI, `build-docs`, `doc_verify` check-runs and merge readiness are
 separate GitHub signals. The reporter neither reads nor waits for them, and
 their state cannot downgrade an arbiter GREEN or upgrade an arbiter RED.
@@ -235,13 +202,8 @@ missing.
 Supported TOC migrations bind the SHA-256 of the complete expected target file
 into the plan before document-model calls. Fixed and final reconciliation both
 require the exact digest, so path presence cannot mask stale content. This is
-the existing implementation boundary. Under the approved PR review contract,
-only explicitly planned TOC name corrections may update the validated artifact
-digest through a planner-owned API retaining original plan and correction
-provenance. Structure, href, ordering and valid target-only entries remain
-protected; arbitrary YAML overwrite or disabling reconciliation is forbidden.
-A correction outside this scope fails closed. General TOC translation remains
-separate executor work.
+still a migration rule backed by the established target article H1, not the
+future general TOC prose translator.
 
 This is a narrow fail-closed planner, not the completed cross-file executor.
 Unsupported asset/redirect operations, metadata-only direction and TOC

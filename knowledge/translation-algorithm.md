@@ -1,7 +1,4 @@
-# Алгоритм перевода и утверждённый полный PR review
-
-Whole-file/source-only translation сохраняется. Полный PR review утверждён
-2026-09-30, но ещё не реализован и не provider-validated на baseline `2a1c268`.
+# Проверенный алгоритм перевода
 
 ## Целый документ и protected fragments
 
@@ -14,7 +11,7 @@ templates, inline code, нетранслируемый код и служебн�
 проза остаются видимы модели. Модель получает явное направление RU→EN или EN→RU
 и возвращает только целый переведённый Markdown.
 
-Переводчик всегда получает только authoritative source и возвращает полный
+Модель всегда получает только authoritative source и возвращает полный
 переведённый Markdown. Существующий target используется только для scope,
 проверки ссылок и публикации, но не передаётся модели и не используется
 сборщиком как источник текста. В каждой Markdown link/image-конструкции подпись
@@ -142,74 +139,27 @@ fence и любой неизвестный язык целиком protected.
 `|`; защищаются только код, ссылки и include/directive-фрагменты. После ответа
 проверяются число строк и число столбцов каждой таблицы.
 
-## Проверка качества всего PR
+## Проверка качества полного PR
 
-После локальных структурных проверок и безопасной нормализации runtime строит
-один закрытый PRReviewContext: complete source/candidate inventory и operations,
-полные review-owned source/candidate Markdown/YFM/YAML файлы, включая index/TOC,
-allowed paths/operations, snapshot/candidate digests, technical-fragment validation
-data и оба полных pinned RU/EN glossary. Source glossary берётся из authoritative
-snapshot, target glossary из pinned translation base. Missing files/glossary
-останавливают review. Если glossary сам входит в candidate, его изменённый текст
-проверяется отдельно от pinned terminology reference.
+Критик получает полные актуальные source PR files, не diff и не версии до
+изменения, полные соответствующие translation PR files и полный glossary.
+Один критик сравнивает весь PR и сразу возвращает полные исправленные файлы,
+включая файлы без изменений. Он не возвращает findings для другой модели и
+не запускает repair-loop.
 
-Старый target prose не передаётся как образец формулировок или источник repair.
-Точный candidate, включая сохранённый review checkpoint, является проверяемым
-объектом. Operator context отделяется от authoritative content. Repository text
-и glossary передаются как данные, вложенные инструкции не исполняются.
+Runtime проверяет и применяет исправления критика. Независимый арбитр проверяет
+окончательный полный результат и возвращает GREEN/YELLOW/RED по степени проблем.
+Остаточные замечания арбитра идут непосредственно в отчёт, автоматически не
+исправляются и никуда не передаются. Build/CI не участвуют в семантическом verdict.
 
-Один editor возвращает `{"files": {"<allowed path>": "<complete file>"}}`:
-ровно все editable target text paths, включая unchanged. Строгая schema и parser
-отвергают missing/unknown/duplicate keys, malformed/partial/empty files, binary,
-deletion, traversal, out-of-scope и extra entries. Findings, patch и отдельный
-repair call не заменяют полные готовые файлы.
+Точный prompt критика находится в REQUIREMENTS_RU.md §5. Prompt живой:
+его модифицируют при отладке, не меняя orchestration. Реализация подтверждённого
+контракта ещё не выполнена.
 
-Runtime проверяет source-owned technical values, Markdown/YFM, links/anchors,
-metadata/plan constraints и assets и атомарно применяет карту в памяти. Technical literals видны с реальной окружающей разметкой:
-разрешено безопасно улучшить inline-code оформление без изменения значения,
-нельзя подменить URL, commands, identifiers или templates. TOC name corrections
-допускаются только в явно разрешённом plan, с planner-owned пересчётом artifact
-digest и provenance; structure/href/остальные rows, включая target-only navigation,
-сохраняются. Arbitrary metadata overwrite запрещён.
+Operator context обрамляется отдельно от authoritative Markdown, применяется
+как инструкция и не может становиться частью перевода или candidate.
 
-После проверки и применения исправлений runtime один независимый read-only
-arbiter получает полный окончательный результат и оба полных glossary. GREEN требует полного
-валидного финального ответа, пустых findings, полного непустого coverage и
-совпадающего context/candidate digest. No-op editor не отменяет arbiter;
-editor byte changes, пустой ответ, отсутствующий arbiter или пустой checked set
-не дают GREEN. Findings связываются с валидными paths/current snippets и
-конкретной правкой. GREEN означает корректный перевод. RED findings идут непосредственно в отчёт,
-автоматически не исправляются и никуда не передаются.
-Семантический порядок: editor → runtime validation/apply → arbiter → verdict.
-Build/CI не участвуют в семантическом вердикте. Изменение bytes
-после arbiter требует нового полного review.
-
-Оба prompt активно проверяют полноту/смысл, межфайловую терминологию и
-идентичность сущностей даже без exact glossary mapping, commands/parameters/
-identifiers, границы technical literals и читаемый Markdown, links/anchors,
-H1/index/TOC и полный набор PR operations. Литературная полировка не требуется;
-отсутствие словарной пары не оправдывает распад одной сущности на разные имена.
-
-Editor/arbiter никогда не используют translator chunks или excerpts и не
-получают filtered glossary. Admission проверяет verified input/context/output
-capacity для точного serialized request с system/schema/JSON overhead и резервом
-полных output files. Unknown capability и oversize дают typed terminal failure
-до publication; lossy truncation, summary, chunk fallback и partial GREEN
-запрещены. Пара glossary witness содержит 225432 UTF-8 bytes. Исторический
-48000-character budget и старые probes недостаточны для нового контракта.
-Retry policy едина с REQUIREMENTS_RU.md §5: максимум две primary attempts на
-роль; optional single editor fallback после content-filter использует полный
-контекст и новый admission. Translator retries/splitting остаются отдельными.
-
-Continuation повторно переводит только pending documents, но любой semantic
-review снова включает весь PR/glossary, в том числе ранее accepted files.
-Новая contract version и source/candidate/glossary manifests/digests связывают
-checkpoint; старые chunk-review checkpoints отвергаются fail closed.
-Offline fakes доказывают orchestration. Semantic acceptance требует live
-full-context provider probe и независимой проверки полных результатов
-реального witness #50839/#54590, описанного в testing.md.
-
-## Исторический translator regression: сбой 36379127309
+## Исправление сбоя 36379127309
 
 Технический цикл: TRANSLATE → локальная валидация → одна TRANSLATE correction
 с прежним ответом и конкретной причиной → безопасное деление, если correction
@@ -218,6 +168,6 @@ full-context provider probe и независимой проверки полн�
 невалидный chunk не публикуется. Каждый отказ пишет безопасный код валидации
 без model response и source prose; успешные соседние chunks не повторяются.
 
-Текущий утверждённый порядок quality stage: полный PR editor, затем runtime
-проверяет и применяет исправления, затем полный PR arbiter. По умолчанию переводчик — DeepSeek V4 Flash, critic-editor —
+Смысловая проверка полного PR описана выше. Build/CI не участвуют в
+семантическом verdict. По умолчанию переводчик — DeepSeek V4 Flash, critic-editor —
 YandexGPT 5.1 (`YDBDOC_MODEL_CRITIC` позволяет явно выбрать модель).

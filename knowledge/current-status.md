@@ -1,71 +1,23 @@
-# Текущий handoff: полный PR review (2026-09-30)
+# Текущий semantic contract
 
-Baseline реализации: `2a1c26806907c2a178b971e8ec3cdbe2223591d1`.
-Утверждён новый контракт в REQUIREMENTS_RU.md: он ещё не реализован и не проверен
-реальными providers. Этот documentation change заменяет требования на месте,
-не меняет production code/tests и не подтверждает semantic acceptance.
+Критик получает полные актуальные файлы исходного PR, не diff и не версии до
+изменения, полные соответствующие файлы переводного PR и полный glossary.
+Один критик сравнивает весь PR и сразу возвращает полные исправленные файлы,
+без findings для другой модели и без repair-loop. Runtime проверяет и применяет
+исправления. Независимый арбитр проверяет окончательный результат и возвращает
+GREEN/YELLOW/RED по степени проблем. Остаточные замечания идут непосредственно
+в отчёт, автоматически не исправляются и никуда не передаются. Build/CI
+не участвуют в семантическом вердикте.
 
-Whole-file/source-only translation сохраняется с внутренними structural chunks
-и prose segment map. Старый target prose не служит источником перевода или repair.
-Новый review для translate, verify и review-stage continue строит один closed
-PRReviewContext: полный inventory/operations, все review-owned source/candidate
-text files включая index/TOC, allowed paths, exact snapshots/candidate digests,
-оба полных pinned RU/EN glossary и technical-fragment validation data.
+Точный prompt критика находится в REQUIREMENTS_RU.md §5. Prompt живой:
+его модифицируют при отладке, не меняя orchestration. Подтверждённый контракт
+ещё не реализован.
 
-Один PR editor возвращает strict path-to-complete-file map ровно всех editable
-text paths. Missing/unknown/duplicate/malformed/partial/binary/deletion/traversal/
-out-of-scope entries отвергаются. Порядок: runtime проверяет и применяет исправленные файлы → один независимый
-read-only arbiter проверяет окончательный полный результат → semantic verdict. GREEN требует валидного полного ответа, пустых
-findings, полного непустого coverage и matching digest; editor byte changes,
-пустые ответы и missing arbiter не дают GREEN.
+## Исторические записи
 
-Оба prompt активно проверяют полноту, межфайловую терминологию/entity identity
-даже без exact glossary mapping, commands/parameters/identifiers, code/prose
-boundaries и читаемый Markdown, links/anchors, H1/index/TOC и PR operations.
-Source-owned значения и metadata/plan constraints сохраняются; TOC name
-corrections требуют planner-owned artifact digest/provenance и сохраняют
-target-only navigation. Полный PR review неделим: verified capacity admission
-проверяет exact serialized input и полный output reserve до editor и вновь до
-arbiter. Unknown capability/oversize терминальны до публикации. Chunk/excerpt/
-glossary-slice fallback запрещён.
-
-Pending-only translation сохраняется. Любой semantic review включает весь PR,
-в том числе accepted files. Новая checkpoint contract version связывает
-source/candidate/glossary manifests и digests; старые chunk-review checkpoints
-fail closed. PR attempts имеют NULL target_path, явный PR scope/context digest
-и полный cost audit. GREEN означает корректный перевод; RED findings идут непосредственно в отчёт,
-автоматически не исправляются и никуда не передаются. Build/CI не участвуют
-в семантическом вердикте.
-
-## Зафиксированный witness и следующий implementation gate
-
-Source PR #50839: base `1705aa4cea8caaf8c715b368f57ac7317975af83`,
-original head `12c8b806dc4560ff7322cd7464dc2372a1b614c6`,
-merge `30d5bd68e2f97cbb41aaf782149435e4b9c1bdbc`.
-Translation PR #54590: bad head `b7b27bcf34d9761f0311011cd3fba051c05cd4ca`,
-authoritative source snapshot `9191121586f4d8061414d597cdcc2f4ec8d42d20`.
-Четыре пары: `blobdepot.md`, `blobdepot_decommit.md`, `index.md`,
-`toc_i.yaml` под `ydb/docs/{ru,en}/core/maintenance/manual/`.
-RU glossary blob `313f9ba9ca5f7e1188b9e3bf2233fe4da2ac53b2`: 146214 bytes;
-EN `b9792fee56ad091fae76d29185759d4b99cb9c45`: 79218 bytes.
-Всего 225432 UTF-8 bytes ещё до PR/instructions. Исторический лимит
-48000 characters и старые provider probes явно недостаточны.
-
-Witness должен покрыть BlobDepot/Blobovnica/blobber и BlobStorage, грамматику
-`{{ ydb-name }}`, разорванный `BS_CONTROLLER`, `--storage-pool-namein`,
-technical-literal formatting/readability и H1/index/TOC. Valid target-only
-navigation сохраняется; старый EN prose не становится model input.
-Offline replay через production interfaces доказывает orchestration, не качество
-модели. До semantic acceptance обязательны real-provider full-context probe и
-независимый review полных результатов. Подробные будущие witnesses: testing.md.
-
-## Исторический архив: не действующий контракт
-
-Все записи ниже сохранены только как история конкретных runs/commits до замены
-контракта. Формулировки «текущий», «теперь», release gates, GREEN и probe success
-внутри архива описывают состояние на дату записи. Они не являются инструкциями
-для нового PR review, не подтверждают его реализацию или provider acceptance и
-не разрешают chunk-level review, filtered glossary или прежний порядок build.
+Все записи ниже описывают прежние реализации и прогоны. Их инструкции о chunks,
+excerpt review, glossary filtering, repair и порядке build не являются текущим
+semantic contract. Слова «текущий» и «теперь» относятся к дате исторической записи.
 
 ### История: Three-stage translation, editor and arbiter contract (2026-09-29)
 
