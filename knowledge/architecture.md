@@ -209,3 +209,27 @@ after the previous `build-docs` result. The reporter therefore polls boundedly
 for `build-docs` on the exact published SHA before writing its final comment.
 This wait performs no model calls. A failed check produces RED; a timeout keeps
 the explicit readiness YELLOW.
+# Explicit translation-plan boundary (2026-09-30)
+
+The source PR file inventory is the workflow input boundary. A pure
+classification preflight runs before any model call. After direction selection,
+`translation_plan.py` assigns every row an explicit disposition before metadata
+production, classifies both sides of renames, validates status/action pairs and
+claims exact target outputs. Fixed-output and final-candidate reconciliation
+then block publication when a planned TOC/delete/rename/document result is
+missing.
+
+Supported TOC migrations bind the SHA-256 of the complete expected target file
+into the plan before document-model calls. Fixed and final reconciliation both
+require the exact digest, so path presence cannot mask stale content. This is
+still a migration rule backed by the established target article H1, not the
+future general TOC prose translator.
+
+This is a narrow fail-closed planner, not the completed cross-file executor.
+Unsupported asset/redirect operations, metadata-only direction and TOC
+remove/rename/copy stop before publication. The target architecture and policy
+matrix are in `docs/translation-plan.md`: model translation uses the complete
+file; source base→head deltas are programmatic planning inputs only; every plan
+entry gets a mutation or checked-noop proof; the canonical plan/result hashes
+are replayed by verify/continue. An article H1 is context, not a general
+translation of a navigation label.

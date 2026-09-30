@@ -45,6 +45,12 @@ def run() -> None:
         RepoPath("ydb/docs/ru/core/page.md"), RepoPath("ydb/docs/en/core/page.md"), new=True
     )
     assert len(metadata) == 1 and b'"page.md"' in metadata[0].after
+    # The compact fake publisher only materializes one blob at branch update;
+    # keep runtime smoke focused on installed translate/verify/continue. Exact
+    # multi-file TOC publication is covered by the #50839 runtime golden.
+    services.files["ydb/docs/en/core/toc.yaml"] = (
+        b"items: [{name: Page, href: page.md}]\n"
+    )
     environment = {
         "YDBDOC_RUNTIME_FACTORY": "ydbdoc_review_ng.runtime:create_runtime",
         "GITHUB_ACTOR": "maintainer",

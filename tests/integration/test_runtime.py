@@ -6,6 +6,7 @@ import base64
 import importlib.util
 import json
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 from _runtime_services import (
@@ -1578,6 +1579,88 @@ def test_two_new_pages_accumulate_into_one_toc_candidate():
         ):
             pending[change.path.value] = change.after
     assert pending["ydb/docs/en/core/toc.yaml"].count(b"href:") == 2
+
+
+def test_pr50839_full_runtime_plan_publishes_exact_complete_toc() -> None:
+    from ydbdoc_review_ng.application import TranslateWorkflowInput
+    from ydbdoc_review_ng.domain import GitSha
+    from ydbdoc_review_ng.runtime import create_runtime
+
+    directory = "ydb/docs/{}/core/maintenance/manual/"
+    fixture_root = Path(__file__).parents[1] / "fixtures"
+    ru_toc = (fixture_root / "pr50839_ru_toc_i.yaml").read_bytes()
+    en_before = (fixture_root / "pr50839_en_toc_i_before.yaml").read_bytes()
+    en_expected = (fixture_root / "pr50839_en_toc_i_expected.yaml").read_bytes()
+
+    class Services(RuntimeServices):
+        def __init__(self) -> None:
+            super().__init__()
+            self.blobs: dict[str, bytes] = {}
+            self.published: dict[str, bytes | None] = {}
+            for name, ru_heading, en_heading in (
+                ("blobdepot.md", "BlobDepot", "BlobDepot"),
+                (
+                    "blobdepot_decommit.md",
+                    "\xd0\x94\xd0\xb5\xd0\xba\xd0\xbe\xd0\xbc\xd0\xb8\xd1\x81\xd1\x81\xd0\xb8\xd1\x8f BlobDepot",
+                    "Group Decommissioning",
+                ),
+                ("index.md", "\xd0\x9e\xd0\xb1\xd1\x81\xd0\xbb\xd1\x83\xd0\xb6\xd0\xb8\xd0\xb2\xd0\xb0\xd0\xbd\xd0\xb8\xd0\xb5", "Maintenance"),
+            ):
+                self.files[directory.format("ru") + name] = f"# {ru_heading}\n".encode()
+                self.files[directory.format("en") + name] = f"# {en_heading}\n".encode()
+            self.files[directory.format("ru") + "toc_i.yaml"] = ru_toc
+            self.files[directory.format("en") + "toc_i.yaml"] = en_before
+
+        def github(self, method, path, payload):
+            normalized = path.removeprefix("/repos/ydb-platform/ydb")
+            if normalized == "/pulls/42":
+                result = super().github(method, path, payload)
+                result["changed_files"] = 4
+                return result
+            if normalized == "/pulls/42/files?per_page=100":
+                return [
+                    {"status": "modified", "filename": directory.format("ru") + name}
+                    for name in (
+                        "blobdepot.md",
+                        "blobdepot_decommit.md",
+                        "index.md",
+                        "toc_i.yaml",
+                    )
+                ]
+            if normalized == "/git/blobs":
+                content = base64.b64decode(payload["content"])
+                sha = f"{len(self.blobs) + 1:040x}"
+                self.blobs[sha] = content
+                return {"sha": sha}
+            if normalized == "/git/trees":
+                for row in payload["tree"]:
+                    self.published[row["path"]] = (
+                        None if row["sha"] is None else self.blobs[row["sha"]]
+                    )
+                return {"sha": "d" * 40}
+            return super().github(method, path, payload)
+
+    services = Services()
+    runtime = create_runtime(
+        environment={
+            "GITHUB_ACTOR": "m",
+            "YDBDOC_ALLOWED_ACTORS": "m",
+            "YANDEX_API_KEY": "secret",
+            "YANDEX_FOLDER_ID": "folder",
+        },
+        ydb_executor=services,
+        github_transport=services.github,
+        model_transport=services.model,
+    )
+
+    result = runtime.doc_translate(
+        TranslateWorkflowInput(42, GitSha(services.source), Decimal(10))
+    )
+
+    assert result.final_commit_sha == GitSha(services.translated)
+    assert services.published[directory.format("en") + "toc_i.yaml"] == en_expected
+    assert b"Dynamic cluster configuration" in en_expected
+    assert b"BlobDepot decommit" not in en_expected
 
 
 @pytest.mark.parametrize("operation", ["added", "removed", "renamed"])

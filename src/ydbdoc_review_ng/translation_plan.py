@@ -1,0 +1,451 @@
+"""Pure, fail-closed planning for every source pull-request inventory row.
+
+The planner performs no repository reads and no mutations. It turns the frozen
+GitHub inventory plus the frozen Markdown scope into an immutable intent plan.
+Execution is separate and reconciles concrete results before publication.
+"""
+
+from __future__ import annotations
+
+import posixpath
+import re
+from collections.abc import Mapping
+from dataclasses import dataclass
+from enum import Enum
+from hashlib import sha256
+
+from ydbdoc_review_ng.continuation import SourceChange, SourceChangeInventory
+from ydbdoc_review_ng.direction import Direction
+from ydbdoc_review_ng.domain import RepoPath
+from ydbdoc_review_ng.errors import SafeDiagnosticError
+from ydbdoc_review_ng.locales import LocaleRoots, PairKey
+from ydbdoc_review_ng.scope import (
+    FileOperation,
+    InitialPairDisposition,
+    ScopeManifest,
+    ScopeOrigin,
+)
+
+_TOC_NAME = re.compile(r"^toc(?:_[A-Za-z0-9-]+)?\.ya?ml$")
+_ASSET_EXTENSIONS = frozenset(
+    {".svg", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif", ".ico", ".pdf"}
+)
+_ORDINARY_STATUSES = frozenset({"added", "modified"})
+
+
+class TranslationPlanError(SafeDiagnosticError):
+    """The complete inventory cannot be represented by the supported executor."""
+
+
+class PathKind(str, Enum):
+    MARKDOWN = "markdown"
+    TOC = "toc"
+    REDIRECTS = "redirects"
+    ASSET = "asset"
+    LOCALIZED_OTHER = "localized_other"
+    OUTSIDE_LOCALES = "outside_locales"
+
+
+class PlanAction(str, Enum):
+    TRANSLATE_DOCUMENT = "translate_document"
+    DELETE_TARGET = "delete_target"
+    RENAME_TARGET = "rename_target"
+    RENAME_AND_TRANSLATE = "rename_and_translate"
+    TARGET_ALREADY_ABSENT = "target_already_absent"
+    TARGET_ALREADY_RENAMED = "target_already_renamed"
+    SOURCE_TOMBSTONE = "source_tombstone"
+    TARGET_TOMBSTONE = "target_tombstone"
+    COMPLETE_PAIR = "complete_pair"
+    TARGET_SIDE_CHANGE = "target_side_change"
+    SYNC_TOC = "sync_toc"
+    IGNORE_OUTSIDE_LOCALES = "ignore_outside_locales"
+
+
+@dataclass(frozen=True, slots=True)
+class ClassifiedPath:
+    path: RepoPath
+    locale: str | None
+    relative: str | None
+    kind: PathKind
+
+
+@dataclass(frozen=True, slots=True)
+class PlannedInput:
+    change: SourceChange
+    kind: PathKind
+    action: PlanAction
+    target_path: RepoPath | None
+    outputs: tuple[RepoPath, ...]
+    expected_sha256: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class TranslationPlan:
+    direction: Direction | None
+    inputs: tuple[PlannedInput, ...]
+    outputs: tuple[RepoPath, ...]
+
+    def __post_init__(self) -> None:
+        paths = tuple(item.change.path.value for item in self.inputs)
+        if paths != tuple(sorted(set(paths))):
+            raise TranslationPlanError("translation_plan_inputs_not_canonical")
+        if self.outputs != tuple(sorted(set(self.outputs), key=lambda path: path.value)):
+            raise TranslationPlanError("translation_plan_outputs_not_canonical")
+        claimed = tuple(path for item in self.inputs for path in item.outputs)
+        if not set(claimed).issubset(self.outputs):
+            raise TranslationPlanError("translation_plan_outputs_incomplete")
+
+
+def _locale_root(core_root: RepoPath) -> RepoPath:
+    marker = "/core"
+    if not core_root.value.endswith(marker):
+        raise TranslationPlanError("translation_plan_locale_root_invalid")
+    return RepoPath(core_root.value[: -len(marker)])
+
+
+def _relative(root: RepoPath, path: RepoPath) -> str | None:
+    prefix = root.value + "/"
+    return path.value.removeprefix(prefix) if path.value.startswith(prefix) else None
+
+
+def _paired(root: RepoPath, relative: str) -> RepoPath:
+    return RepoPath(root.value + "/" + relative)
+
+
+def classify_path(roots: LocaleRoots, path: RepoPath, /) -> ClassifiedPath:
+    """Classify one path without hiding localized metadata as external."""
+    locale_roots = (("ru", _locale_root(roots.ru)), ("en", _locale_root(roots.en)))
+    for locale, locale_root in locale_roots:
+        locale_relative = _relative(locale_root, path)
+        if locale_relative is None:
+            continue
+        core_root = roots.ru if locale == "ru" else roots.en
+        core_relative = _relative(core_root, path)
+        basename = posixpath.basename(path.value)
+        if core_relative is not None and basename.endswith(".md"):
+            return ClassifiedPath(path, locale, core_relative, PathKind.MARKDOWN)
+        if core_relative is not None and _TOC_NAME.fullmatch(basename) is not None:
+            return ClassifiedPath(path, locale, core_relative, PathKind.TOC)
+        if path == RepoPath(locale_root.value + "/redirects.yaml"):
+            return ClassifiedPath(path, locale, "redirects.yaml", PathKind.REDIRECTS)
+        if posixpath.splitext(basename)[1].lower() in _ASSET_EXTENSIONS:
+            return ClassifiedPath(path, locale, locale_relative, PathKind.ASSET)
+        return ClassifiedPath(path, locale, locale_relative, PathKind.LOCALIZED_OTHER)
+    return ClassifiedPath(path, None, None, PathKind.OUTSIDE_LOCALES)
+
+
+_ACTIONS = {
+    FileOperation.TRANSLATE: PlanAction.TRANSLATE_DOCUMENT,
+    FileOperation.DELETE_TARGET: PlanAction.DELETE_TARGET,
+    FileOperation.RENAME_TARGET: PlanAction.RENAME_TARGET,
+    FileOperation.RENAME_TARGET_AND_TRANSLATE: PlanAction.RENAME_AND_TRANSLATE,
+    FileOperation.NOOP_TARGET_ABSENT: PlanAction.TARGET_ALREADY_ABSENT,
+    FileOperation.NOOP_TARGET_ALREADY_RENAMED: PlanAction.TARGET_ALREADY_RENAMED,
+    FileOperation.SKIP_SOURCE_TOMBSTONE: PlanAction.SOURCE_TOMBSTONE,
+    FileOperation.SKIP_TARGET_TOMBSTONE: PlanAction.TARGET_TOMBSTONE,
+}
+
+_STATUS_OPERATIONS = {
+    "added": frozenset({FileOperation.TRANSLATE}),
+    "modified": frozenset({FileOperation.TRANSLATE}),
+    "removed": frozenset(
+        {
+            FileOperation.DELETE_TARGET,
+            FileOperation.NOOP_TARGET_ABSENT,
+            FileOperation.SKIP_SOURCE_TOMBSTONE,
+            FileOperation.SKIP_TARGET_TOMBSTONE,
+        }
+    ),
+    "renamed": frozenset(
+        {
+            FileOperation.RENAME_TARGET,
+            FileOperation.RENAME_TARGET_AND_TRANSLATE,
+            FileOperation.NOOP_TARGET_ALREADY_RENAMED,
+        }
+    ),
+}
+
+
+def _source_and_target_roots(
+    roots: LocaleRoots, direction: Direction
+) -> tuple[str, RepoPath, RepoPath]:
+    if direction is Direction.RU_TO_EN:
+        return "ru", roots.ru, roots.en
+    return "en", roots.en, roots.ru
+
+
+def _complete_pairs(
+    inventory: SourceChangeInventory, roots: LocaleRoots
+) -> frozenset[tuple[PathKind, str]]:
+    localized = [classify_path(roots, change.path) for change in inventory.files]
+    seen = {(item.locale, item.kind, item.relative) for item in localized if item.locale is not None}
+    return frozenset(
+        (kind, relative)
+        for locale, kind, relative in seen
+        if relative is not None
+        and ("en" if locale == "ru" else "ru", kind, relative) in seen
+    )
+
+
+def _validate_rename_shape(
+    change: SourceChange,
+    current: ClassifiedPath,
+    roots: LocaleRoots,
+) -> None:
+    if change.status != "renamed":
+        return
+    assert change.previous_path is not None
+    previous = classify_path(roots, change.previous_path)
+    if (
+        previous.locale != current.locale
+        or previous.kind is not current.kind
+        or previous.kind is PathKind.OUTSIDE_LOCALES
+    ):
+        raise TranslationPlanError("translation_plan_rename_crosses_policy_boundary")
+
+
+def preflight_inventory(inventory: SourceChangeInventory, roots: LocaleRoots, /) -> None:
+    """Reject inventory shapes unsupported in every direction before any model call."""
+    complete = _complete_pairs(inventory, roots)
+    localized_unpaired = 0
+    localized_markdown = 0
+    for change in inventory.files:
+        current = classify_path(roots, change.path)
+        _validate_rename_shape(change, current, roots)
+        if current.kind is PathKind.OUTSIDE_LOCALES:
+            continue
+        if current.relative is not None and (current.kind, current.relative) in complete:
+            continue
+        localized_unpaired += 1
+        if current.kind is PathKind.MARKDOWN:
+            localized_markdown += 1
+            if change.status not in _STATUS_OPERATIONS:
+                raise TranslationPlanError("translation_plan_status_operation_mismatch")
+            continue
+        if current.kind is PathKind.TOC:
+            if change.status not in _ORDINARY_STATUSES:
+                raise TranslationPlanError("translation_plan_toc_operation_unsupported")
+            continue
+        raise TranslationPlanError("translation_plan_localized_file_unsupported")
+    if localized_unpaired and not localized_markdown:
+        # The legacy direction/scope selector is Markdown-based. Until metadata
+        # gets its own executor, never misreport a metadata-only PR as a no-op.
+        raise TranslationPlanError("translation_plan_direction_missing")
+
+
+def _markdown_input(
+    change: SourceChange,
+    current: ClassifiedPath,
+    target_root: RepoPath,
+    manifest: ScopeManifest,
+) -> PlannedInput:
+    assert current.relative is not None
+    key = PairKey(RepoPath(current.relative))
+    outcome = next((item for item in manifest.initial_outcomes if item.key == key), None)
+    target_path = _paired(target_root, current.relative)
+    if outcome is None:
+        raise TranslationPlanError("translation_plan_markdown_missing")
+    if outcome.disposition is InitialPairDisposition.COMPLETE_PAIR:
+        return PlannedInput(change, current.kind, PlanAction.COMPLETE_PAIR, target_path, ())
+    entry = next(
+        (
+            item
+            for item in manifest.entries
+            if item.origin is ScopeOrigin.INITIAL and key in item.initial_keys
+        ),
+        None,
+    )
+    if entry is None or entry.pair.source_path != change.path:
+        raise TranslationPlanError("translation_plan_markdown_missing")
+    allowed = _STATUS_OPERATIONS.get(change.status)
+    if allowed is None or entry.operation not in allowed:
+        raise TranslationPlanError("translation_plan_status_operation_mismatch")
+    action = _ACTIONS[entry.operation]
+    if action in {
+        PlanAction.SOURCE_TOMBSTONE,
+        PlanAction.TARGET_TOMBSTONE,
+    }:
+        raise TranslationPlanError("translation_plan_markdown_delete_unsupported")
+    if action in {PlanAction.RENAME_TARGET, PlanAction.RENAME_AND_TRANSLATE}:
+        if entry.rename_from_target_path is None:
+            raise TranslationPlanError("translation_plan_rename_preimage_missing")
+        outputs = tuple(
+            sorted(
+                (entry.rename_from_target_path, entry.pair.target_path),
+                key=lambda path: path.value,
+            )
+        )
+    elif action in {
+        PlanAction.TARGET_ALREADY_ABSENT,
+        PlanAction.TARGET_ALREADY_RENAMED,
+        PlanAction.SOURCE_TOMBSTONE,
+        PlanAction.TARGET_TOMBSTONE,
+    }:
+        outputs = ()
+    else:
+        outputs = (entry.pair.target_path,)
+    return PlannedInput(change, current.kind, action, entry.pair.target_path, outputs)
+
+
+def build_translation_plan(
+    inventory: SourceChangeInventory,
+    roots: LocaleRoots,
+    manifest: ScopeManifest | None,
+    /,
+    *,
+    toc_postconditions: Mapping[RepoPath, bytes] | None = None,
+) -> TranslationPlan:
+    """Build intent before metadata/model execution and cover every inventory row."""
+    complete = _complete_pairs(inventory, roots)
+    direction = None if manifest is None else manifest.direction
+    if direction is None:
+        inputs: list[PlannedInput] = []
+        for change in inventory.files:
+            current = classify_path(roots, change.path)
+            _validate_rename_shape(change, current, roots)
+            if current.kind is PathKind.OUTSIDE_LOCALES:
+                inputs.append(
+                    PlannedInput(
+                        change, current.kind, PlanAction.IGNORE_OUTSIDE_LOCALES, None, ()
+                    )
+                )
+            elif current.relative is not None and (current.kind, current.relative) in complete:
+                inputs.append(
+                    PlannedInput(change, current.kind, PlanAction.COMPLETE_PAIR, None, ())
+                )
+            else:
+                raise TranslationPlanError("translation_plan_direction_missing")
+        return TranslationPlan(None, tuple(inputs), ())
+
+    assert manifest is not None
+    source_locale, _source_root, target_root = _source_and_target_roots(roots, direction)
+    target_locale = "en" if source_locale == "ru" else "ru"
+    planned: list[PlannedInput] = []
+    generated: set[RepoPath] = set()
+    target_changes: set[RepoPath] = set()
+
+    for change in inventory.files:
+        current = classify_path(roots, change.path)
+        _validate_rename_shape(change, current, roots)
+        if current.kind is PathKind.OUTSIDE_LOCALES:
+            planned.append(
+                PlannedInput(change, current.kind, PlanAction.IGNORE_OUTSIDE_LOCALES, None, ())
+            )
+            continue
+        if current.locale == target_locale:
+            target_changes.add(change.path)
+            planned.append(
+                PlannedInput(change, current.kind, PlanAction.TARGET_SIDE_CHANGE, change.path, ())
+            )
+            continue
+        if current.locale != source_locale or current.relative is None:
+            raise TranslationPlanError("translation_plan_locale_classification_invalid")
+        if current.kind is PathKind.MARKDOWN:
+            item = _markdown_input(change, current, target_root, manifest)
+        elif current.kind is PathKind.TOC:
+            if change.status not in _ORDINARY_STATUSES:
+                raise TranslationPlanError("translation_plan_toc_operation_unsupported")
+            target = _paired(target_root, current.relative)
+            expected = None if toc_postconditions is None else toc_postconditions.get(target)
+            if expected is None:
+                raise TranslationPlanError("translation_plan_toc_postcondition_missing")
+            item = PlannedInput(
+                change,
+                current.kind,
+                PlanAction.SYNC_TOC,
+                target,
+                (target,),
+                sha256(expected).hexdigest(),
+            )
+        else:
+            raise TranslationPlanError("translation_plan_localized_file_unsupported")
+        planned.append(item)
+        generated.update(item.outputs)
+
+    if generated & target_changes:
+        raise TranslationPlanError("translation_plan_target_collision")
+    scope_outputs = {
+        entry.pair.target_path
+        for entry in manifest.entries
+        if entry.operation
+        not in {
+            FileOperation.NOOP_TARGET_ABSENT,
+            FileOperation.NOOP_TARGET_ALREADY_RENAMED,
+            FileOperation.SKIP_SOURCE_TOMBSTONE,
+            FileOperation.SKIP_TARGET_TOMBSTONE,
+        }
+    }
+    scope_outputs.update(
+        entry.rename_from_target_path
+        for entry in manifest.entries
+        if entry.rename_from_target_path is not None
+    )
+    outputs = tuple(sorted(scope_outputs | generated, key=lambda path: path.value))
+    return TranslationPlan(direction, tuple(planned), outputs)
+
+
+def reconcile_fixed_outputs(
+    plan: TranslationPlan,
+    fixed_files: tuple[tuple[str, bytes | None], ...],
+    /,
+) -> None:
+    """Prove that non-model operations produced their exact planned terminal state."""
+    fixed = {RepoPath(path): content for path, content in fixed_files}
+    for item in plan.inputs:
+        if item.action is PlanAction.SYNC_TOC:
+            if item.target_path is None:
+                raise TranslationPlanError("translation_plan_toc_uncovered")
+            content = fixed.get(item.target_path)
+            if (
+                content is None
+                or item.expected_sha256 is None
+                or sha256(content).hexdigest() != item.expected_sha256
+            ):
+                raise TranslationPlanError("translation_plan_toc_uncovered")
+        elif item.action is PlanAction.DELETE_TARGET:
+            if item.target_path not in fixed or fixed[item.target_path] is not None:
+                raise TranslationPlanError("translation_plan_delete_uncovered")
+        elif item.action is PlanAction.RENAME_TARGET and any(
+            path not in fixed for path in item.outputs
+        ):
+            raise TranslationPlanError("translation_plan_rename_uncovered")
+
+
+def reconcile_candidate_outputs(
+    plan: TranslationPlan,
+    candidate_files: tuple[tuple[str, bytes | None], ...],
+    /,
+) -> None:
+    """Require every inventory-owned mutation in the final candidate."""
+    candidate = {RepoPath(path): content for path, content in candidate_files}
+    for item in plan.inputs:
+        target = item.target_path
+        if item.action in {
+            PlanAction.TRANSLATE_DOCUMENT,
+        }:
+            if target not in candidate or candidate[target] is None:
+                raise TranslationPlanError("translation_plan_candidate_output_missing")
+        elif item.action is PlanAction.SYNC_TOC:
+            if target is None:
+                raise TranslationPlanError("translation_plan_candidate_output_missing")
+            content = candidate.get(target)
+            if (
+                content is None
+                or item.expected_sha256 is None
+                or sha256(content).hexdigest() != item.expected_sha256
+            ):
+                raise TranslationPlanError("translation_plan_candidate_output_missing")
+        elif item.action is PlanAction.DELETE_TARGET:
+            if target not in candidate or candidate[target] is not None:
+                raise TranslationPlanError("translation_plan_candidate_delete_missing")
+        elif item.action in {PlanAction.RENAME_TARGET, PlanAction.RENAME_AND_TRANSLATE} and (
+            len(item.outputs) != 2
+            or item.target_path not in item.outputs
+            or candidate.get(item.target_path) is None
+            or any(
+                candidate.get(path, b"missing") is not None
+                for path in item.outputs
+                if path != item.target_path
+            )
+        ):
+            raise TranslationPlanError("translation_plan_candidate_rename_missing")

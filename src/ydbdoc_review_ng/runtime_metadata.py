@@ -332,6 +332,34 @@ class MetadataProducer:
             visit(seed, required=False)
         return tuple(sorted(paths))
 
+    def assert_target_document_unreferenced(
+        self, source_path: RepoPath, target_path: RepoPath
+    ) -> None:
+        """Fail closed rather than deleting an article while leaving a TOC orphan."""
+        source_root = source_path.value.split("/core/", 1)[0] + "/core"
+        target_root = target_path.value.split("/core/", 1)[0] + "/core"
+        seeds = {source_root + "/toc.yaml", source_root + "/toc.yml"}
+        directory = posixpath.dirname(source_path.value)
+        while directory == source_root or directory.startswith(source_root + "/"):
+            seeds.update(posixpath.join(directory, name) for name in _ROOT_TOC_NAMES)
+            if directory == source_root:
+                break
+            directory = posixpath.dirname(directory)
+        for source_toc in self._source_toc_paths(source_root, seeds):
+            target_toc = RepoPath(target_root + source_toc[len(source_root) :])
+            content = self._target_bytes(target_toc)
+            if content is None:
+                continue
+            view = _toc(content, "unsupported_target_toc")
+            if any(
+                posixpath.normpath(
+                    posixpath.join(posixpath.dirname(target_toc.value), node.value)
+                )
+                == target_path.value
+                for node in view.hrefs
+            ):
+                raise RuntimeBoundaryError("target_toc_reference_blocks_delete")
+
     def changes(
         self,
         source_path: RepoPath,

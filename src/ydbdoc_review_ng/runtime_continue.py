@@ -31,6 +31,7 @@ from ydbdoc_review_ng.domain import GitSha
 from ydbdoc_review_ng.persistence import ContinuationCheckpoint
 from ydbdoc_review_ng.runtime_github import GitHubBackend, RuntimeBoundaryError
 from ydbdoc_review_ng.scope import FileOperation, ScopeOrigin
+from ydbdoc_review_ng.translation_plan import TranslationPlanError
 
 if TYPE_CHECKING:
     from ydbdoc_review_ng.runtime_content import (
@@ -121,9 +122,14 @@ def replay_continue(
     direction = DirectionSelectionResult(
         DirectionSelectionState.SELECTED, state.direction, decisions, None
     )
-    plans = content.select_source(
-        preparation, direction=direction, review_documents=state.stage is ContinuationStage.REVIEW
-    )
+    try:
+        plans = content.select_source(
+            preparation,
+            direction=direction,
+            review_documents=state.stage is ContinuationStage.REVIEW,
+        )
+    except TranslationPlanError:
+        raise ContinuationStateError() from None
     if (
         plans.manifest is None
         or tuple(entry.pair.target_path for entry in plans.manifest.entries)

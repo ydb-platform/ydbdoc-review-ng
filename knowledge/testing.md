@@ -73,3 +73,22 @@ Installed smoke копируется вне checkout вместе с `_runtime_s
 под init/subreaper: завершённые orphan grandchildren иначе остаются zombies и
 `kill(pid, 0)` ошибочно выглядит как продолжающийся процесс. Это настройка
 тестового окружения; контракт timeout wrapper не ослабляется.
+# Translation-plan tests (2026-09-30)
+
+`tests/unit/test_translation_plan.py` is intentionally separate from runtime,
+model and publication tests. It treats the source PR inventory as a closed set
+and checks that every path receives exactly one explicit disposition before
+execution. The matrix covers path kinds, Markdown status/operation pairs,
+old/new rename boundaries, complete pairs, target-side/outside-locale changes,
+all supported TOC names, unsupported TOC statuses and localized kinds,
+metadata-only direction, output collisions, canonical ordering, immutability,
+fixed/final reconciliation and the exact four-file shape of PR #50839.
+
+The #50839 regression also runs the production composition end to end with
+recorded complete `toc_i.yaml` fixtures. It asserts exact published target
+bytes, including preservation of target-only entries. Planner unit tests bind
+the complete expected TOC digest and reject a merely non-null dummy file.
+
+Unsupported matrix cells are expected failures, not missing tests. Structural
+TOC delta/no-op proofs, redirects, assets and persisted plan replay remain the
+next executor layer described in `docs/translation-plan.md`.

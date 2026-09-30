@@ -35,6 +35,7 @@ from ydbdoc_review_ng.dependencies import (
 from ydbdoc_review_ng.direction import (
     DIRECTION_UNDETERMINED_ACTION,
     DIRECTION_UNDETERMINED_WARNING,
+    Direction,
     DirectionModelDecision,
     DirectionModelRequest,
     DirectionModelResponse,
@@ -114,6 +115,15 @@ from ydbdoc_review_ng.translation.document import (
     _document_block_texts,
     verify_document_candidate_with_links,
 )
+from ydbdoc_review_ng.translation_plan import (
+    PathKind,
+    TranslationPlan,
+    build_translation_plan,
+    classify_path,
+    preflight_inventory,
+    reconcile_candidate_outputs,
+    reconcile_fixed_outputs,
+)
 
 if TYPE_CHECKING:
     from ydbdoc_review_ng.persistence import ContinuationCheckpoint
@@ -169,6 +179,7 @@ class FrozenSourcePlans:
     manifest: ScopeManifest | None
     documents: tuple[Document, ...]
     fixed_files: tuple[tuple[str, bytes | None], ...]
+    translation_plan: TranslationPlan
 
 
 class InvalidTranslationResponse(RuntimeError):
@@ -773,6 +784,7 @@ class RuntimeContent:
     ) -> FrozenPreparation:
         """Read and preflight pinned scope inputs without a model call or mutation."""
         self.review_drafts.clear()
+        preflight_inventory(self.source.inventory, self.roots)
         changes = []
         for raw in self.source.inventory.files:
             name = raw.path.value
@@ -910,6 +922,38 @@ class RuntimeContent:
                     != expected
                 ):
                     raise RuntimeBoundaryError("verification_metadata_mismatch")
+        toc_postconditions: dict[RepoPath, bytes] = {}
+        if selection.manifest is not None:
+            source_locale = (
+                "ru" if selection.manifest.direction is Direction.RU_TO_EN else "en"
+            )
+            target_root = self.roots.en if source_locale == "ru" else self.roots.ru
+            base_snapshot = SnapshotRef(
+                snapshots.source_snapshot.repository,
+                metadata_preparation.metadata_snapshot.commit_sha,
+            )
+            for raw in preparation.inventory.files:
+                classified = classify_path(self.roots, raw.path)
+                if (
+                    classified.locale != source_locale
+                    or classified.kind is not PathKind.TOC
+                ):
+                    continue
+                assert classified.relative is not None
+                target_path = RepoPath(target_root.value + "/" + classified.relative)
+                expected = files.get(target_path.value)
+                if target_path.value not in files:
+                    expected = self.source.github.read_bytes(base_snapshot, target_path)
+                if expected is not None:
+                    toc_postconditions[target_path] = expected
+        # Freeze exact metadata postconditions before any translation-model
+        # call. Reconciliation later checks their content digest.
+        translation_plan = build_translation_plan(
+            preparation.inventory,
+            self.roots,
+            selection.manifest,
+            toc_postconditions=toc_postconditions,
+        )
         documents = []
         target_snapshot = SnapshotRef(
             snapshots.source_snapshot.repository, preparation.metadata_snapshot.commit_sha
@@ -993,8 +1037,14 @@ class RuntimeContent:
                 raise RuntimeBoundaryError("verification_target_missing")
             files[path.value] = target
         self.documents = tuple(documents)
+        fixed_files = tuple(sorted(files.items()))
+        reconcile_fixed_outputs(translation_plan, fixed_files)
         self.plans = FrozenSourcePlans(
-            preparation, selection.manifest, self.documents, tuple(sorted(files.items()))
+            preparation,
+            selection.manifest,
+            self.documents,
+            fixed_files,
+            translation_plan,
         )
         return self.plans
 
@@ -1022,6 +1072,17 @@ class RuntimeContent:
         *,
         verify_noop: bool = False,
     ) -> None:
+        if entry.operation is FileOperation.DELETE_TARGET:
+            MetadataProducer(
+                self.source.github,
+                preparation.snapshots.source_snapshot,
+                preparation.metadata_snapshot,
+                tuple(raw.path for raw in preparation.inventory.files),
+                pending=files,
+            ).assert_target_document_unreferenced(
+                entry.pair.source_path, entry.pair.target_path
+            )
+            return
         operations = {
             FileOperation.TRANSLATE,
             FileOperation.RENAME_TARGET,
@@ -1626,6 +1687,12 @@ class RuntimeContent:
                 target_plan,
                 self._link_resolver(document, target),
             )
+        if self.plans is None:
+            raise RuntimeBoundaryError("translation_plan_missing")
+        reconcile_candidate_outputs(
+            self.plans.translation_plan,
+            tuple(sorted(files.items())),
+        )
 
     def validate_candidate(
         self, snapshot: ImmutableRunSnapshot, candidate: WorkflowCandidate, /

@@ -41,6 +41,7 @@ from ydbdoc_review_ng.translation import (
     build_translation_request,
     prepare_document,
 )
+from ydbdoc_review_ng.translation_plan import TranslationPlan
 
 SOURCE_PATH = RepoPath("ydb/docs/ru/core/page.md")
 TARGET_PATH = RepoPath("ydb/docs/en/core/page.md")
@@ -687,7 +688,13 @@ def test_continuation_revalidates_field_local_inline_code_grammar_order() -> Non
         b"* The `TraceId` column was added to `.sys/top_queries_*` and `.sys/query_sessions`.\n"
     )
     document = document_for(source)
-    plans = FrozenSourcePlans(cast(FrozenPreparation, object()), None, (document,), ())
+    plans = FrozenSourcePlans(
+        cast(FrozenPreparation, object()),
+        None,
+        (document,),
+        (),
+        cast(TranslationPlan, object()),
+    )
 
     restored = content_with(ScriptedModels([])).restore_accepted_documents(
         plans,

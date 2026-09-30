@@ -23,6 +23,47 @@ _SCOPE_FAILURE_MESSAGES = {
         "объём исходного текста превышает лимит", "символов"
     ),
 }
+_PLAN_FAILURE_MESSAGES = {
+    "translation_plan_direction_missing": (
+        "изменён локализованный файл, но для него не построено направление перевода"
+    ),
+    "translation_plan_localized_file_unsupported": (
+        "изменённый локализованный файл имеет неподдерживаемый тип операции"
+    ),
+    "translation_plan_markdown_missing": (
+        "изменённый Markdown-файл отсутствует в плане перевода"
+    ),
+    "translation_plan_markdown_delete_unsupported": (
+        "удаление или tombstone Markdown нельзя безопасно завершить без синхронизации TOC"
+    ),
+    "translation_plan_toc_uncovered": (
+        "изменённый TOC не получил доказанного результата синхронизации"
+    ),
+    "translation_plan_toc_postcondition_missing": (
+        "для изменённого TOC не удалось построить точное ожидаемое содержимое"
+    ),
+    "translation_plan_toc_operation_unsupported": (
+        "операция над TOC пока не поддерживается безопасным планировщиком"
+    ),
+    "translation_plan_status_operation_mismatch": (
+        "статус файла противоречит запланированной операции"
+    ),
+    "translation_plan_rename_crosses_policy_boundary": (
+        "переименование пересекает границу локали или типа файла"
+    ),
+    "translation_plan_target_collision": (
+        "автоматический перевод конфликтует с явным изменением target-файла"
+    ),
+    "translation_plan_candidate_output_missing": (
+        "в итоговом кандидате отсутствует обязательный результат перевода"
+    ),
+    "translation_plan_candidate_delete_missing": (
+        "в итоговом кандидате отсутствует обязательное удаление"
+    ),
+    "translation_plan_candidate_rename_missing": (
+        "в итоговом кандидате отсутствует одна из сторон переименования"
+    ),
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -252,18 +293,26 @@ class QAReporter:
 
     def report_failure(self, source_pr_number: int, diagnostic: str, /) -> None:
         failure = _SCOPE_FAILURE_MESSAGES.get(diagnostic)
-        if failure is None:
+        plan_failure = _PLAN_FAILURE_MESSAGES.get(diagnostic)
+        if failure is None and plan_failure is None:
             return
-        reason, unit = failure
-        limit = "20" if diagnostic == "dependency_file_limit_exceeded" else "250 000"
-        body = (
-            "🔴 Перевод PR не запущен\n\n"
-            f"Причина: {reason}.\n"
-            f"Лимит: {limit} {unit}.\n\n"
-            "Что сделать: уменьшить scope PR или увеличить настройку лимита, "
-            "затем повторно добавить метку `doc_translate`.\n"
-            f"{SCOPE_FAILURE_MARKER}"
-        )
+        if failure is not None:
+            reason, unit = failure
+            limit = "20" if diagnostic == "dependency_file_limit_exceeded" else "250 000"
+            details = (
+                f"Причина: {reason}.\n"
+                f"Лимит: {limit} {unit}.\n\n"
+                "Что сделать: уменьшить scope PR или увеличить настройку лимита, "
+                "затем повторно добавить метку `doc_translate`."
+            )
+        else:
+            details = (
+                f"Причина: {plan_failure}.\n"
+                f"Код: `{diagnostic}`.\n\n"
+                "Это защитная остановка: неполный перевод не опубликован. "
+                "Не перезапускайте job до исправления планировщика."
+            )
+        body = f"🔴 Перевод PR не запущен\n\n{details}\n{SCOPE_FAILURE_MARKER}"
         existing = next(
             (
                 comment

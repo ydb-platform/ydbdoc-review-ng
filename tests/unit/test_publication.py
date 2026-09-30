@@ -132,6 +132,24 @@ def test_scope_failure_is_reported_once_in_source_pr_and_updated_on_retry():
     assert len(backend.comments) == 1
 
 
+def test_translation_plan_failure_explains_why_no_candidate_was_published():
+    backend = Backend()
+    qa = QAReporter(
+        backend,
+        SimpleNamespace(noop=True),
+        lambda: ReportContext(SOURCE, TARGET, None),
+        lambda: (),
+    )
+
+    qa.report_failure(50839, "translation_plan_toc_uncovered")
+
+    assert backend.events == [("create_comment", 50839)]
+    body = backend.comments[7].body
+    assert "изменённый TOC" in body
+    assert "неполный перевод не опубликован" in body
+    assert "Не перезапускайте job" in body
+
+
 def test_publish_only_validated_plan_then_update_same_branch_pr():
     backend, snapshot, candidate, adapter, validated = setup_publication()
     with pytest.raises(PublicationError, match="unvalidated"):

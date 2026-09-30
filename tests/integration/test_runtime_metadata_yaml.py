@@ -187,6 +187,57 @@ def test_modified_source_toc_repairs_existing_target_name() -> None:
     assert b"name: BlobDepot decommit" not in changes[0].after
 
 
+def test_pr50839_toc_translation_matches_exact_expected_file() -> None:
+    source_toc_path = "ydb/docs/ru/core/maintenance/manual/toc_i.yaml"
+    target_toc_path = "ydb/docs/en/core/maintenance/manual/toc_i.yaml"
+    source_document = RepoPath(
+        "ydb/docs/ru/core/maintenance/manual/blobdepot_decommit.md"
+    )
+    target_document = RepoPath(
+        "ydb/docs/en/core/maintenance/manual/blobdepot_decommit.md"
+    )
+    target_before = (
+        b"items:\n"
+        b"- name: BlobDepot\n"
+        b"  href: blobdepot.md\n"
+        b"- name: BlobDepot decommit\n"
+        b"  href: blobdepot_decommit.md\n"
+    )
+    expected = (
+        b"items:\n"
+        b"- name: BlobDepot\n"
+        b"  href: blobdepot.md\n"
+        b'- name: "Group Decommissioning"\n'
+        b"  href: blobdepot_decommit.md\n"
+    )
+    files = {
+        (SOURCE, source_toc_path): (
+            b"items:\n"
+            b"- name: BlobDepot\n"
+            b"  href: blobdepot.md\n"
+            b"- name: \xd0\x94\xd0\xb5\xd0\xba\xd0\xbe\xd0\xbc\xd0\xb8\xd1\x81\xd1\x81\xd0\xb8\xd1\x8f BlobDepot\n"
+            b"  href: blobdepot_decommit.md\n"
+        ),
+        (TARGET, target_toc_path): target_before,
+        (TARGET, target_document.value): b"# Group Decommissioning\n",
+    }
+
+    class Reader:
+        def read_bytes(self, snapshot, path):
+            return files.get((snapshot, path.value))
+
+    changes = MetadataProducer(
+        Reader(), SOURCE, TARGET, (RepoPath(source_toc_path),)
+    ).changes(source_document, target_document)
+
+    # Exact bytes prove that href/order/other labels are preserved while the
+    # changed localized navigation label is updated.
+    assert len(changes) == 1
+    assert changes[0].path == RepoPath(target_toc_path)
+    assert changes[0].before == target_before
+    assert changes[0].after == expected
+
+
 def test_modified_source_toc_with_correct_target_name_is_a_noop() -> None:
     files = {
         (SOURCE, "ydb/docs/ru/core/maintenance/manual/toc_i.yaml"): (
@@ -212,6 +263,26 @@ def test_modified_source_toc_with_correct_target_name_is_a_noop() -> None:
     )
 
     assert changes == ()
+
+
+def test_delete_is_blocked_when_target_toc_would_keep_an_orphan() -> None:
+    files = {
+        (SOURCE, "ydb/docs/ru/core/toc.yaml"): b"items:\n",
+        (TARGET, "ydb/docs/en/core/toc.yaml"): (
+            b"items:\n- name: Deleted\n  href: deleted.md\n"
+        ),
+    }
+
+    class Reader:
+        def read_bytes(self, snapshot, path):
+            return files.get((snapshot, path.value))
+
+    metadata = MetadataProducer(Reader(), SOURCE, TARGET, ())
+    with pytest.raises(RuntimeBoundaryError, match="target_toc_reference_blocks_delete"):
+        metadata.assert_target_document_unreferenced(
+            RepoPath("ydb/docs/ru/core/deleted.md"),
+            RepoPath("ydb/docs/en/core/deleted.md"),
+        )
 
 
 @pytest.mark.parametrize(
