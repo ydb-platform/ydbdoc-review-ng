@@ -1594,6 +1594,8 @@ def test_pr50839_full_runtime_plan_publishes_exact_complete_toc() -> None:
     en_expected = (fixture_root / "pr50839_en_toc_i_expected.yaml").read_bytes()
 
     class Services(RuntimeServices):
+        merge_commit = "9" * 40
+
         def __init__(self) -> None:
             super().__init__()
             self.blobs: dict[str, bytes] = {}
@@ -1622,9 +1624,19 @@ def test_pr50839_full_runtime_plan_publishes_exact_complete_toc() -> None:
                     "encoding": "base64",
                     "content": base64.b64encode(self.ru_toc_before).decode(),
                 }
+            if normalized == f"/contents/{source_toc}?ref={self.merge_commit}":
+                return {
+                    "type": "file",
+                    "encoding": "base64",
+                    "content": base64.b64encode(ru_toc).decode(),
+                }
             if normalized == "/pulls/42":
                 result = super().github(method, path, payload)
-                result["changed_files"] = 4
+                result.update(
+                    merged=True,
+                    merge_commit_sha=self.merge_commit,
+                    changed_files=4,
+                )
                 return result
             if normalized == "/pulls/42/files?per_page=100":
                 return [

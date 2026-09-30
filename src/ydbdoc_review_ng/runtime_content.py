@@ -949,7 +949,7 @@ class RuntimeContent:
                     continue
                 assert classified.relative is not None
                 source_after = self.source.github.read_bytes(
-                    snapshots.source_snapshot, raw.path
+                    self.source.source_change_snapshot, raw.path
                 )
                 if source_after is None:
                     raise TranslationPlanError("translation_plan_toc_source_snapshot_missing")

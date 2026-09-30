@@ -164,6 +164,7 @@ class RuntimeSource:
         self.inventory = SourceChangeInventory(())
         self.metadata_snapshot: SnapshotRef
         self.source_base_snapshot: SnapshotRef
+        self.source_change_snapshot: SnapshotRef
         self.source_pr = 0
         self.continue_target_sha: GitSha | None = None
         self.probable_duplicates: tuple[ProbableDuplicate, ...] = ()
@@ -296,6 +297,7 @@ class RuntimeSource:
         )
         self.metadata_snapshot = SnapshotRef(repository, self.context.current_head)
         self.source_base_snapshot = source_base_snapshot
+        self.source_change_snapshot = original if merged else source
         self.source_pr = source_pr
         self.github.source_pr = source_pr
         self.github.source_sha = source.commit_sha
@@ -319,8 +321,9 @@ class RuntimeSource:
     def snapshot_continue(self, checkpoint: ContinuationCheckpoint, /) -> ImmutableRunSnapshot:
         """Restore scope inputs from saved refs/inventory, never today's PR file list.
 
-        The scope reader needs only the normalized snapshot table. The old PR's
-        merge commit is not a source or a diff baseline for replay.
+        The authoritative document content stays pinned by the checkpoint. The
+        original PR head (or its merge commit) is used only as the after-side of
+        the source change delta needed to reconstruct the saved plan.
         """
         pr = self.github.read_pull_request_identity(checkpoint.source_pr)
         if pr.base_repository != self.github.repository or pr.provenance is not None:
@@ -334,8 +337,22 @@ class RuntimeSource:
         base = SnapshotRef(repository, checkpoint.base_sha)
         raw = self.github.request("GET", f"/pulls/{checkpoint.source_pr}")
         try:
+            merged = bool(raw["merged"])
             self.source_base_snapshot = SnapshotRef(
                 repository, GitSha(raw["base"]["sha"])
+            )
+            # A checkpoint created while the PR was open owns its pinned head,
+            # even if that PR later moved or merged. For a run first created
+            # after merge, source_sha is the authoritative base-branch head and
+            # the PR merge commit is the exact after-side of the original diff.
+            change_sha = (
+                raw["merge_commit_sha"]
+                if merged and raw["head"]["sha"] != checkpoint.source_sha.value
+                else checkpoint.source_sha.value
+            )
+            pr_snapshot = SnapshotRef(
+                repository,
+                GitSha(change_sha),
             )
         except (KeyError, TypeError, ValueError):
             raise RuntimeBoundaryError("source_base_missing") from None
@@ -351,6 +368,7 @@ class RuntimeSource:
             None,
         )
         self.inventory = checkpoint.source_inventory
+        self.source_change_snapshot = pr_snapshot
         # Current target is an identity/publication parent only. Metadata starts
         # at the saved base and source, including for a previously merged PR.
         self.metadata_snapshot = base
