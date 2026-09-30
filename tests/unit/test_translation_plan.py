@@ -31,6 +31,50 @@ ROOTS = LocaleRoots(RepoPath("ydb/docs/ru/core"), RepoPath("ydb/docs/en/core"))
 SNAPSHOT = SnapshotRef(RepositoryId("ydb-platform/ydb"), GitSha("a" * 40))
 
 
+@pytest.mark.parametrize(
+    "replacement,accepted",
+    [
+        (
+            b"items:\n- name: Corrected\n  href: page.md\n- name: Target only\n  href: extra.md\n",
+            True,
+        ),
+        (
+            b"items:\n- name: Source\n  href: wrong.md\n- name: Target only\n  href: extra.md\n",
+            False,
+        ),
+        (b"items:\n- name: Target only\n  href: extra.md\n", False),
+        (b"items:\n- name: Source\n  href: page.md\n", False),
+        (
+            b"items:\n- name: Group\n  items:\n  - name: Source\n    href: page.md\n- name: Target only\n  href: extra.md\n",
+            False,
+        ),
+    ],
+)
+def test_toc_correction_preserves_deterministic_navigation(replacement, accepted):
+    original = b"items:\n- name: Source\n  href: page.md\n- name: Target only\n  href: extra.md\n"
+    document = entry("page.md")
+    plan = build_translation_plan(
+        inventory(change(document.pair.source_path.value), change(ROOTS.ru.value + "/toc.yaml")),
+        ROOTS,
+        manifest(document),
+        toc_postconditions=toc_postcondition("toc.yaml", original),
+        toc_source_snapshots=toc_source_snapshots("toc.yaml", ("Source", "page.md")),
+    )
+    candidate = (
+        (document.pair.target_path.value, b"# Page\n"),
+        (ROOTS.en.value + "/toc.yaml", replacement),
+    )
+    if accepted:
+        reconcile_candidate_outputs(
+            plan, candidate, toc_postconditions=toc_postcondition("toc.yaml", original)
+        )
+    else:
+        with pytest.raises(TranslationPlanError):
+            reconcile_candidate_outputs(
+                plan, candidate, toc_postconditions=toc_postcondition("toc.yaml", original)
+            )
+
+
 def change(
     path: str,
     status: str = "modified",

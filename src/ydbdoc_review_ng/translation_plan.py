@@ -22,6 +22,7 @@ from ydbdoc_review_ng.direction import Direction
 from ydbdoc_review_ng.domain import ContentHash, RepoPath
 from ydbdoc_review_ng.errors import SafeDiagnosticError
 from ydbdoc_review_ng.locales import LocaleRoots, PairKey
+from ydbdoc_review_ng.runtime_metadata import _toc
 from ydbdoc_review_ng.scope import (
     FileOperation,
     InitialPairDisposition,
@@ -160,6 +161,36 @@ def _compose_toc(content: bytes) -> tuple[Any, tuple[Any, ...]]:
         raise
     except (UnicodeError, yaml.YAMLError, TypeError, ValueError, RecursionError):
         raise TranslationPlanError("translation_plan_toc_delta_unsupported") from None
+
+
+def validate_toc_correction(expected: bytes, corrected: bytes, /) -> tuple[tuple[str, str], ...]:
+    """Validate deterministic YAML structure and return matching prose labels."""
+
+    def structure(content: bytes) -> tuple[tuple[object, ...], tuple[str, ...]]:
+        _toc(content, "translation_plan_toc_correction_invalid")
+        root, _items = _compose_toc(content)
+        labels: list[str] = []
+        stack = [root]
+        while stack:
+            node = stack.pop()
+            if isinstance(node, yaml.MappingNode):
+                for key, value in sorted(_yaml_mapping(node).items()):
+                    if key in {"name", "title"} and isinstance(value, yaml.ScalarNode):
+                        if value.tag != "tag:yaml.org,2002:str":
+                            raise TranslationPlanError("translation_plan_toc_correction_invalid")
+                        labels.append(value.value)
+                        value.value = ""
+                    else:
+                        stack.append(value)
+            elif isinstance(node, yaml.SequenceNode):
+                stack.extend(node.value)
+        return _yaml_fingerprint(root), tuple(labels)
+
+    expected_structure, expected_labels = structure(expected)
+    corrected_structure, corrected_labels = structure(corrected)
+    if expected_structure != corrected_structure:
+        raise TranslationPlanError("translation_plan_toc_correction_invalid")
+    return tuple(zip(expected_labels, corrected_labels, strict=True))
 
 
 def _planned_toc_additions(
@@ -610,6 +641,8 @@ def reconcile_candidate_outputs(
     plan: TranslationPlan,
     candidate_files: tuple[tuple[str, bytes | None], ...],
     /,
+    *,
+    toc_postconditions: Mapping[RepoPath, bytes] | None = None,
 ) -> None:
     """Require every inventory-owned mutation in the final candidate."""
     candidate = {RepoPath(path): content for path, content in candidate_files}
@@ -624,12 +657,16 @@ def reconcile_candidate_outputs(
             if target is None:
                 raise TranslationPlanError("translation_plan_candidate_output_missing")
             content = candidate.get(target)
+            expected = None if toc_postconditions is None else toc_postconditions.get(target)
             if (
                 content is None
                 or item.expected_sha256 is None
-                or sha256(content).hexdigest() != item.expected_sha256
+                or sha256(content if expected is None else expected).hexdigest()
+                != item.expected_sha256
             ):
                 raise TranslationPlanError("translation_plan_candidate_output_missing")
+            if expected is not None:
+                validate_toc_correction(expected, content)
         elif item.action is PlanAction.DELETE_TARGET:
             if target not in candidate or candidate[target] is not None:
                 raise TranslationPlanError("translation_plan_candidate_delete_missing")

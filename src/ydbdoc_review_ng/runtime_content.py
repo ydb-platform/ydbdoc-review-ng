@@ -44,7 +44,7 @@ from ydbdoc_review_ng.direction import (
     DirectionSelectionState,
     select_direction,
 )
-from ydbdoc_review_ng.domain import GitSha, Mode, ModelRole, RepoPath, SnapshotRef
+from ydbdoc_review_ng.domain import FilePair, GitSha, Locale, Mode, ModelRole, RepoPath, SnapshotRef
 from ydbdoc_review_ng.links import (
     LinkDestinationResolver,
     WikipediaLanglinks,
@@ -56,6 +56,7 @@ from ydbdoc_review_ng.locales import (
     ChangedFileMetadata,
     LocalePairInventory,
     LocaleRoots,
+    PairKey,
     RenameContentState,
     discover_changed_pairs,
     paired_markdown_path,
@@ -71,7 +72,7 @@ from ydbdoc_review_ng.quality import (
     QualityInputError,
     QualityReviewResult,
     Verdict,
-    review_translation,
+    review_pr,
 )
 from ydbdoc_review_ng.quality.repair import _derive_target_translations
 from ydbdoc_review_ng.reporting import ProbableDuplicate
@@ -110,6 +111,7 @@ from ydbdoc_review_ng.translation import (
     split_content_filter_chunk,
     validate_chunk_response,
     validate_translation_values,
+    verify_document_candidate,
 )
 from ydbdoc_review_ng.translation.document import (
     _document_block_texts,
@@ -125,6 +127,7 @@ from ydbdoc_review_ng.translation_plan import (
     reconcile_candidate_outputs,
     reconcile_fixed_outputs,
     translation_plan_sha256,
+    validate_toc_correction,
 )
 
 if TYPE_CHECKING:
@@ -633,9 +636,6 @@ class RuntimeContent:
         self.plans: FrozenSourcePlans | None = None
         self.review_paths: tuple[RepoPath, ...] | None = None
         self.review_operator_context: str | None = None
-        self.review_drafts: dict[
-            RepoPath, tuple[DocumentTranslationRequest, tuple[str, ...]]
-        ] = {}
         self.publisher: GitPublicationAdapter
 
     def _pr_review_inputs(
@@ -832,7 +832,6 @@ class RuntimeContent:
         self, snapshot: ImmutableRunSnapshot, /, *, translate: bool = True
     ) -> FrozenPreparation:
         """Read and preflight pinned scope inputs without a model call or mutation."""
-        self.review_drafts.clear()
         preflight_inventory(self.source.inventory, self.roots)
         changes = []
         for raw in self.source.inventory.files:
@@ -969,12 +968,15 @@ class RuntimeContent:
             for entry in self.entries:
                 self._metadata(metadata_preparation, entry, files)
             for metadata_path, expected in files.items():
+                path = RepoPath(metadata_path)
+                actual = self.source.github.read_bytes(preparation.metadata_snapshot, path)
                 if (
-                    self.source.github.read_bytes(
-                        preparation.metadata_snapshot, RepoPath(metadata_path)
-                    )
-                    != expected
+                    expected is not None
+                    and actual is not None
+                    and classify_path(self.roots, path).kind is PathKind.TOC
                 ):
+                    self._validate_toc_correction(snapshots.source_snapshot, path, expected, actual)
+                elif actual != expected:
                     raise RuntimeBoundaryError("verification_metadata_mismatch")
         toc_postconditions: dict[RepoPath, bytes] = {}
         toc_source_snapshots: dict[RepoPath, tuple[bytes | None, bytes]] = {}
@@ -1312,7 +1314,12 @@ class RuntimeContent:
         self.accepted_documents = ()
         self.accepted_maps = ()
         plans = self.select_source(self.prepare_source(snapshot, translate=False))
-        return WorkflowCandidate(pack(dict(plans.fixed_files)), plans.documents)
+        files = dict(plans.fixed_files)
+        for name in files:
+            path = RepoPath(name)
+            if classify_path(self.roots, path).kind is PathKind.TOC:
+                files[name] = self.source.github.read_bytes(plans.preparation.metadata_snapshot, path)
+        return WorkflowCandidate(pack(files), plans.documents)
 
     def translate_document(
         self, document: Document, /, *, operator_context: str | None = None
@@ -1562,13 +1569,6 @@ class RuntimeContent:
         except UnicodeError as error:
             assembly_failure("candidate_utf8", error)
         accepted = AcceptedMap(entry.pair.target_path, tuple(sorted(values.items())))
-        # Keep the exact validated translator input/output pairs. The critic must
-        # edit these same semantic chunks instead of reparsing and heuristically
-        # realigning the assembled document.
-        self.review_drafts[entry.pair.target_path] = (
-            effective_request,
-            tuple(responses),
-        )
         return accepted, AcceptedDocument(entry.pair.target_path, candidate_text)
 
     @staticmethod
@@ -1758,9 +1758,24 @@ class RuntimeContent:
             )
         if self.plans is None:
             raise RuntimeBoundaryError("translation_plan_missing")
+        for name, expected in self.plans.fixed_files:
+            path = RepoPath(name)
+            if expected is not None and classify_path(self.roots, path).kind is PathKind.TOC:
+                actual = files.get(name)
+                if actual is None:
+                    raise QualityInputError("corrected_toc_missing")
+                self._validate_toc_correction(
+                    self.plans.preparation.snapshots.source_snapshot, path, expected, actual
+                )
         reconcile_candidate_outputs(
             self.plans.translation_plan,
             tuple(sorted(files.items())),
+            toc_postconditions={
+                RepoPath(path): value
+                for path, value in self.plans.fixed_files
+                if value is not None
+                and classify_path(self.roots, RepoPath(path)).kind is PathKind.TOC
+            },
         )
 
     def validate_candidate(
@@ -1773,6 +1788,24 @@ class RuntimeContent:
             raise RuntimeBoundaryError("continue_translation_head_mismatch")
         self.publisher.validate_candidate(snapshot, candidate)
 
+    @staticmethod
+    def _validate_toc_correction(
+        snapshot: SnapshotRef, path: RepoPath, expected: bytes, corrected: bytes
+    ) -> None:
+        for before, after in validate_toc_correction(expected, corrected):
+            if before == after:
+                continue
+            source, target = before.encode("utf-8"), after.encode("utf-8")
+            try:
+                verify_document_candidate(
+                    source,
+                    build_markdown_plan(snapshot, path, source),
+                    target,
+                    build_markdown_plan(snapshot, path, target),
+                )
+            except (ValueError, TypeError) as error:
+                raise QualityInputError("invalid_corrected_toc_label") from error
+
     def review(
         self,
         snapshot: ImmutableRunSnapshot,
@@ -1780,112 +1813,119 @@ class RuntimeContent:
         /,
     ) -> QualityReviewResult:
         files = unpack(candidate.content)
-        critic_limit = int(
-            self.environment.get("YDBDOC_MAX_CRITIC_REQUEST_CHARACTERS") or "48000"
+        # Preserve the pre-existing no-review result for absent/deleted targets.
+        empty = CriticResult(Verdict.GREEN, ())
+        unchanged = QualityReviewResult(
+            candidate.content, None, candidate.content, empty, empty,
+            False, False, None, self.accepted_maps,
         )
-        reviews = []
-        repaired = False
-        attempted = False
-        repair_error = None
-        previous = {item.target_path: item for item in self.accepted_maps}
-        selective = self.review_paths is not None
-        accepted = dict(previous) if selective else {}
-        documents = self.documents
-        if self.review_paths is not None:
-            by_path = {doc.entry.pair.target_path: doc for doc in documents}
-            documents = tuple(by_path[path] for path in self.review_paths)
+        if not any(value is not None for value in files.values()):
+            return unchanged
+        source_files, translated_files, glossary_files = self._pr_review_inputs(candidate)
+        if not source_files and not translated_files:
+            return unchanged
+        assert self.plans is not None and self.plans.manifest is not None
+        source_snapshot = self.plans.preparation.snapshots.source_snapshot
+        direction = self.plans.manifest.direction
+        source_locale, target_locale = (
+            (Locale.RU, Locale.EN) if direction is Direction.RU_TO_EN else (Locale.EN, Locale.RU)
+        )
+        documents = {doc.entry.pair.target_path.value: doc for doc in self.documents}
+        accepted = {item.target_path: item for item in self.accepted_maps}
+        toc_postconditions = {
+            RepoPath(path): value
+            for path, value in self.plans.fixed_files
+            if value is not None and classify_path(self.roots, RepoPath(path)).kind is PathKind.TOC
+        }
 
         def check_head() -> None:
             if self.source.github.head(snapshot.branch) != snapshot.target_sha:
                 raise RuntimeBoundaryError("continue_translation_head_mismatch")
 
-        for document in documents:
-            path = document.entry.pair.target_path
-            restored_map = previous.get(path)
-            target = files[path.value]
-            assert target is not None
-
-            def apply_correction(value: bytes, path: RepoPath = path) -> None:
-                files[path.value] = value
-
-            def publish_map(value: AcceptedMap) -> None:
-                accepted[value.target_path] = value
-
-            draft = self.review_drafts.get(path)
-
-            def terminology_for(
-                source_text: str, bound_document: Document = document
-            ) -> str | None:
-                return self._terminology_context(
-                    bound_document,
-                    max_characters=critic_limit,
-                    source_text=source_text,
+        def validate_files(corrected: Mapping[str, bytes]) -> None:
+            for name, target in corrected.items():
+                path = RepoPath(name)
+                kind = classify_path(self.roots, path).kind
+                if kind is PathKind.TOC:
+                    self._validate_toc_correction(
+                        source_snapshot,
+                        path,
+                        toc_postconditions.get(path, translated_files[name]),
+                        target,
+                    )
+                    continue
+                if kind is not PathKind.MARKDOWN:
+                    raise QualityInputError("unsupported_review_file")
+                source_path = paired_markdown_path(self.roots, path)
+                source = source_files[source_path.value]
+                source_plan = build_markdown_plan(source_snapshot, source_path, source)
+                document = documents.get(name)
+                if document is None:
+                    classified = classify_path(self.roots, path)
+                    assert classified.relative is not None
+                    entry = ScopeEntry(
+                        FilePair(source_locale, target_locale, source_path, path),
+                        source,
+                        translated_files[name],
+                        ScopeOrigin.INITIAL,
+                        FileOperation.TRANSLATE,
+                        (PairKey(RepoPath(classified.relative)),),
+                        None,
+                        None,
+                    )
+                else:
+                    entry = document.entry
+                document = Document(
+                    entry, source, source_plan, build_translation_request(source, source_plan)
                 )
+                try:
+                    target_plan = build_markdown_plan(source_snapshot, path, target)
+                    verify_document_candidate_with_links(
+                        source,
+                        source_plan,
+                        target,
+                        target_plan,
+                        self._link_resolver(document, translated_files[name]),
+                    )
+                except (ValueError, TypeError) as error:
+                    raise QualityInputError("invalid_corrected_markdown") from error
+                try:
+                    values = _derive_target_translations(
+                        source, source_plan, document.request, target, path
+                    )
+                except QualityInputError:
+                    values = {}
+                accepted[path] = AcceptedMap(path, tuple(sorted(values.items())))
+            assert self.plans is not None
+            reconcile_candidate_outputs(
+                self.plans.translation_plan,
+                tuple(sorted({**files, **corrected}.items())),
+                toc_postconditions=toc_postconditions,
+            )
 
-            try:
-                review = review_translation(
-                    self.models,
-                    model=self.critic_model,
-                    arbiter_model=self.arbiter_model,
-                    fallback_model=self.critic_fallback_model,
-                    source=document.source,
-                    source_plan=document.plan,
-                    translation_request=document.request,
-                    target=target,
-                    target_path=path,
-                    source_locale=document.entry.pair.source_locale,
-                    target_locale=document.entry.pair.target_locale,
-                    on_validated_edit=apply_correction,
-                    accepted_map=restored_map,
-                    full_repair=selective and restored_map is None,
-                    operator_context=self.review_operator_context,
-                    terminology_context_for=terminology_for,
-                    before_model_call=check_head if selective else None,
-                    before_repaired_map=publish_map if selective else None,
-                    link_resolver=self._link_resolver(
-                        document,
-                        document.entry.target_content
-                        if document.entry.target_content is not None
-                        else document.entry.rename_from_target_content,
-                    ),
-                    max_request_characters=critic_limit,
-                    draft_request=None if draft is None else draft[0],
-                    draft_responses=None if draft is None else draft[1],
-                )
-            except QualityInputError as error:
-                write_trace(
-                    "quality",
-                    "document_input",
-                    "fail",
-                    article=path.value,
-                    code=error.reason,
-                )
-                raise
-            if (
-                document.entry.operation is not FileOperation.RENAME_TARGET
-                or review.repair_applied
-                or review.final_candidate != document.entry.rename_from_target_content
-            ):
-                assert review.accepted_maps is not None
-                accepted.update((item.target_path, item) for item in review.accepted_maps)
-            reviews.append(review)
-            attempted |= review.repair_attempted
-            repaired |= review.repair_applied
-            repair_error = repair_error or review.repair_error
-        primary_findings = tuple(f for review in reviews for f in review.primary.findings)
-        final_findings = tuple(f for review in reviews for f in review.final.findings)
-        primary = CriticResult(Verdict.RED if primary_findings else Verdict.GREEN, primary_findings)
-        final = CriticResult(Verdict.RED if final_findings else Verdict.GREEN, final_findings)
+        corrected, final = review_pr(
+            self.models,
+            critic_model=self.critic_model,
+            arbiter_model=self.arbiter_model,
+            source_files=source_files,
+            translated_files=translated_files,
+            glossary_files=glossary_files,
+            validate_files=validate_files,
+            operator_context=self.review_operator_context,
+            before_model_call=check_head if snapshot.mode is Mode.DOC_CONTINUE else None,
+        )
+        repaired = corrected != translated_files
+        files.update(corrected)
         result = pack(files)
         return QualityReviewResult(
             candidate.content,
             result if repaired else None,
             result,
-            primary,
+            CriticResult(Verdict.GREEN, ()),
             final,
-            attempted,
+            True,
             repaired,
-            repair_error,
+            None,
             tuple(sorted(accepted.values(), key=lambda item: item.target_path.value)),
         )
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Protocol, cast
 
 from ydbdoc_review_ng.continuation import AcceptedMap
@@ -16,7 +16,11 @@ from ydbdoc_review_ng.plan import BlockKind, ProtectedKind, SourcePlan, fields_o
 from ydbdoc_review_ng.quality.critic import (
     CriticResponseError,
     build_critic_request,
+    build_pr_arbiter_request,
+    build_pr_critic_request,
     parse_critic_response,
+    parse_pr_arbiter_response,
+    parse_pr_critic_response,
 )
 from ydbdoc_review_ng.quality.types import (
     CriticResult,
@@ -62,6 +66,49 @@ class QualityExecutionError(RuntimeError):
     def __init__(self, stage: str, /) -> None:
         self.stage = stage
         super().__init__(f"quality_execution:{stage}")
+
+
+def review_pr(
+    executor: ModelExecutor,
+    *,
+    critic_model: str,
+    arbiter_model: str,
+    source_files: Mapping[str, bytes],
+    translated_files: Mapping[str, bytes],
+    glossary_files: Mapping[str, bytes],
+    validate_files: Callable[[Mapping[str, bytes]], None],
+    operator_context: str | None = None,
+    before_model_call: Callable[[], None] | None = None,
+) -> tuple[dict[str, bytes], CriticResult]:
+    """Correct the complete PR once, validate atomically, then judge those bytes."""
+    critic = build_pr_critic_request(
+        model=critic_model,
+        source_files=source_files,
+        translated_files=translated_files,
+        glossary_files=glossary_files,
+        operator_context=operator_context,
+    )
+    if before_model_call is not None:
+        before_model_call()
+    response = executor.invoke(critic)
+    if not response.success or response.text is None:
+        raise QualityExecutionError("critic")
+    corrected = parse_pr_critic_response(response.text, target_paths=tuple(translated_files))
+    validate_files(corrected)
+    arbiter = build_pr_arbiter_request(
+        model=arbiter_model,
+        source_files=source_files,
+        translated_files=corrected,
+        glossary_files=glossary_files,
+        operator_context=operator_context,
+    )
+    if before_model_call is not None:
+        before_model_call()
+    response = executor.invoke(arbiter)
+    if not response.success or response.text is None:
+        raise QualityExecutionError("arbiter")
+    final = parse_pr_arbiter_response(response.text, target_paths=tuple(corrected))
+    return corrected, final
 
 
 def _derive_target_translations(

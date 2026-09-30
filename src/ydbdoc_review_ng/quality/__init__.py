@@ -15,6 +15,7 @@ from ydbdoc_review_ng.quality.repair import (
     ModelExecutor,
     QualityExecutionError,
     QualityInputError,
+    review_pr,
     review_translation,
 )
 from ydbdoc_review_ng.quality.types import (
@@ -43,5 +44,6 @@ __all__ = [
     "parse_critic_response",
     "parse_pr_arbiter_response",
     "parse_pr_critic_response",
+    "review_pr",
     "review_translation",
 ]

@@ -1,25 +1,53 @@
 """Complete review input bytes come only from the frozen PR inventory/candidate."""
 
+import json
 from dataclasses import replace
 from typing import cast
 
 import pytest
 
+from tests.unit.quality.test_pr_review import FifoModels, prompt_map
 from ydbdoc_review_ng.application import ImmutableRunSnapshot, WorkflowCandidate
 from ydbdoc_review_ng.continuation import SourceChange, SourceChangeInventory
 from ydbdoc_review_ng.direction import Direction
-from ydbdoc_review_ng.domain import GitSha, Mode, RepoPath, RepositoryId, SnapshotRef
+from ydbdoc_review_ng.domain import (
+    FilePair,
+    GitSha,
+    Locale,
+    Mode,
+    ModelRole,
+    RepoPath,
+    RepositoryId,
+    SnapshotRef,
+)
+from ydbdoc_review_ng.locales import PairKey
+from ydbdoc_review_ng.parser.markdown import build_markdown_plan
+from ydbdoc_review_ng.publication import FileChange, PublicationPlan
+from ydbdoc_review_ng.quality import QualityInputError, Verdict
 from ydbdoc_review_ng.repository import BaseBranch, PullRequestState, ResolvedRepositorySnapshots
 from ydbdoc_review_ng.runtime import RecordedModels, RuntimeSource
 from ydbdoc_review_ng.runtime_content import (
+    Document,
     FrozenPreparation,
     FrozenSourcePlans,
     RuntimeContent,
     pack,
+    unpack,
 )
 from ydbdoc_review_ng.runtime_github import GitHubBackend
-from ydbdoc_review_ng.scope import PotentialScopeSet, ScopeManifest
-from ydbdoc_review_ng.translation_plan import TranslationPlan
+from ydbdoc_review_ng.scope import (
+    FileOperation,
+    PotentialScopeSet,
+    ScopeEntry,
+    ScopeManifest,
+    ScopeOrigin,
+)
+from ydbdoc_review_ng.translation import build_translation_request
+from ydbdoc_review_ng.translation_plan import (
+    TranslationPlan,
+    TranslationPlanError,
+    build_translation_plan,
+)
 
 REPOSITORY = RepositoryId("ydb-platform/ydb")
 CURRENT = SnapshotRef(REPOSITORY, GitSha("a" * 40))
@@ -89,6 +117,198 @@ def frozen_content(
         TranslationPlan(direction, (), ()),
     )
     return content, reader
+
+
+def review_fixture():
+    source = b"# BlobDepot\n\nUse `BlobDepot`.\n"
+    original = b"# Depot\n\nUse `BlobDepot`.\n"
+    content, _reader = frozen_content(
+        {(CURRENT, RU + name): source for name in ("a.md", "b.md")},
+        {RU + "a.md": "modified", RU + "b.md": "modified"},
+    )
+    documents = []
+    for name in ("a.md", "b.md"):
+        pair = FilePair(Locale.RU, Locale.EN, RepoPath(RU + name), RepoPath(EN + name))
+        entry = ScopeEntry(
+            pair,
+            source,
+            original,
+            ScopeOrigin.INITIAL,
+            FileOperation.TRANSLATE,
+            (PairKey(RepoPath(name)),),
+            None,
+            None,
+        )
+        plan = build_markdown_plan(CURRENT, pair.source_path, source)
+        documents.append(Document(entry, source, plan, build_translation_request(source, plan)))
+    content.documents = tuple(documents)
+    content.plans = replace(content.plans, documents=tuple(documents))
+    candidate = WorkflowCandidate(pack({EN + name: original for name in ("a.md", "b.md")}), None)
+    return content, candidate
+
+
+@pytest.mark.parametrize("files", [{}, {EN + "removed.md": None}])
+@pytest.mark.parametrize("has_manifest", [True, False])
+def test_empty_review_keeps_noop_result_without_model_calls(files, has_manifest):
+    content, _reader = frozen_content({}, {RU + "removed.md": "removed"})
+    if not has_manifest:
+        content.plans = replace(content.plans, manifest=None)
+    models = FifoModels([])
+    content.models = models
+    candidate = WorkflowCandidate(pack(files), None)
+
+    result = content.review(content.plans.preparation.snapshot, candidate)
+
+    assert models.calls == []
+    assert result.original_candidate == candidate.content
+    assert result.final_candidate == candidate.content
+    assert result.repaired_candidate is None
+    assert result.primary.verdict is Verdict.GREEN
+    assert result.final.verdict is Verdict.GREEN
+    assert result.primary.findings == result.final.findings == ()
+    assert not result.repair_attempted
+    assert not result.repair_applied
+    assert result.repair_error is None
+    assert result.accepted_maps == ()
+
+
+@pytest.mark.parametrize("verdict", ["GREEN", "YELLOW", "RED"])
+def test_runtime_reviews_all_files_once_and_preserves_arbiter_verdict(verdict):
+    content, candidate = review_fixture()
+    content.environment = {"YDBDOC_MAX_CRITIC_REQUEST_CHARACTERS": "1"}
+    content.review_paths = (RepoPath(EN + "b.md"),)
+    corrected = {EN + name: "# BlobDepot\n\nUse `BlobDepot`.\n" for name in ("a.md", "b.md")}
+    models = FifoModels(
+        [
+            json.dumps({"files": corrected}),
+            json.dumps({"verdict": verdict, "findings": []}),
+        ]
+    )
+    content.models = models
+    result = content.review(content.plans.preparation.snapshot, candidate)
+    assert unpack(result.final_candidate) == {
+        path: text.encode() for path, text in corrected.items()
+    }
+    assert result.final.verdict is Verdict(verdict)
+    assert result.repair_applied
+    assert [call.role for call in models.calls] == [ModelRole.CRITIC, ModelRole.ARBITER]
+    assert prompt_map(models.calls[1], "translation-pr-files") == corrected
+    assert tuple(item.target_path.value for item in result.accepted_maps) == (
+        EN + "a.md",
+        EN + "b.md",
+    )
+
+
+@pytest.mark.parametrize("has_document_plans", [True, False])
+def test_invalid_second_file_cannot_partially_modify_candidate(has_document_plans):
+    content, candidate = review_fixture()
+    if not has_document_plans:
+        content.documents = ()
+    original = candidate.content
+    documents_before = content.accepted_documents
+    maps_before = content.accepted_maps
+    models = FifoModels(
+        [
+            json.dumps(
+                {
+                    "files": {
+                        EN + "a.md": "# BlobDepot\n\nUse `BlobDepot`.\n",
+                        EN + "b.md": "# BlobDepot\n\nUse `WrongCode`.\n",
+                    }
+                }
+            )
+        ]
+    )
+    content.models = models
+    with pytest.raises(QualityInputError):
+        content.review(content.plans.preparation.snapshot, candidate)
+    assert candidate.content == original
+    assert content.accepted_documents == documents_before
+    assert content.accepted_maps == maps_before
+    assert len(models.calls) == 1
+
+
+@pytest.mark.parametrize("invalid_change", [None, "href", "code", "link", "template"])
+def test_runtime_validates_and_applies_complete_toc_with_markdown(invalid_change):
+    from tests.unit.test_translation_plan import (
+        change,
+        entry,
+        inventory,
+        manifest,
+        toc_source_snapshots,
+    )
+
+    content, candidate = review_fixture()
+    label = "Depot `BlobDepot` [reference](ref.md) {{version}}"
+    toc = (
+        "items:\n- name: " + label + "\n  href: a.md\n- name: Target only\n  href: extra.md\n"
+    ).encode()
+    source_toc = b"items:\n- name: BlobDepot\n  href: a.md\n"
+    content.source.github.files[(CURRENT, RU + "toc.yaml")] = source_toc
+    preparation = replace(
+        content.plans.preparation,
+        inventory=SourceChangeInventory(
+            tuple(
+                sorted(
+                    (
+                        *content.plans.preparation.inventory.files,
+                        SourceChange(RepoPath(RU + "toc.yaml"), "modified", None, None),
+                    ),
+                    key=lambda item: item.path.value,
+                )
+            )
+        ),
+    )
+    plan = build_translation_plan(
+        inventory(change(RU + "a.md"), change(RU + "b.md"), change(RU + "toc.yaml")),
+        content.roots,
+        manifest(entry("a.md"), entry("b.md")),
+        toc_postconditions={RepoPath(EN + "toc.yaml"): toc},
+        toc_source_snapshots=toc_source_snapshots("toc.yaml", ("BlobDepot", "a.md")),
+    )
+    content.plans = replace(
+        content.plans,
+        preparation=preparation,
+        fixed_files=((EN + "toc.yaml", toc),),
+        translation_plan=plan,
+    )
+    candidate = WorkflowCandidate(pack({**unpack(candidate.content), EN + "toc.yaml": toc}), None)
+    corrected = {EN + name: "# BlobDepot\n\nUse `BlobDepot`.\n" for name in ("a.md", "b.md")}
+    corrected[EN + "toc.yaml"] = (
+        "items:\n- name: Correct "
+        + label
+        + "\n  href: "
+        + ("wrong.md" if invalid_change == "href" else "a.md")
+        + "\n- name: Target only\n  href: extra.md\n"
+    )
+    for kind, old, new in (
+        ("code", "`BlobDepot`", "`WrongCode`"),
+        ("link", "(ref.md)", "(wrong.md)"),
+        ("template", "{{version}}", "{{wrong}}"),
+    ):
+        if invalid_change == kind:
+            corrected[EN + "toc.yaml"] = corrected[EN + "toc.yaml"].replace(old, new)
+    models = FifoModels([json.dumps({"files": corrected}), '{"verdict":"GREEN","findings":[]}'])
+    content.models = models
+    if invalid_change:
+        with pytest.raises((TranslationPlanError, QualityInputError)):
+            content.review(preparation.snapshot, candidate)
+        assert len(models.calls) == 1
+        assert unpack(candidate.content)[EN + "toc.yaml"] == toc
+    else:
+        result = content.review(preparation.snapshot, candidate)
+        assert prompt_map(models.calls[1], "translation-pr-files") == corrected
+        final_files = {path: text.encode() for path, text in corrected.items()}
+        assert unpack(result.final_candidate) == final_files
+        content.validate_plan(
+            preparation.snapshot,
+            WorkflowCandidate(result.final_candidate, None),
+            PublicationPlan(
+                tuple(FileChange(RepoPath(path), None, text) for path, text in final_files.items()),
+                (),
+            ),
+        )
+        assert content.plans.fixed_files == ((EN + "toc.yaml", toc),)
 
 
 def test_pr_inputs_use_current_pinned_source_not_diff_or_preimage() -> None:

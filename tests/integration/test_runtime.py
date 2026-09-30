@@ -1684,7 +1684,8 @@ def test_pr50839_full_runtime_plan_publishes_exact_complete_toc() -> None:
     assert b"BlobDepot decommit" not in en_expected
 
 
-def test_verify_replays_pinned_toc_plan_instead_of_translated_h1() -> None:
+@pytest.mark.parametrize("toc_label", ["Group Decommissioning", "Corrected BlobDepot decommissioning"])
+def test_verify_replays_pinned_toc_plan_instead_of_translated_h1(toc_label) -> None:
     from ydbdoc_review_ng.application import VerifyWorkflowInput
     from ydbdoc_review_ng.domain import GitSha
     from ydbdoc_review_ng.runtime import RuntimeSource
@@ -1724,9 +1725,9 @@ def test_verify_replays_pinned_toc_plan_instead_of_translated_h1() -> None:
                         b"# Group decommissioning\n\nCurrent translation.\n\nUnchanged paragraph.\n"
                     ),
                     directory.format("en") + "toc_i.yaml": (
-                        b'items:\n  - name: "Group Decommissioning"\n'
-                        b"    href: blobdepot_decommit.md\n"
-                    ),
+                        f'items:\n  - name: "{toc_label}"\n'
+                        "    href: blobdepot_decommit.md\n"
+                    ).encode(),
                 },
             }
 
@@ -1773,7 +1774,7 @@ def test_verify_replays_pinned_toc_plan_instead_of_translated_h1() -> None:
     candidate = content.load_verification_candidate(snapshot)
     files = unpack(candidate.content)
 
-    assert b'"Group Decommissioning"' in files[directory.format("en") + "toc_i.yaml"]
+    assert f'"{toc_label}"'.encode() in files[directory.format("en") + "toc_i.yaml"]
     assert files[directory.format("en") + "blobdepot_decommit.md"] == (
         b"# Group decommissioning\n\nCurrent translation.\n\nUnchanged paragraph.\n"
     )
@@ -1792,9 +1793,9 @@ def test_verify_replays_pinned_toc_plan_instead_of_translated_h1() -> None:
             b"# Group decommissioning\n\nCurrent translation.\n\nUnchanged paragraph.\n"
         ),
         directory.format("en") + "toc_i.yaml": (
-            b'items:\n  - name: "Group Decommissioning"\n'
-            b"    href: blobdepot_decommit.md\n"
-        ),
+            f'items:\n  - name: "{toc_label}"\n'
+            "    href: blobdepot_decommit.md\n"
+        ).encode(),
     }
     assert glossary_files == {}
     assert all(method == "GET" for method, _ in services.events)
