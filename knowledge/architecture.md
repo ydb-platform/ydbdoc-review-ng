@@ -1,5 +1,10 @@
 # Архитектурные инварианты
 
+Полный PR review ниже утверждён 2026-09-30, но не реализован и не проверен
+реальными providers на baseline `2a1c268`. Факты существующей реализации
+отделены от новых обязательных границ; исторические excerpt probes не являются
+приёмкой этого контракта.
+
 ## Источники данных
 
 - Source читается из immutable snapshot исходного PR или зафиксированного base
@@ -19,14 +24,14 @@
 
 `doc_translate` идёт линейно: create job audit → authorize → snapshot →
 budget → direction/scope → parse → translate → local structural validation and
-safe Markdown normalization → critic-editor → independent arbiter → full validation/Diplodoc build → one commit/push
+safe Markdown normalization → full PR editor → atomic apply → full validation/Diplodoc build → full PR arbiter → one commit/push
 → PR verdict → terminal job status.
 
 `doc_verify` создаёт job audit, берёт текущую translation branch и authoritative
-source, запускает те же validators и critic-editor, при необходимости применяет
-его валидные изменённые исправления одним commit в ту же branch, затем обновляет
-verdict и terminal job status. Budget
-gate у него отсутствует.
+source и запускает полный PR editor → atomic apply → validators/full build →
+полный PR arbiter. Валидные изменения публикуются одним exact-head non-force
+commit в ту же branch, затем обновляются verdict и terminal job status.
+Budget gate у него отсутствует.
 
 `doc_continue` в `1.1.0` создаёт audit, проверяет label actor и последний допустимый
 предшествующий `/ydbdoc continue` comment, затем загружает живой checkpoint.
@@ -41,7 +46,10 @@ acknowledgement, но не разрешает recovery через широкий
 Для source PR неоднозначность остаётся fail-closed.
 Replay читает только сохранённые source/base SHA и проверяет scope/field IDs
 и exact translation head. Три stage: direction retry, перевод pending документов
-с accepted maps и critic-editor только для unresolved review paths. Source-only
+с accepted maps и полный PR editor/build/arbiter при любом semantic review.
+Review paths служат диагностикой. Новый review contract version связывает
+source/candidate/glossary manifests и digests; старые chunk-review checkpoints
+отвергаются fail closed. Source-only
 assembly и обычные проверки сохраняются. GREEN закрывает checkpoint; повторный
 semantic stop наследует первоначальный expiry. Infrastructure failure не является
 новым semantic checkpoint. Общей resumable state machine нет.
@@ -65,10 +73,12 @@ semantic stop наследует первоначальный expiry. Infrastruc
   URL/path/code относительно вычисленного ожидаемого значения. Глобальный
   navigation graph не строится; узкий resolver знает только YDB locale и
   Wikipedia `langlinks`, результат проверяет полный Diplodoc build.
-- Model critic сравнивает authoritative source и final target, проверяя смысл,
-  полноту, терминологию и работоспособность ссылок. Если совместный prompt велик,
-  critic получает соответствующие source/target excerpt-пары, а не полный target
-  рядом с каждым source excerpt; verdict и findings объединяются.
+- PR editor и arbiter получают весь closed PR context: полный inventory,
+  review-owned source/candidate text files, полный pinned RU/EN glossary,
+  разрешённые paths/operations, snapshot/content digests и technical validation
+  data. Source glossary берётся из authoritative snapshot, target glossary из
+  pinned translation base. Старый target prose не служит материалом repair.
+  Missing files/glossary, oversize или unknown capability останавливают review.
 - Add source-TOC-reachable страницы добавляет target TOC entry без redirect;
   add вне source TOC не обязан менять TOC; rename обновляет target TOC path и
   создаёт прямой redirect old→new. Ordinary edit также проверяет симметричную
@@ -162,37 +172,42 @@ to the exact newly published SHA. This prevents reruns from producing a branch
 that is both behind and ahead of the current base while preserving concurrent
 manual edits.
 
-## Critic-editor followed by an independent arbiter (2026-09-29)
+## Full PR editor, build and independent arbiter (approved 2026-09-30)
 
-Semantic defects such as duplicated glossary aliases are intentionally not
-encoded as growing local heuristics. The translator creates a structurally valid
-draft. For every document or aligned excerpt the critic-editor returns only
-minimal findings (`reason`, `searchable_snippet`, `expected_correction`) and the
-complete corrected Markdown. Editor findings are audit diagnostics and do not
-define the public verdict. The editor never receives them back for another
-semantic call. A separate read-only arbiter, using the translator model by
-default, evaluates the corrected excerpt and alone returns GREEN/RED findings.
-There is no model ping-pong and no model-produced `repairable`, path, line,
-verdict or field IDs in the editor response. One schema-invalid
-HTTP-success response may be repeated once with the parser reason; this is a
-bounded technical retry, not a semantic review loop. A provider
-`non_final`/truncated response is likewise retried at most once with the
-identical request; a second unfinished generation fails closed. The edits are
-assembled, validated, built and published once. A full draft build must not
-run before the critic-editor: fixable draft lint errors would otherwise prevent
-the editor from running. Mechanical list-marker spacing is normalized locally
-outside code before review; the final candidate always receives the strict build.
-The critic has its own 48000-character request budget. Its schema omits field
-IDs because a complete corrected Markdown excerpt is the edit unit; this keeps
-large documents to a few large calls instead of dozens of top-level-block calls.
-During `doc_translate`, these excerpts are the
-exact validated translator chunk pairs retained in memory. The review stage
-does not parse and heuristically realign the assembled source and target again.
-If the critic provider exhausts its bounded content-filter retry, one fallback
-critic pass reuses each exact validated translator chunk pair contained in that
-excerpt through a flat `corrected_markdown`-only schema. The translated target
-is never split proportionally to source block lengths and fallback units are
-never split recursively.
+One editor call returns a strict `{"files": {path: complete_text}}` map of exactly
+all editable target text paths, including unchanged files. Runtime rejects
+missing, unknown, duplicate, malformed, partial, binary, deletion, traversal or
+out-of-scope entries. It applies the entire map atomically in memory, enforces
+source-owned technical values and metadata/plan constraints, then runs
+deterministic validation and one full Diplodoc build. A no-op edit still requires
+the build and arbiter. A full draft build before editor is forbidden.
+
+One independent read-only arbiter reviews the exact built candidate as a complete
+PR with both complete glossaries. GREEN requires a valid full final response,
+empty findings, complete nonempty coverage and matching candidate/context digest.
+Changed editor bytes, empty responses or a missing arbiter never imply GREEN.
+The prompts actively check semantic completeness, cross-file terminology/entity
+identity even without exact glossary mappings, commands/parameters/identifiers,
+technical-literal boundaries/readability, links/anchors, H1/index/TOC consistency
+and every planned PR operation. Semantic RED does not trigger another repair loop.
+No bytes may change after arbiter without a new full review.
+
+Translator chunking and retries remain translator-only. Editor/arbiter context
+is indivisible: no excerpt packing, filtered glossary or lossy fallback. Admission
+reserves verified model input/context/output capacity for the exact serialized
+request and complete-file output, with JSON overhead. Unknown capability or
+oversize is a typed terminal failure before publication. The paired witness
+glossaries already contain 225432 UTF-8 bytes; the historical 48000-character
+excerpt limit and old provider probes are insufficient. Review retry policy is
+the single bounded policy in REQUIREMENTS_RU.md §5: at most two primary attempts
+per role, optional one full-context editor fallback after exhausted content
+filter and fresh capacity admission.
+
+PR review attempts use nullable `target_path` with explicit PR scope, contract
+version and context digest. They retain cost/audit without arbitrary article
+attribution or classification as historical unattributed cost. Real-provider
+full-context probe and independent content review are required before claiming
+semantic acceptance; scripted offline GREEN proves orchestration only.
 
 ## Public semantic report (2026-09-30)
 
@@ -217,8 +232,13 @@ missing.
 Supported TOC migrations bind the SHA-256 of the complete expected target file
 into the plan before document-model calls. Fixed and final reconciliation both
 require the exact digest, so path presence cannot mask stale content. This is
-still a migration rule backed by the established target article H1, not the
-future general TOC prose translator.
+the existing implementation boundary. Under the approved PR review contract,
+only explicitly planned TOC name corrections may update the validated artifact
+digest through a planner-owned API retaining original plan and correction
+provenance. Structure, href, ordering and valid target-only entries remain
+protected; arbitrary YAML overwrite or disabling reconciliation is forbidden.
+A correction outside this scope fails closed. General TOC translation remains
+separate executor work.
 
 This is a narrow fail-closed planner, not the completed cross-file executor.
 Unsupported asset/redirect operations, metadata-only direction and TOC

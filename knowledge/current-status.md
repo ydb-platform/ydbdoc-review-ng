@@ -1,4 +1,73 @@
-# Three-stage translation, editor and arbiter contract (2026-09-29)
+# Текущий handoff: полный PR review (2026-09-30)
+
+Baseline реализации: `2a1c26806907c2a178b971e8ec3cdbe2223591d1`.
+Утверждён новый контракт в REQUIREMENTS_RU.md: он ещё не реализован и не проверен
+реальными providers. Этот documentation change заменяет требования на месте,
+не меняет production code/tests и не подтверждает semantic acceptance.
+
+Whole-file/source-only translation сохраняется с внутренними structural chunks
+и prose segment map. Старый target prose не служит источником перевода или repair.
+Новый review для translate, verify и review-stage continue строит один closed
+PRReviewContext: полный inventory/operations, все review-owned source/candidate
+text files включая index/TOC, allowed paths, exact snapshots/candidate digests,
+оба полных pinned RU/EN glossary и technical-fragment validation data.
+
+Один PR editor возвращает strict path-to-complete-file map ровно всех editable
+text paths. Missing/unknown/duplicate/malformed/partial/binary/deletion/traversal/
+out-of-scope entries отвергаются. Порядок: atomic in-memory apply → deterministic
+validation и полный Diplodoc build → один независимый read-only arbiter exact
+built PR → одна publication. GREEN требует валидного полного ответа, пустых
+findings, полного непустого coverage и matching digest; editor byte changes,
+пустые ответы и missing arbiter не дают GREEN.
+
+Оба prompt активно проверяют полноту, межфайловую терминологию/entity identity
+даже без exact glossary mapping, commands/parameters/identifiers, code/prose
+boundaries и читаемый Markdown, links/anchors, H1/index/TOC и PR operations.
+Source-owned значения и metadata/plan constraints сохраняются; TOC name
+corrections требуют planner-owned artifact digest/provenance и сохраняют
+target-only navigation. Полный PR review неделим: verified capacity admission
+проверяет exact serialized input и полный output reserve до editor и вновь до
+arbiter. Unknown capability/oversize терминальны до публикации. Chunk/excerpt/
+glossary-slice fallback запрещён.
+
+Pending-only translation сохраняется. Любой semantic review включает весь PR,
+в том числе accepted files. Новая checkpoint contract version связывает
+source/candidate/glossary manifests и digests; старые chunk-review checkpoints
+fail closed. PR attempts имеют NULL target_path, явный PR scope/context digest
+и полный cost audit. QA GREEN независим от external CI, но mandatory локальный
+build должен предшествовать arbiter.
+
+## Зафиксированный witness и следующий implementation gate
+
+Source PR #50839: base `1705aa4cea8caaf8c715b368f57ac7317975af83`,
+original head `12c8b806dc4560ff7322cd7464dc2372a1b614c6`,
+merge `30d5bd68e2f97cbb41aaf782149435e4b9c1bdbc`.
+Translation PR #54590: bad head `b7b27bcf34d9761f0311011cd3fba051c05cd4ca`,
+authoritative source snapshot `9191121586f4d8061414d597cdcc2f4ec8d42d20`.
+Четыре пары: `blobdepot.md`, `blobdepot_decommit.md`, `index.md`,
+`toc_i.yaml` под `ydb/docs/{ru,en}/core/maintenance/manual/`.
+RU glossary blob `313f9ba9ca5f7e1188b9e3bf2233fe4da2ac53b2`: 146214 bytes;
+EN `b9792fee56ad091fae76d29185759d4b99cb9c45`: 79218 bytes.
+Всего 225432 UTF-8 bytes ещё до PR/instructions. Исторический лимит
+48000 characters и старые provider probes явно недостаточны.
+
+Witness должен покрыть BlobDepot/Blobovnica/blobber и BlobStorage, грамматику
+`{{ ydb-name }}`, разорванный `BS_CONTROLLER`, `--storage-pool-namein`,
+technical-literal formatting/readability и H1/index/TOC. Valid target-only
+navigation сохраняется; старый EN prose не становится model input.
+Offline replay через production interfaces доказывает orchestration, не качество
+модели. До semantic acceptance обязательны real-provider full-context probe и
+независимый review полных результатов. Подробные будущие witnesses: testing.md.
+
+## Исторический архив: не действующий контракт
+
+Все записи ниже сохранены только как история конкретных runs/commits до замены
+контракта. Формулировки «текущий», «теперь», release gates, GREEN и probe success
+внутри архива описывают состояние на дату записи. Они не являются инструкциями
+для нового PR review, не подтверждают его реализацию или provider acceptance и
+не разрешают chunk-level review, filtered glossary или прежний порядок build.
+
+### История: Three-stage translation, editor and arbiter contract (2026-09-29)
 
 Run `36536112615` failed before the critic-editor on chunk 5 of
 `changelog-enterprise.md`: the raw-Markdown translator twice lost protected
@@ -44,7 +113,7 @@ cached input, 0.5 RUB/1000 output), with cached tokens read from provider usage.
 An ordinary response is therefore fully accumulated; unknown remains honest
 only for an attempt with neither billable cost nor sufficient usage.
 
-# Live fallback contract failure after independent replay (2026-09-28)
+### История: Live fallback contract failure after independent replay (2026-09-28)
 
 Full run `36485186895` proved the fallback repair in production: YandexGPT
 content-filtered `layout.md`, two exact translator units were edited successfully
@@ -113,7 +182,7 @@ a translator-sized unit (`15197` prompt characters, `4337` input tokens, `968`
 output tokens). The probe did not translate documents or change PR #54352; its
 head remained `6f926402d8e12d9b53a5eaec5bfbf700a7311d50`.
 
-# Independent pre-rerun audit blocked unsafe critic splitting (2026-09-28)
+### История: Independent pre-rerun audit blocked unsafe critic splitting (2026-09-28)
 
 No paid rerun was started after `260ca71`. An independent red-team review found
 that its normal critic path reused exact validated translator chunks, but the
@@ -138,7 +207,7 @@ pending; do not start `doc_translate` before tool CI passes.
 
 ---
 
-# Preflight GitHub transport failure (2026-09-28)
+### История: Preflight GitHub transport failure (2026-09-28)
 
 After tool CI passed, run `36474945915` failed during source preparation before
 any model call. One immutable Contents GET failed after hundreds of successful
@@ -152,7 +221,7 @@ Publication and tool CI are pending.
 
 ---
 
-# Second critic chunk planner failed on glossary (2026-09-28)
+### История: Second critic chunk planner failed on glossary (2026-09-28)
 
 Run `36461077089` translated all ten documents and reduced the changelog review
 from 99 to 62 critic calls, but failed before the first critic call for
@@ -173,7 +242,7 @@ The local gate passes: 1949 tests, Ruff, mypy, diff-check and wheel build.
 
 ---
 
-# Critic request explosion and schema overflow (2026-09-28)
+### История: Critic request explosion and schema overflow (2026-09-28)
 
 Run `36454018170` confirmed that the editor now runs, but exposed remaining old
 complexity: the translator's 6000-character limit was reused for the critic,
@@ -189,7 +258,7 @@ diff-check pass. Publishing and the next real rerun are pending.
 
 ---
 
-# Draft build blocked the editor (2026-09-28)
+### История: Draft build blocked the editor (2026-09-28)
 
 The first real run of the two-stage pipeline, `36445575313`, translated all ten
 documents but failed before any critic-editor call or publication. The draft
@@ -212,7 +281,7 @@ real rerun are pending.
 
 ---
 
-# Two-stage semantic pipeline rewrite (2026-09-28)
+### История: Two-stage semantic pipeline rewrite (2026-09-28)
 
 The RED translation PR showed that the previous control flow was conceptually
 wrong: it published the translator draft, allowed only one critic correction
@@ -241,7 +310,7 @@ the first real rerun and its follow-up are recorded above.
 
 ---
 
-# Translation PR RED and rerun publication repair (2026-09-28)
+### История: Translation PR RED and rerun publication repair (2026-09-28)
 
 After the two upstream links were fixed, `doc_translate` run `36420817068`
 completed translation and created `ydb-platform/ydb#54352`, head
@@ -273,7 +342,7 @@ passed. Next: publish main/tag and start the next real translation run.
 
 ---
 
-# Upstream build blocker fixed; translation restart (2026-09-28)
+### История: Upstream build blocker fixed; translation restart (2026-09-28)
 
 The user merged the two changelog link corrections into YDB main. Verified both
 RU and EN at source 7499dabb37413cd1191c35293e617bbd4508a871: removed addresses
@@ -286,7 +355,7 @@ pending: a new translation commit/PR, semantic review and matching-head checks.
 
 ---
 
-# Broken upstream baseline and early build gate (2026-09-28)
+### История: Broken upstream baseline and early build gate (2026-09-28)
 
 Main/tag d099051a880d5d3d69f717304840e66a0040661c, tool CI green.
 Run 36403582436 translated all ten documents, but failed before publication.
@@ -309,7 +378,7 @@ no translation PR yet. Do not claim completion or silently waive build errors.
 
 ---
 
-# Repeat-run build overlay (2026-09-28)
+### История: Repeat-run build overlay (2026-09-28)
 
 Main/tag `d35aa3b30e873dd70be901c03a4a815f383e08c4`, tool CI green.
 Run `36398164442` translated all ten documents, including metrics. Build failed
@@ -328,7 +397,7 @@ still needs an external run; this local build does not certify old prose quality
 
 ---
 
-# Decimal localization regression (2026-09-28)
+### История: Decimal localization regression (2026-09-28)
 
 Main/tag `08acc684be17ab15a9f560df9330af34a74e86e6`, tool CI green.
 Run `36392932909` stopped at metrics chunk5/5 with protected_fragments:field=1
@@ -351,7 +420,7 @@ entrypoint is available in this environment.
 
 ---
 
-# Critic recovery and untranslated prose (2026-09-28)
+### История: Critic recovery and untranslated prose (2026-09-28)
 
 Main/tag `9b7ee7c93b6029ebe6bc480a310e6f0fd5a4eaa0` прошёл CI.
 Run `36388057226` перевёл документы и успешно собрал Diplodoc с 25 ресурсами.
@@ -372,7 +441,7 @@ Inspection опубликованного candidate также выявил ру
 
 ---
 
-# Следующий дефект: ресурсы статей (2026-09-28)
+### История: Следующий дефект: ресурсы статей (2026-09-28)
 
 Commit `a45326e317163ab689e6837149a9c0d9f0bd551f` опубликован в main и v1.0.1.
 CI инструмента зелёный. Run `36383420279` перевёл все 10 документов, включая
@@ -391,7 +460,7 @@ translate/verify/continue прошли. Следующий шаг: main/tag и �
 
 ---
 
-# Отладка 2026-09-28 (в работе)
+### История: Отладка 2026-09-28 (в работе)
 
 Исходный main/tag v1.0.1: `0a64e34ba57c93968c1525ae3e3a039edb724e5a`.
 Разобран run `36379127309`, PR #50858: translator и два raw-Markdown critic
@@ -417,7 +486,7 @@ subreaper из-за контейнерного PID 1. Внешний запус�
 
 ---
 
-# Текущий handoff
+### История: Текущий handoff
 
 Обновлено: 2026-09-25. Рабочая ветка: `main`, актуальный commit
 `e6a8047` (`Preserve numeric provider error status`). Он опубликован в
@@ -428,14 +497,14 @@ subreaper из-за контейнерного PID 1. Внешний запус�
 `.worktrees/` является пользовательским untracked-содержимым и не должен
 попасть в commit.
 
-## Цель
+### История: Цель
 
 Получить новый автоматический перевод `ydb-platform/ydb#50858`, независимо
 проверить содержание и добиться зелёных `doc_verify` и `Build documentation`
 на одном SHA translation PR. Запуск считается завершённым только при наличии
 всех четырёх свидетельств.
 
-## Что установлено по последнему переводу
+### История: Что установлено по последнему переводу
 
 `doc_translate` run `36131827286` создал `ydb-platform/ydb#54159`, head
 `9447a0268966d207f28779d6c68cd6e435995d98`, стоимость 1172.8272 RUB.
@@ -452,7 +521,7 @@ subreaper из-за контейнерного PID 1. Внешний запус�
 Причина: переводчик и critic не получали релевантный глоссарий. Ссылки critic
 исправить не мог, потому что весь destination скрыт внутри protected placeholder.
 
-## Согласованный алгоритм
+### История: Согласованный алгоритм
 
 1. Переводится целый Markdown-документ; большой документ делится только на
    крупные top-level chunks.
@@ -473,7 +542,7 @@ subreaper из-за контейнерного PID 1. Внешний запус�
 
 Канонический полный текст находится в `REQUIREMENTS_RU.md`.
 
-## Реализовано и опубликовано
+### История: Реализовано и опубликовано
 
 - `terminology.py`: выбирает релевантные парные glossary-секции по терминам.
 - glossary context передаётся в translation prompt и critic-editor.
@@ -488,7 +557,7 @@ subreaper из-за контейнерного PID 1. Внешний запус�
 - `REQUIREMENTS_RU.md` и `knowledge/translation-algorithm.md` обновлены.
 - Добавлены unit/integration regression tests.
 
-## Проверки и следующий шаг
+### История: Проверки и следующий шаг
 
 Первое независимое review дало FAIL и нашло шесть пробелов: повторная валидация
 теряла link overrides, scope не учитывал singular/plural match, override копировал
@@ -558,7 +627,7 @@ changelog block оказался больше лимита (run `36155088682`). 
 4. Если создан новый translation PR, независимо проверить перевод, особенно
    `row-oriented tables`, JOIN, dynamic-configuration anchors, glossary anchors
 
-## Проверка лимитной диагностики
+### История: Проверка лимитной диагностики
 
 Последний запуск `doc_translate` для PR #50858: run `36225170617`. Он завершился
 на `prepare` до model calls: фактический scope содержит 8 dependency-файлов и
@@ -585,7 +654,7 @@ model calls, но теперь корректно сообщил в CI: «Пер
 `ydb-platform/ydb` использовать `GH_TOKEN="$YDB_GH_TOKEN"` при unset
 `GITHUB_TOKEN`; значения токенов не печатать и не сохранять.
 
-## Независимый critic probe после run 36493639142
+### История: Независимый critic probe после run 36493639142
 
 Probe-only run `36498438498` остановился с безопасной причиной
 `unexpected_field`. Это оказался дефект probe harness, а не новый дефект
@@ -631,7 +700,7 @@ Verdict/path/line выводит код. Если findings есть, но Markdo
 профильных runtime/continue/publication тестов, Ruff, strict mypy, wheel/sdist и
 installed smoke `translate + verify + continue`.
 
-## Локальная доработка source-only перевода
+### История: Локальная доработка source-only перевода
 
 27 сентября 2026 добавлена локальная, ещё не опубликованная доработка
 упрощённого алгоритма. `build_document_prompt` теперь всегда отправляет модели
@@ -665,7 +734,7 @@ prompt вместе с correction note. Контекст теперь динам
 проверяет малый лимит. Локальный реальный changelog из PR #50858 успешно
 готовится в 53 chunk при этом бюджете.
 
-## Прагматичный editor и независимый arbiter
+### История: Прагматичный editor и независимый arbiter
 
 Run `36540228205` завершил полный pipeline и создал translation PR с числовой
 стоимостью `495.066900 RUB`, но read-only arbiter вернул RED по пяти замечаниям.
@@ -690,7 +759,7 @@ Ruff, strict mypy, wheel/sdist и smoke установленного wheel дл�
 отдельно аудируемых model attempts. До публикации и отдельного live
 `doc_model_probe` полный платный перевод повторно не запускался.
 
-## Live doc_continue и exact checkpoint consumption
+### История: Live doc_continue и exact checkpoint consumption
 
 Run `36573401582` успешно применил операторскую инструкцию к
 `changelog-enterprise.md`, опубликовал commit `cb66bde` и получил от arbiter
@@ -720,7 +789,7 @@ Run `36582251503` показал, что exact lookup содержит неск�
 Финальный gate этой версии: 1970 non-live тестов, 3 live штатно исключены,
 Ruff и strict mypy зелёные.
 
-## Понятный readiness-YELLOW
+### История: Понятный readiness-YELLOW
 
 PR #54515 показал UX-дефект отчёта: сразу после публикации успешный результат
 арбитра отображался как общий YELLOW с сырым снимком `doc_verify/build-docs: не
@@ -737,7 +806,7 @@ label `doc_verify`, а также честно указывает, что `doc_c
 было некому. Для `doc_verify` добавлено ограниченное ожидание `build-docs` на
 точном опубликованном SHA перед финальным отчётом; повторных model calls нет.
 
-## Семантический verdict отделён от CI (2026-09-30)
+### История: Семантический verdict отделён от CI (2026-09-30)
 
 После уточнения продуктового контракта readiness-YELLOW удалён. QA comment
 отвечает только на вопрос о качестве перевода. Reporter больше не читает

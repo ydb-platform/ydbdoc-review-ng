@@ -1,4 +1,7 @@
-# Проверенный алгоритм перевода
+# Алгоритм перевода и утверждённый полный PR review
+
+Whole-file/source-only translation сохраняется. Полный PR review утверждён
+2026-09-30, но ещё не реализован и не provider-validated на baseline `2a1c268`.
 
 ## Целый документ и protected fragments
 
@@ -11,7 +14,7 @@ templates, inline code, нетранслируемый код и служебн�
 проза остаются видимы модели. Модель получает явное направление RU→EN или EN→RU
 и возвращает только целый переведённый Markdown.
 
-Модель всегда получает только authoritative source и возвращает полный
+Переводчик всегда получает только authoritative source и возвращает полный
 переведённый Markdown. Существующий target используется только для scope,
 проверки ссылок и публикации, но не передаётся модели и не используется
 сборщиком как источник текста. В каждой Markdown link/image-конструкции подпись
@@ -52,7 +55,7 @@ scope вместе с парным target, а для нового target гот�
 публикуется одним обновляемым служебным комментарием в исходном PR, даже если
 translation PR ещё не создан.
 
-Переводчик и critic-editor получают небольшой релевантный фрагмент парного
+Только переводчик получает небольшой релевантный фрагмент парного
 глоссария YDB. Выбор делается по терминам текущего source-документа; в prompt
 передаются source- и target-формулировки одной и той же glossary-секции. Это
 контекст, а не текст для вставки, и не hardcoded замена слов. Контекст ограничен
@@ -139,76 +142,74 @@ fence и любой неизвестный язык целиком protected.
 `|`; защищаются только код, ссылки и include/directive-фрагменты. После ответа
 проверяются число строк и число столбцов каждой таблицы.
 
-## Проверка качества
+## Проверка качества всего PR
 
-После локальной проверки структуры и безопасной нормализации черновика
-critic-editor сравнивает protected authoritative source и protected target
-целиком или крупными осмысленными блоками. Полный Diplodoc build выполняется
-только после critic-editor: build черновика не должен лишать редактор возможности
-исправить его.
-В `doc_translate` excerpt-пары не строятся повторно из собранного документа:
-critic-editor получает точные source chunks и уже валидированные ответы
-переводчика, из которых этот документ был собран. Это сохраняет один и тот же
-контракт чанкинга между двумя моделями. Повторное детерминированное построение
-пар остаётся только для `doc_verify`/`doc_continue`, где исходных ответов
-переводчика нет.
-При превышении provider limit source и target делятся на соответствующие
-упорядоченные excerpt-пары.
-Для critic-editor используется отдельный лимит 48000 символов. Schema не
-содержит field IDs документа: единица применения — полный исправленный Markdown
-excerpt. Packing набирает максимально крупные excerpts и не
-деградирует до десятков вызовов из-за большого enum.
-Явный content-filter на critic-editor excerpt вызывает один вызов резервной
-модели для каждой исходной точной пары `translator chunk → validated response`,
-входившей в этот excerpt, с плоской schema из единственного
-`corrected_markdown`. Сложные диагностические findings для fallback не нужны:
-его результат принимается только после тех же структурных валидаторов. Target
-не режется эвристически, fallback chunks не делятся повторно, успешные соседние
-excerpts не повторяются.
-Полный большой target не повторяется в каждом prompt, чтобы critic не терял
-соответствующий фрагмент среди нерелевантных разделов. В том же ответе
-critic-editor возвращает полный
-`corrected_markdown`; если исправлять нечего, он обязан точно повторить target.
-Это единственное поле ответа редактора: диагностика и verdict ему не поручены.
-Редактор получает ровно один semantic call и обязан в нём вернуть готовый чанк.
-Schema-invalid ответ с
-HTTP 200 получает один технический повтор с причиной parser-а, без semantic loop.
-Provider `non_final`/truncated также повторяется ровно один раз тем же запросом;
-это bounded transport recovery, а не новая критика.
-Затем обязательны восстановление
-protected fragments, локальные validators и полный Diplodoc build итогового
-candidate, даже если critic не изменил bytes. Лишние пробелы после list marker
-нормализуются детерминированно вне fenced/indented code, без model call. Все
-документы публикуются одним commit. После редактора независимый read-only
-arbiter на модели переводчика получает ту же пару authoritative source → готовый
-target. Только findings arbiter формируют пользовательский GREEN/RED. RED не
-запускает новый semantic repair.
+После локальных структурных проверок и безопасной нормализации runtime строит
+один закрытый PRReviewContext: complete source/candidate inventory и operations,
+полные review-owned source/candidate Markdown/YFM/YAML файлы, включая index/TOC,
+allowed paths/operations, snapshot/candidate digests, technical-fragment validation
+data и оба полных pinned RU/EN glossary. Source glossary берётся из authoritative
+snapshot, target glossary из pinned translation base. Missing files/glossary
+останавливают review. Если glossary сам входит в candidate, его изменённый текст
+проверяется отдельно от pinned terminology reference.
 
-Arbiter исходит из GREEN и создаёт finding только для материальной технической
-ошибки: неверного или потерянного смысла, выдуманного факта, непереведённой
-прозы, неверной команды/параметра/числа/версии/сущности, непонятной инструкции
-или сломанной ссылки. Понятный, но неидеальный английский, стиль, тон,
-капитализация, артикли, выбор допустимого синонима и безвредный повтор RED не
-образуют. Терминологический вариант блокирует результат только при нарушении
-явного project glossary или изменении технического смысла.
+Старый target prose не передаётся как образец формулировок или источник repair.
+Точный candidate, включая сохранённый review checkpoint, является проверяемым
+объектом. Operator context отделяется от authoritative content. Repository text
+и glossary передаются как данные, вложенные инструкции не исполняются.
 
-Перед каждым вызовом переводчика, critic-editor и arbiter релевантные пары
-терминов выбираются заново по исходному тексту текущего чанка. Поэтому большой
-файл не тащит в каждый prompt весь глоссарий, а все три роли видят одинаковые
-обязательные соответствия именно для проверяемого фрагмента.
+Один editor возвращает `{"files": {"<allowed path>": "<complete file>"}}`:
+ровно все editable target text paths, включая unchanged. Строгая schema и parser
+отвергают missing/unknown/duplicate keys, malformed/partial/empty files, binary,
+deletion, traversal, out-of-scope и extra entries. Findings, patch и отдельный
+repair call не заменяют полные готовые файлы.
 
-Защищённые фрагменты остаются placeholders в редактируемом тексте, но редактор и
-arbiter получают точное отображение каждого token на исходный код, команду, URL
-или идентификатор. Они видят полное техническое содержание, не получая права
-изменить source-owned bytes.
+Runtime атомарно применяет карту в памяти, проверяет source-owned technical
+values, Markdown/YFM, links/anchors, metadata/plan constraints и assets,
+затем запускает один полный Diplodoc build. Полный draft build до editor
+запрещён. Technical literals видны с реальной окружающей разметкой:
+разрешено безопасно улучшить inline-code оформление без изменения значения,
+нельзя подменить URL, commands, identifiers или templates. TOC name corrections
+допускаются только в явно разрешённом plan, с planner-owned пересчётом artifact
+digest и provenance; structure/href/остальные rows, включая target-only navigation,
+сохраняются. Arbitrary metadata overwrite запрещён.
 
-Технический transport retry может быть bounded, но не превращается в
-сохраняемую state machine или механизм продолжения.
+После build один независимый read-only arbiter получает полный исправленный PR
+и оба полных glossary. Он проверяет ровно built bytes. GREEN требует полного
+валидного финального ответа, пустых findings, полного непустого coverage и
+совпадающего context/candidate digest. No-op editor не отменяет build/arbiter;
+editor byte changes, пустой ответ, отсутствующий arbiter или пустой checked set
+не дают GREEN. Findings связываются с валидными paths/current snippets и
+конкретной правкой. Semantic RED не запускает автоматический repair loop.
+Публикация одна, после editor → validation/full build → arbiter. Изменение bytes
+после arbiter требует нового полного review.
 
-Operator context обрамляется отдельно от authoritative Markdown, применяется
-как инструкция и не может становиться частью перевода или candidate.
+Оба prompt активно проверяют полноту/смысл, межфайловую терминологию и
+идентичность сущностей даже без exact glossary mapping, commands/parameters/
+identifiers, границы technical literals и читаемый Markdown, links/anchors,
+H1/index/TOC и полный набор PR operations. Литературная полировка не требуется;
+отсутствие словарной пары не оправдывает распад одной сущности на разные имена.
 
-## Исправление сбоя 36379127309
+Editor/arbiter никогда не используют translator chunks или excerpts и не
+получают filtered glossary. Admission проверяет verified input/context/output
+capacity для точного serialized request с system/schema/JSON overhead и резервом
+полных output files. Unknown capability и oversize дают typed terminal failure
+до publication; lossy truncation, summary, chunk fallback и partial GREEN
+запрещены. Пара glossary witness содержит 225432 UTF-8 bytes. Исторический
+48000-character budget и старые probes недостаточны для нового контракта.
+Retry policy едина с REQUIREMENTS_RU.md §5: максимум две primary attempts на
+роль; optional single editor fallback после content-filter использует полный
+контекст и новый admission. Translator retries/splitting остаются отдельными.
+
+Continuation повторно переводит только pending documents, но любой semantic
+review снова включает весь PR/glossary, в том числе ранее accepted files.
+Новая contract version и source/candidate/glossary manifests/digests связывают
+checkpoint; старые chunk-review checkpoints отвергаются fail closed.
+Offline fakes доказывают orchestration. Semantic acceptance требует live
+full-context provider probe и независимой проверки полных результатов
+реального witness #50839/#54590, описанного в testing.md.
+
+## Исторический translator regression: сбой 36379127309
 
 Технический цикл: TRANSLATE → локальная валидация → одна TRANSLATE correction
 с прежним ответом и конкретной причиной → безопасное деление, если correction
@@ -217,7 +218,6 @@ Operator context обрамляется отдельно от authoritative Mark
 невалидный chunk не публикуется. Каждый отказ пишет безопасный код валидации
 без model response и source prose; успешные соседние chunks не повторяются.
 
-Смысловая проверка остаётся отдельным этапом между локальной структурной
-валидацией черновика и единственной публикацией. Строгий Diplodoc build идёт
-после неё. По умолчанию переводчик — DeepSeek V4 Flash, critic-editor —
+Текущий утверждённый порядок quality stage: полный PR editor, затем
+строгий Diplodoc build и только после него полный PR arbiter перед публикацией. По умолчанию переводчик — DeepSeek V4 Flash, critic-editor —
 YandexGPT 5.1 (`YDBDOC_MODEL_CRITIC` позволяет явно выбрать модель).

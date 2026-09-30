@@ -33,8 +33,13 @@ state was already satisfied.
    them.
 6. Execute only plan entries. Execution returns a mutation or a checked no-op
    for every entry.
-7. Reconcile the execution result against the plan before model review,
-   publication and checkpoint creation.
+7. Reconcile the execution result against the plan, then build one closed full
+   PRReviewContext with complete inventory, source/candidate text files including
+   index/TOC, allowed paths/operations, exact snapshot/candidate digests, both
+   complete pinned RU/EN glossaries and technical validation data. One editor
+   returns all editable target text paths as complete files. Apply atomically,
+   reconcile/validate and run a full build, then send the exact built candidate
+   to one independent full PR arbiter before one publication/checkpoint.
 8. Persist and hash the canonical plan. `doc_continue` and `doc_verify` replay
    that exact plan; they do not rediscover scope using the same mutable rules.
 
@@ -88,6 +93,12 @@ navigation labels and article titles may intentionally differ.
 
 ## Current implementation boundary
 
+The full PR review replacement approved on 2026-09-30 is not implemented or
+provider-validated at baseline `2a1c268`. Whole-file/source-only translation
+remains. Source deltas only plan operations; old target prose is not a model
+source for translation or repair. Complete inventory includes deletions, renames
+and binary manifests/digests; these are not editable text-map outputs.
+
 `translation_plan.py` is the fail-closed inventory boundary. Classification
 preflight runs before direction/model calls. After direction selection, the
 inventory intent is classified before metadata planning; exact metadata
@@ -108,7 +119,8 @@ unrelated TOC cannot satisfy the plan. The source base/head digests and target
 postcondition are part of the canonical plan hash checked by `doc_continue`.
 PR #50839 has a full runtime golden built from the recorded source base/head
 and complete EN file and proves that target-only EN navigation is preserved
-while `BlobDepot decommit` becomes `Group Decommissioning`.
+while `BlobDepot decommit` becomes `Group Decommissioning`. This historical
+golden proves planner/output shape, not semantic correctness of that label.
 
 This is still a deliberately narrow supported subset. Markdown lifecycle and
 the target-H1-backed TOC entry-addition migration associated with selected
@@ -119,6 +131,38 @@ implemented with source-base snapshots and per-entry results before support is
 advertised. The legacy TOC title repair still uses an established target H1 and
 is therefore limited to the current supported migration cases; the complete-file
 TOC prose contract above is the required replacement for general support.
+
+## Approved editor/reconciliation boundary
+
+Editor output covers exactly all allowed editable text paths as complete files.
+Missing, unknown, duplicate, malformed, partial, binary, deletion, traversal and
+out-of-scope entries fail closed. Applying the whole map is atomic in memory.
+Source-owned technical values and deterministic operation constraints remain
+mandatory. TOC name corrections are limited to explicitly planned text changes:
+structure, href, order and valid target-only navigation stay unchanged.
+A planner-owned API must recompute the validated artifact digest while preserving
+the original plan and correction provenance. Dropping the expected digest or
+allowing arbitrary YAML overwrite is forbidden; unsupported corrections stop
+with a typed blocked correction/RED.
+
+The full build runs after editor and before arbiter. The arbiter sees the exact
+built candidate with full glossary; GREEN requires valid full output, empty
+findings, complete nonempty coverage and matching digest. Empty responses,
+missing arbiter, editor changes or a checked-noop plan do not imply GREEN.
+Review checks cross-file terminology/entity identity without requiring an exact
+glossary mapping, links/anchors, H1/index/TOC and complete PR operations.
+Valid target-only navigation means index and TOC path sets need not be equal.
+
+Review context is indivisible. Verified input/context/output admission reserves
+the exact serialized request and complete-file response; unknown capability or
+oversize stops before publication without lossy fallback or partial GREEN.
+The pinned witness glossaries alone contain 225432 UTF-8 bytes, so historical
+48000-character limits and excerpt probes are insufficient.
+Continue translates pending documents only, but every semantic review includes
+the full PR/glossary. Checkpoints bind a new contract version plus
+source/candidate/glossary manifests/digests; incompatible chunk-review states
+fail closed. Real-provider full-context probe and independent content review
+are required before claiming semantic acceptance.
 
 ## Independent review of the legacy flow
 

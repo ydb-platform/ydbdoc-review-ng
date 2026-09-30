@@ -1,5 +1,9 @@
 # Стратегия тестирования
 
+Новый PR review contract утверждён 2026-09-30, но ещё не реализован и не
+provider-validated. Описанные ниже новые acceptance witnesses должны быть
+добавлены в реализации; этот documentation change их не исполнял.
+
 ## Unit tests рядом с функционалом
 
 - Разработчик каждой атомарной задачи пишет unit tests её публичного поведения.
@@ -8,15 +12,13 @@
 - GitHub GET retry проверяется на transient transport/5xx, а mutation failure —
   на отсутствие повтора при неопределённом результате.
 - Fixture добавляется для конкретного requirement, а не ради размера матрицы.
-- После изменения контракта резервного critic перед платным переводом отдельно
-  запускается model-contract probe. В репозитории инструмента это
-  `.github/workflows/model-contract-probe.yml`; если model secrets доступны
-  только consumer-репозиторию, на исходный PR временно ставится
-  `doc_model_probe`, после чего штатный `doc_translate` выполняет лишь probe.
-  Он проверяет синтетическими, не содержащими документацию запросами реальный
-  alternate provider и плоский ответ `corrected_markdown`, основной
-  critic-editor с фактической коррекцией и независимый read-only arbiter;
-  offline suite не доказывает cross-provider совместимость.
+- Новый live model-contract probe обязан использовать production context
+  builders/parsers: translator segment map, полный multi-file editor с
+  исправлением двух файлов и межфайлового дефекта, validation/full build и
+  независимый полный PR arbiter. Полный pinned glossary включается в оба calls.
+  Проверяются все реально используемые providers; optional fallback только если
+  этот путь сохранён. Старые synthetic excerpt probes исторические и недостаточны.
+  Offline suite не доказывает provider capacity или semantic correctness.
 
 ## Независимая приёмка
 
@@ -48,7 +50,7 @@ exact protected-fragment invariant. Тест не строит navigation graph 
 
 `tests/e2e/test_offline_continue.py` вызывает CLI через реальный `create_runtime`,
 заменяя только GitHub/model HTTP и YDB executor. Witnesses: direction-only retry,
-pending-only translation с source protected bytes, review только unresolved paths,
+pending-only translation с source protected bytes, любой review полного PR/glossary,
 один verdict, GREEN close, неизменный expiry после повторного RED. Missing, empty,
 unauthorized или поздний comment, expired и stale checkpoint дают exit 1,
 terminal audit и ноль model/GitHub mutation effects. CLI и shell action отдельно
@@ -92,3 +94,57 @@ the complete expected TOC digest and reject a merely non-null dummy file.
 Unsupported matrix cells are expected failures, not missing tests. Structural
 TOC delta/no-op proofs, redirects, assets and persisted plan replay remain the
 next executor layer described in `docs/translation-plan.md`.
+
+## Полный PR semantic witness #50839 / #54590
+
+Fixture `tests/fixtures/quality/pr50839_pr54590/` должен содержать полные
+RU/EN `blobdepot.md`, `blobdepot_decommit.md`, `index.md`, `toc_i.yaml`
+под `ydb/docs/{ru,en}/core/maintenance/manual/`, обе полные glossary, original PR
+inventories и PROVENANCE/manifest с SHA-256 всех bytes. Исходный PR:
+base `1705aa4cea8caaf8c715b368f57ac7317975af83`,
+head `12c8b806dc4560ff7322cd7464dc2372a1b614c6`,
+merge `30d5bd68e2f97cbb41aaf782149435e4b9c1bdbc`.
+Фактический authoritative source snapshot перевода:
+`9191121586f4d8061414d597cdcc2f4ec8d42d20`; bad target head:
+`b7b27bcf34d9761f0311011cd3fba051c05cd4ca`.
+Original head нельзя подменять authoritative snapshot.
+Pinned witness glossary blobs: RU `313f9ba9ca5f7e1188b9e3bf2233fe4da2ac53b2`
+(146214 bytes), EN `b9792fee56ad091fae76d29185759d4b99cb9c45`
+(79218 bytes), всего 225432 UTF-8 bytes. Исторические 48000-character limits
+и excerpt probes не доказывают новый контракт.
+
+Witness checks:
+
+- Fragmentation BlobDepot/Blobovnica/blobber и смешение BlobStorage должны
+  обнаруживаться между файлами даже без exact glossary mapping.
+- Сохраняются bytes `{{ ydb-name }}`, исправляется грамматика вокруг template.
+  `BS monitoring page\_CONTROLLER` не заменяет цельный `BS_CONTROLLER`.
+  Склейка `--storage-pool-namein` исправляется без изменения параметра.
+- Читаемое inline-code оформление technical literals проверяется по source/
+  candidate. Старый EN baseline не подмешивается в model input; потерю исходных
+  backticks доказывает отдельный source fixture с настоящими backticks.
+- H1/index/TOC согласованы по сущностям и запланированным операциям. Valid
+  target-only navigation сохраняется. Искусственное равенство всех множеств
+  index/TOC links запрещено: некоторые ссылки закономерно находятся вне TOC.
+- Positive offline replay использует production context builder/schema/parser,
+  atomic apply, validation/build и publication fake. Fake editor возвращает
+  независимо проверенные полные файлы, fake arbiter проверяет exact built bytes,
+  все четыре paths и оба полных glossary, включая tail markers. Negative replay
+  оставляет старые defects и получает RED.
+- Runtime отвергает missing/unknown/duplicate/malformed/partial file maps,
+  binary/deletion/traversal/out-of-scope entries, пустой ответ/checked set,
+  missing arbiter, невалидный RED, digest mismatch и unvalidated metadata.
+  Editor changes и no-op не подменяют полный arbiter.
+- Verified input/context/output capacity резервируется для точных serialized
+  requests и полных outputs. Unknown capability, oversize, failed validation/
+  build или moved head дают ноль publication calls с terminal audit/cost.
+  Fallback не сокращает контекст, glossary или outputs.
+- Любой continuation review вновь включает весь PR, в том числе accepted
+  documents. Старые chunk-review checkpoints fail closed; новые связывают
+  contract version и source/candidate/glossary manifests/digests, exact head,
+  TTL и CAS. PR attempts имеют NULL target_path и аудируемый context identity.
+
+Scripted offline GREEN доказывает только orchestration. Semantic acceptance
+требует real-provider full-context probe и независимого review полных outputs.
+Исторический TOC golden доказывает сохранение target-only entries и planner
+shape, но не правильность перевода label `Group Decommissioning` или всего PR.

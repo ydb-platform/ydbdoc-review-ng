@@ -10,10 +10,15 @@
 реализацией production-конвейера.
 
 Реализованы parser, проверка ответов моделей и protected fragments,
-critic-editor с одним проходом на документ, независимый read-only arbiter,
-полный build только после редактора и арбитра,
-audit/budget adapters, линейная
-оркестрация и единственная публикация финального candidate
+audit/budget adapters, линейная оркестрация и атомарная публикация candidate.
+Утверждённый 2026-09-30 новый semantic contract ещё не реализован и не проверен
+реальными providers: один editor полного PR → deterministic validation/full
+Diplodoc build → независимый arbiter точного built PR → одна публикация.
+Оба review calls получают полный inventory, все review-owned source/candidate
+text files и оба полных pinned glossary. Editor возвращает строгую карту всех
+editable paths в полные файлы; GREEN требует полного arbiter coverage и
+совпадающего digest. Whole-file/source-only translation сохраняется.
+Baseline `2a1c268` ещё содержит прежний chunk review. Production работает
 через внедряемые backend-ы. Поставляемый production factory
 `ydbdoc_review_ng.runtime:create_runtime` соединяет GitHub REST/Git Data через
 stdlib, Yandex transport, YDB query executor и реальные workflow stages.
@@ -105,7 +110,9 @@ Verify и continue не имеют budget gate; их costs учитываютс�
 issue events, время и автора комментария. Продолжаются только сохранённые
 direction, pending translation или RED review checkpoints возрастом до 14 дней.
 Source/base SHA берутся из checkpoint; SHA и budget flags запрещены. Уже принятые
-maps используются повторно, review запускается только для проблемных документов.
+maps используются повторно для pending-only translation. По новому контракту
+любой semantic review заново охватывает весь PR и glossary; старые chunk-review
+checkpoints несовместимы и должны отклоняться fail closed.
 GREEN закрывает checkpoint, повторная семантическая остановка сохраняет исходный
 expiry. Infrastructure failures требуют нового запуска. Ручная правка translation
 branch с последующим verify также допустима. Подробнее об environment и внешних портах:
@@ -143,7 +150,9 @@ release с continue; тег `v1.1.0` публикуется отдельно п�
 и `doc_verify.yml`, вызывают
 [один composite action](.github/actions/doc-review/README.md). Они устанавливают
 runtime extra и выбирают поставляемый factory. Проверка actors, snapshots,
-модель, metadata producer, публикация, audit и чтение CI checks реализованы.
+модель, metadata producer, публикация и audit реализованы. QA GREEN описывает
+semantic качество точного полностью проверенного candidate независимо от external
+CI; реализация нового полного PR review остаётся отдельной задачей.
 Внешний вызов использует путь
 `ydb-platform/ydbdoc-review-ng/.github/actions/doc-review@<reviewed-commit-sha>`; action всегда
 устанавливает пакет из собственного repository checkout, а не из workspace
