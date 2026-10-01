@@ -1828,11 +1828,14 @@ class RuntimeContent:
     def validate_candidate(
         self, snapshot: ImmutableRunSnapshot, candidate: WorkflowCandidate, /
     ) -> None:
-        if (
-            snapshot.mode is Mode.DOC_CONTINUE
-            and self.source.github.head(snapshot.branch) != snapshot.target_sha
-        ):
-            raise RuntimeBoundaryError("continue_translation_head_mismatch")
+        if snapshot.mode is Mode.DOC_CONTINUE:
+            head = self.source.github.head(snapshot.branch)
+            allowed = {snapshot.target_sha}
+            context = getattr(self.publisher, "context", None)
+            if context is not None and context.current_head is not None:
+                allowed.add(context.current_head)
+            if head not in allowed:
+                raise RuntimeBoundaryError("continue_translation_head_mismatch")
         self.publisher.validate_candidate(snapshot, candidate)
 
     @staticmethod
@@ -1889,7 +1892,12 @@ class RuntimeContent:
         }
 
         def check_head() -> None:
-            if self.source.github.head(snapshot.branch) != snapshot.target_sha:
+            head = self.source.github.head(snapshot.branch)
+            allowed = {snapshot.target_sha}
+            context = getattr(self.publisher, "context", None)
+            if context is not None and context.current_head is not None:
+                allowed.add(context.current_head)
+            if head not in allowed:
                 raise RuntimeBoundaryError("continue_translation_head_mismatch")
 
         def validate_files(corrected: Mapping[str, bytes]) -> None:
@@ -1953,6 +1961,20 @@ class RuntimeContent:
                 toc_postconditions=toc_postconditions,
             )
 
+        def publish_critic_chunk(corrected_files: Mapping[str, bytes]) -> None:
+            # REQUIREMENTS §4.1: successful critic chunk commits/pushes immediately.
+            baseline = {
+                path: value for path, value in translated_files.items() if value is not None
+            }
+            if dict(corrected_files) == baseline and not any(
+                value is None for value in translated_files.values()
+            ):
+                return
+            merged = {**files, **dict(corrected_files)}
+            chunk_candidate = WorkflowCandidate(pack(merged), candidate.review_context)
+            self.validate_candidate(snapshot, chunk_candidate)
+            self.publisher.publish(snapshot, chunk_candidate)
+
         corrected, final = review_pr(
             self.models,
             critic_model=self.critic_model,
@@ -1963,6 +1985,7 @@ class RuntimeContent:
             validate_files=validate_files,
             operator_context=self.review_operator_context,
             before_model_call=check_head if snapshot.mode is Mode.DOC_CONTINUE else None,
+            on_successful_critic_chunk=publish_critic_chunk,
         )
         repaired = corrected != translated_files
         files.update(corrected)

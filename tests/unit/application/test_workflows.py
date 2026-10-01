@@ -407,6 +407,7 @@ def test_verify_success_never_checks_budget_or_translates_and_publishes_once() -
         "validate:initial",
         "review:t011",
         "review:critic-editor",
+        "validate:initial",
         "publish:initial",
         "report:current-pr-verdict",
         "job:finish:succeeded",

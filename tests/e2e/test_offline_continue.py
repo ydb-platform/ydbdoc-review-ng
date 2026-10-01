@@ -101,6 +101,8 @@ def test_review_cli_reviews_all_files_without_retranslation_then_updates_one_ver
     assert services.files[EN + "b.md"] == b"# Repaired b\n\nTranslated\n"
     assert services.timeline == [
         "critic",
+        "commit",
+        "push",
         "arbiter",
         "commit",
         "push",

@@ -17,6 +17,7 @@
 
 Срезы 1–3, 6–8 закрыты на local `main` (dependency+limits, soft-publish,
 continuation v3, YELLOW=success, whole-file translate, direction-only).
-TOC §3 пока append-only (coverage tests фиксируют gaps).
-Остаётся: critic chunk + immediate push (§4.1), полный TOC delta, удаление
-мёртвого `select_direction`, `doc_verify`/budget — см. `debt-map.md`.
+Critic §4.1: successful chunk сразу push (one-shot); multi-pair context split
+ещё нет. TOC §3 пока append-only.
+Остаётся: critic context-chunking, полный TOC delta, удаление мёртвого
+`select_direction`, `doc_verify`/budget — см. `debt-map.md`.

@@ -35,10 +35,23 @@ def prompt_map(request, tag):
 def test_two_file_pr_has_exactly_one_critic_then_one_arbiter(verdict, changed):
     original = {"en/a.md": b"# Depot\n", "en/b.md": b"# Depot\n"}
     corrected = {path: (b"# BlobDepot\n" if changed else text) for path, text in original.items()}
+    findings = (
+        []
+        if verdict == "GREEN"
+        else [
+            {
+                "target_path": "en/a.md",
+                "target_line": 1,
+                "searchable_snippet": corrected["en/a.md"].decode().splitlines()[0],
+                "reason": "Meaning needs a clearer term.",
+                "expected_correction": "Use the source term exactly.",
+            }
+        ]
+    )
     executor = FifoModels(
         [
             json.dumps({"files": {path: text.decode() for path, text in corrected.items()}}),
-            json.dumps({"verdict": verdict, "findings": []}),
+            json.dumps({"verdict": verdict, "findings": findings}),
         ]
     )
     events = []

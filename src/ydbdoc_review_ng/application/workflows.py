@@ -517,6 +517,11 @@ class LinearWorkflows:
                 self._content.validate_candidate(snapshot, reviewed)
                 stage = WorkflowStage.PUBLISH
                 final_sha = self._publisher.publish(snapshot, reviewed)
+            else:
+                # Critic may have pushed a successful chunk already (§4.1).
+                published = getattr(getattr(self._publisher, "context", None), "current_head", None)
+                if published is not None:
+                    final_sha = published
             stage = WorkflowStage.REPORT
             self._reporter.update_current_pr(
                 mode=mode,
@@ -574,9 +579,8 @@ class LinearWorkflows:
                 raise ValueError("doc_verify snapshot has no target SHA")
             review = self._reviewer.review(snapshot, candidate)
             reviewed = WorkflowCandidate(review.final_candidate, candidate.review_context)
-            if reviewed.content != candidate.content:
-                stage = WorkflowStage.VALIDATE
-                self._content.validate_candidate(snapshot, reviewed)
+            stage = WorkflowStage.VALIDATE
+            self._content.validate_candidate(snapshot, reviewed)
             stage = WorkflowStage.PUBLISH
             final_sha = self._publisher.publish(snapshot, reviewed)
             stage = WorkflowStage.REPORT

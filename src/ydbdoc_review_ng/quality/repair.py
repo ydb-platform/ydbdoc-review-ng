@@ -52,6 +52,7 @@ def review_pr(
     validate_files: Callable[[Mapping[str, bytes]], None],
     operator_context: str | None = None,
     before_model_call: Callable[[], None] | None = None,
+    on_successful_critic_chunk: Callable[[Mapping[str, bytes]], None] | None = None,
 ) -> tuple[dict[str, bytes], CriticResult]:
     """Correct the complete PR once, validate atomically, then judge those bytes."""
     critic = build_pr_critic_request(
@@ -68,6 +69,8 @@ def review_pr(
         raise QualityExecutionError("critic")
     corrected = parse_pr_critic_response(response.text, target_paths=tuple(translated_files))
     validate_files(corrected)
+    if on_successful_critic_chunk is not None:
+        on_successful_critic_chunk(corrected)
     arbiter = build_pr_arbiter_request(
         model=arbiter_model,
         source_files=source_files,

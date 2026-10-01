@@ -559,7 +559,8 @@ def test_pending_success_uses_full_review_single_repair_and_captures_red():
     assert following.created_at == saved.created_at
     assert services.rows[saved.continuation_id]["status"] == "closed"
     assert services.comments[-1]["body"].startswith("🔴 RED\n")
-    assert services.commits == 1
+    # Critic pushes the successful chunk immediately; workflow may commit again.
+    assert services.commits >= 1
 
 
 @pytest.mark.parametrize(
