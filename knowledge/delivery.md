@@ -9,8 +9,9 @@
    проверяется через remote SHA.
 4. Для каждой атомарной задачи сначала пишется failing regression test, затем
    минимальная реализация и focused checks.
-5. После каждого task commit выполняются только относящиеся к нему focused tests;
-   промежуточный независимый review не блокирует следующую задачу.
+5. После каждого task commit выполняются только относящиеся к нему focused tests,
+   затем свежий независимый reviewer проверяет brief, report и точный diff. Полный
+   suite на этом шаге не запускается.
 6. После всех задач один раз выполняются полный non-live suite, Ruff, mypy,
    `git diff --check`, package build и installed smoke. Затем независимый reviewer
    и tester проверяют exact final tree.
