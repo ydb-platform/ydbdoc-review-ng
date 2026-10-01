@@ -19,8 +19,8 @@ paths, code, templates и другие source-owned fragments, а DeepSeek во�
 строгую JSON-карту всех prose segment IDs. Existing target в translator prompt не
 попадает.
 
-Для файла выбираются все релевантные парные секции glossary. Прежних
-ограничений в 8 секций или 8 000 символов нет. Runtime вставляет protected
+Для файла выбираются все релевантные парные секции glossary. Ограничений по
+числу секций или символов нет. Runtime вставляет protected
 fragments и собирает полный UTF-8 candidate.
 
 Malformed JSON, неполная ID-map или provider error допускают одну техническую

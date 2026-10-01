@@ -15,8 +15,8 @@
 
 ## Обязательные witnesses
 
-- Whole-file translator получает один полный source-файл. Нет прежнего
-  6000-character chunking.
+- Whole-file translator получает один полный source-файл. Дополнительного
+  model-request limit и внутридокументного chunking нет.
 - Strict translator parser отклоняет missing, unknown и duplicate IDs; одна
   correction покрыта отдельно.
 - Любой технически собранный UTF-8 candidate публикуется даже при
