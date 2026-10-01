@@ -15,8 +15,7 @@
 
 ## Код
 
-Срезы 1–10 закрыты на local `main` (TOC §3 structural + DeepSeek string ID-map,
-reporting §7 findings cap). Остаётся: full suite / live PR — см. `debt-map.md`.
-
-Известный pre-existing drift в части continue_review assertions (timeline/commits
-после critic immediate push) — не блокер этого среза; live PR не заявляем.
+Срезы 1–10 закрыты на local `main`. Offline non-live suite: **2222 passed**,
+3 deselected (`live`). Continue_review / soft-publish / critic-push expectations
+выровнены. Live `doc_translate` gate ещё не пройден (push 403 / credentials).
+См. `debt-map.md` срез 11.

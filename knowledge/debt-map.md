@@ -20,10 +20,10 @@
 | 10 | Budget / reporting | done |
 | 11 | Full suite + live PR | pending |
 
-> [!note] Pre-existing continue_review drift
-> Несколько integration assertions ещё ждут timeline/commits после critic
-> immediate push (`test_critic_editor_*`, pinned branch/publish failures).
-> Не регрессия TOC string map; чинить отдельным срезом или вместе с live PR.
+> [!success] Offline suite (2026-10-01)
+> Full non-live pytest: **2222 passed**, 3 deselected (`live`). Continue_review
+> timeline/commits и soft-publish/critic-push ожидания выровнены под контракт.
+> Остаётся только live `doc_translate` gate (нужны credentials / push).
 
 ## Известные расхождения в коде
 
@@ -57,3 +57,4 @@
 - ~~Reporting: public findings capped by files (10), not by findings (25).~~
   QA comment caps at 25 findings with omitted counter; GREEN/YELLOW/RED icons,
   cost (unknown ≠ 0), YELLOW success recipe (`doc_verify`).
+- Offline suite green; **live PR / production `doc_translate` still pending**.
