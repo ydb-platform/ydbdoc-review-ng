@@ -63,5 +63,4 @@ vs `REQUIREMENTS_RU.md`. Fix only contract violations; skip invented requirement
 - New `doc_translate` deletes `translation/pr-{n}` and closes checkpoints; labels removed.
 - `doc_verify` GREEN/YELLOW closes prior RED checkpoint.
 - TOC scope hash ignores volatile `expected_sha256` wording; continue skips TOC string retranslate.
-- Follow-up: rename+RED continue publish interaction xfail under #14 TOC review context.
 - Offline suite mostly green; **live PR / production `doc_translate` still pending**.

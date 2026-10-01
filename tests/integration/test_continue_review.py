@@ -402,19 +402,7 @@ def test_repeated_red_preserves_unresolved_path_order_for_the_next_continue():
     ] * 4
 
 
-@pytest.mark.parametrize(
-    "repair",
-    [
-        pytest.param(
-            False,
-            marks=pytest.mark.xfail(
-                reason="#14 TOC review context + rename RED publish interaction; tracked follow-up",
-                strict=False,
-            ),
-        ),
-        True,
-    ],
-)
+@pytest.mark.parametrize("repair", [False, True])
 def test_pinned_rename_review_never_derives_maps_from_target_and_replays_metadata(
     repair, monkeypatch
 ):

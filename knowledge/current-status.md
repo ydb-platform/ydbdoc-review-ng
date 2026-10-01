@@ -18,4 +18,5 @@
 Срезы 1–10 закрыты на local `main`. Offline non-live suite ранее: **2222 passed**.
 
 Neural review triage: P0 + D-modes + E (TOC/continue/echo) + P2 закрыты на `main`.
-Остаётся live `doc_translate` gate и мелкий xfail rename+RED continue. См. `debt-map.md`.
+Rename+RED continue xfail снят (publish re-validate из `7cdf352`). Остаётся live
+`doc_translate` gate. См. `debt-map.md`.
