@@ -61,7 +61,7 @@ from ydbdoc_review_ng.locales import (
     discover_changed_pairs,
     paired_markdown_path,
 )
-from ydbdoc_review_ng.models import AttemptError, ModelCallResult, ModelRequest
+from ydbdoc_review_ng.models import AttemptError, ModelRequest
 from ydbdoc_review_ng.models.types import FrozenJson, mutable_json
 from ydbdoc_review_ng.parser.markdown import build_markdown_plan
 from ydbdoc_review_ng.plan import ProtectedKind, SourcePlan, fields_of
@@ -618,11 +618,9 @@ class RuntimeContent:
         self, source: RuntimeSource, models: RecordedModels, environment: Mapping[str, str],
     ) -> None:
         self.source, self.models, self.environment = source, models, environment
-        self.model = environment.get("YDBDOC_MODEL") or "deepseek-v4-flash"
-        self.fallback_model = environment.get("YDBDOC_MODEL_FALLBACK") or "yandexgpt-5.1"
-        self.critic_model = environment.get("YDBDOC_MODEL_CRITIC") or "yandexgpt-5.1"
-        self.arbiter_model = environment.get("YDBDOC_MODEL_ARBITER") or self.model
-        self.critic_fallback_model = environment.get("YDBDOC_MODEL_CRITIC_FALLBACK") or self.model
+        self.model = "deepseek-v4-flash"
+        self.critic_model = self.model
+        self.arbiter_model = self.model
         self.wikipedia = WikipediaLanglinks()
         self.roots = LocaleRoots(RepoPath("ydb/docs/ru/core"), RepoPath("ydb/docs/en/core"))
         self.documents: tuple[Document, ...] = ()
@@ -1363,24 +1361,6 @@ class RuntimeContent:
                 source_text=chunk.text,
             )
 
-            def invoke_model(request: ModelRequest, /) -> ModelCallResult:
-                result = self.models.invoke(request)
-                if result.success or self.fallback_model == self.model:
-                    return result
-                fallback = self.models.invoke(
-                    ModelRequest(
-                        ModelRole.TRANSLATE,
-                        self.fallback_model,
-                        request.prompt,
-                        None
-                        if request.schema is None
-                        else cast(FrozenJson, mutable_json(request.schema)),
-                        request.max_tokens,
-                        request.target_path,
-                    )
-                )
-                return fallback
-
             for attempt in (1, 2):
                 base_request = ModelRequest(
                     ModelRole.TRANSLATE,
@@ -1431,9 +1411,9 @@ class RuntimeContent:
                     segment_request.max_tokens,
                     segment_request.target_path,
                 )
-                result = invoke_model(request)
+                result = self.models.invoke(request)
                 if not result.success or result.text is None:
-                    return None, result.failure, result.failure is AttemptError.CONTENT_FILTER
+                    return None, result.failure, False
                 try:
                     response = _assemble_document_chunk_segments(
                         segment_field,

@@ -321,7 +321,8 @@ class _BaseYandexClient:
             self._timeout_seconds,
         )
         attempts: list[AttemptResult] = []
-        for attempt_number in range(1, self._execution.max_attempts + 1):
+        max_attempts = min(self._execution.max_attempts, 2)
+        for attempt_number in range(1, max_attempts + 1):
             started_at = self._now()
             try:
                 response = self._transport(wire_request)
@@ -350,8 +351,6 @@ class _BaseYandexClient:
                 )
                 self._recorder(attempt)
                 attempts.append(attempt)
-                if failure.retryable and attempt_number < self._execution.max_attempts:
-                    continue
                 return ModelCallResult(None, AttemptError.TRANSPORT, tuple(attempts))
             document = _document(response.body)
             parsed = (
@@ -376,7 +375,9 @@ class _BaseYandexClient:
                 cost = _provider_cost(document)
             if cost is None and self._pricing is not None:
                 cost = self._pricing(request.model, parsed.usage)
-            if 200 <= response.status_code < 300:
+            if response_status in {"content_filter", "ALTERNATIVE_STATUS_CONTENT_FILTER"}:
+                error = AttemptError.CONTENT_FILTER
+            elif 200 <= response.status_code < 300:
                 error = parsed.error
             else:
                 error = AttemptError.HTTP_STATUS
@@ -404,11 +405,7 @@ class _BaseYandexClient:
             attempts.append(attempt)
             if error is None:
                 return ModelCallResult(parsed.text, None, tuple(attempts))
-            retryable = (
-                error in {AttemptError.CONTENT_FILTER, AttemptError.NON_FINAL}
-                or response.status_code in self._execution.retryable_statuses
-            )
-            if retryable and attempt_number < self._execution.max_attempts:
+            if error is AttemptError.CONTENT_FILTER and attempt_number < max_attempts:
                 continue
             return ModelCallResult(None, error, tuple(attempts))
         raise AssertionError("bounded attempt loop exhausted without returning")

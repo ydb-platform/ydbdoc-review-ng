@@ -11,10 +11,12 @@ import yaml
 from ydbdoc_review_ng import dependencies, runtime_content
 from ydbdoc_review_ng.application import ImmutableRunSnapshot, WorkflowCandidate
 from ydbdoc_review_ng.continuation import AcceptedDocument
+from ydbdoc_review_ng.direction import DirectionModelPair, DirectionModelRequest
 from ydbdoc_review_ng.domain import (
     FilePair,
     GitSha,
     Locale,
+    ModelRole,
     RepoPath,
     RepositoryId,
     SnapshotRef,
@@ -23,8 +25,10 @@ from ydbdoc_review_ng.locales import PairKey
 from ydbdoc_review_ng.models import AttemptError, ModelCallResult, ModelRequest
 from ydbdoc_review_ng.parser.markdown import build_markdown_plan
 from ydbdoc_review_ng.publication import FileChange, PublicationPlan
+from ydbdoc_review_ng.quality import review_pr
 from ydbdoc_review_ng.runtime import RecordedModels, RuntimeSource
 from ydbdoc_review_ng.runtime_content import (
+    DirectionClient,
     Document,
     FrozenPreparation,
     FrozenSourcePlans,
@@ -133,9 +137,7 @@ class FilterTwiceThenEchoModels:
 
     def invoke(self, request: ModelRequest, /) -> ModelCallResult:
         self.calls.append(request)
-        # DeepSeek is attempted first and Yandex is the fallback for each
-        # provider failure. Keep both attempts filtered for the parent and
-        # first adaptive child so this exercises recursive splitting.
+        # Any recursive recovery would reach a later successful response.
         if len(self.calls) <= 4:
             return ModelCallResult(None, AttemptError.CONTENT_FILTER, ())
         return ModelCallResult(_echo_response(request), None, ())
@@ -206,7 +208,7 @@ def content_with(models: object, environment: dict[str, str] | None = None) -> R
     )
 
 
-def test_translation_uses_deepseek_primary_and_yandex_fallback() -> None:
+def test_translation_failure_cannot_invoke_yandex_fallback() -> None:
     document = document_for(b"# Use `CPUTime` now.\n")
     prepared = prepare_document(document.source, document.plan, max_characters=100_000)
     valid = prepared.chunks[0].text
@@ -214,32 +216,52 @@ def test_translation_uses_deepseek_primary_and_yandex_fallback() -> None:
         [ModelCallResult(None, AttemptError.CONTENT_FILTER, ()), valid]
     )
 
-    accepted = content_with(models).translate_document(document)
+    with pytest.raises(RuntimeBoundaryError, match="translation_model_failed"):
+        content_with(models).translate_document(document)
 
-    assert accepted.as_dict()
-    assert [call.model for call in models.calls] == [
-        "deepseek-v4-flash",
-        "yandexgpt-5.1",
-    ]
+    assert [call.model for call in models.calls] == ["deepseek-v4-flash"]
 
 
-def test_critic_fallback_and_arbiter_models_are_independently_overridable() -> None:
-    default = content_with(EchoChunkModels())
+@pytest.mark.parametrize("role", ["translator", "classifier", "critic", "arbiter"])
+def test_production_models_ignore_legacy_model_overrides(role) -> None:
+    models = EchoChunkModels()
     explicit = content_with(
-        EchoChunkModels(),
+        models,
         {
-            "YDBDOC_MODEL": "translator-model",
-            "YDBDOC_MODEL_CRITIC": "critic-model",
-            "YDBDOC_MODEL_CRITIC_FALLBACK": "other-critic-model",
-            "YDBDOC_MODEL_ARBITER": "arbiter-model",
+            "YDBDOC_MODEL": "yandexgpt-5.1",
+            "YDBDOC_MODEL_FALLBACK": "yandexgpt-5.1",
+            "YDBDOC_MODEL_CRITIC": "yandexgpt-5.1",
+            "YDBDOC_MODEL_CRITIC_FALLBACK": "yandexgpt-5.1",
+            "YDBDOC_MODEL_ARBITER": "yandexgpt-5.1",
         },
     )
 
-    assert default.critic_fallback_model == default.model
-    assert default.arbiter_model == default.model
-    assert explicit.critic_model == "critic-model"
-    assert explicit.critic_fallback_model == "other-critic-model"
-    assert explicit.arbiter_model == "arbiter-model"
+    if role == "translator":
+        explicit.translate_document(document_for(b"# Complete document.\n"))
+        calls = models.calls
+    elif role == "classifier":
+        direction_models = ScriptedModels(['{"page.md":"ru_to_en"}'])
+        DirectionClient(direction_models, explicit.model).invoke(DirectionModelRequest(
+            ModelRole.DIRECTION,
+            (DirectionModelPair(PairKey(RepoPath("page.md")), SNAPSHOT,
+                                SOURCE_PATH, b"Source", TARGET_PATH, b"Target"),),
+            None,
+        ))
+        calls = direction_models.calls
+    else:
+        review_models = ScriptedModels([
+            json.dumps({"files": {TARGET_PATH.value: "# Target\n"}}),
+            '{"verdict":"GREEN","findings":[]}',
+        ])
+        review_pr(
+            review_models, critic_model=explicit.critic_model,
+            arbiter_model=explicit.arbiter_model,
+            source_files={SOURCE_PATH.value: b"# Source\n"},
+            translated_files={TARGET_PATH.value: b"# Target\n"},
+            glossary_files={}, validate_files=lambda files: None,
+        )
+        calls = [call for call in review_models.calls if call.role.value == role]
+    assert [call.model for call in calls] == ["deepseek-v4-flash"]
 
 
 def test_document_assembly_trace_contains_failing_stage_and_reason(monkeypatch) -> None:
@@ -816,7 +838,7 @@ def test_large_document_uses_minimum_response_safe_raw_chunks(
 
 
 @pytest.mark.parametrize("source_locale", [Locale.RU, Locale.EN])
-def test_exhausted_content_filter_splits_only_original_chunk_nearest_midpoint(
+def test_exhausted_content_filter_stops_original_chunk_without_split(
     source_locale: Locale,
 ) -> None:
     source = content_filter_witness(with_leading_chunk=True)
@@ -845,19 +867,16 @@ def test_exhausted_content_filter_splits_only_original_chunk_nearest_midpoint(
         ]
     )
 
-    accepted = content_with(
-        models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "250000"}
-    ).translate_document(document)
+    with pytest.raises(RuntimeBoundaryError, match="translation_model_failed"):
+        content_with(
+            models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "250000"}
+        ).translate_document(document)
 
     raw_requests = tuple(_source_from_prompt(call.prompt) for call in models.calls)
-    assert tuple(map(len, raw_requests)) == (15_898, 15_800, 15_800, 7_869, 7_930)
-    assert (
-        assemble_candidate(document.source, document.plan, document.request, accepted.as_dict())
-        == source
-    )
+    assert tuple(map(len, raw_requests)) == (15_898, 15_800)
 
 
-def test_content_filter_uses_only_boundary_even_when_one_child_exceeds_half_cap() -> None:
+def test_content_filter_does_not_split_at_available_boundary() -> None:
     source = (_heading_block(1, 9_000) + _heading_block(2, 1_000)).encode()
     document = document_for(source)
     prepared = prepare_document(
@@ -879,17 +898,14 @@ def test_content_filter_uses_only_boundary_even_when_one_child_exceeds_half_cap(
         ]
     )
 
-    accepted = content_with(models).translate_document(document)
+    with pytest.raises(RuntimeBoundaryError, match="translation_model_failed"):
+        content_with(models).translate_document(document)
 
     raw_requests = tuple(_source_from_prompt(call.prompt) for call in models.calls)
-    assert tuple(map(len, raw_requests)) == (9_998, 9_998, 8_998, 998)
-    assert (
-        assemble_candidate(document.source, document.plan, document.request, accepted.as_dict())
-        == source
-    )
+    assert tuple(map(len, raw_requests)) == (9_998,)
 
 
-def test_content_filter_children_do_not_repeat_filtered_target_reference() -> None:
+def test_content_filter_with_existing_target_is_terminal() -> None:
     source = content_filter_witness()
     document = document_for(source, target=b"# Existing target reference\n")
     prepared = prepare_document(
@@ -908,8 +924,10 @@ def test_content_filter_children_do_not_repeat_filtered_target_reference() -> No
         ]
     )
 
-    content_with(models).translate_document(document)
+    with pytest.raises(RuntimeBoundaryError, match="translation_model_failed"):
+        content_with(models).translate_document(document)
 
+    assert len(models.calls) == 1
     assert all("<EXISTING_TARGET_EN>" not in call.prompt for call in models.calls)
     assert all("# Existing target reference" not in call.prompt for call in models.calls)
 
@@ -988,21 +1006,18 @@ def test_absolute_internal_link_fragment_is_checked_against_target_page() -> Non
     )
 
 
-def test_content_filter_in_child_recursively_splits_and_preserves_document() -> None:
+def test_content_filter_does_not_create_recursive_child_calls() -> None:
     source = content_filter_witness()
     document = document_for(source)
     models = FilterTwiceThenEchoModels()
 
-    _accepted, translated = content_with(
-        models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "250000"}
-    )._translate_document(document)
+    with pytest.raises(RuntimeBoundaryError, match="translation_model_failed"):
+        content_with(
+            models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "250000"}
+        )._translate_document(document)
 
-    assert translated.translated_markdown.encode() == source
-    assert len(models.calls) == 7
+    assert len(models.calls) == 1
     assert len(_source_from_prompt(models.calls[0].prompt)) == 15_800
-    assert len(_source_from_prompt(models.calls[2].prompt)) == 7_869
-    assert len(_source_from_prompt(models.calls[4].prompt)) == 3_924
-    assert len(_source_from_prompt(models.calls[6].prompt)) == 7_930
 
 
 def test_content_filter_without_top_level_boundary_is_terminal() -> None:
@@ -1015,7 +1030,7 @@ def test_content_filter_without_top_level_boundary_is_terminal() -> None:
     with pytest.raises(RuntimeBoundaryError, match="translation_model_failed"):
         content_with(models).translate_document(document)
 
-    assert len(models.calls) == 2
+    assert len(models.calls) == 1
 
 
 def test_non_final_parent_does_not_trigger_adaptive_split() -> None:
@@ -1028,7 +1043,7 @@ def test_non_final_parent_does_not_trigger_adaptive_split() -> None:
     with pytest.raises(RuntimeBoundaryError, match="translation_model_failed"):
         content_with(models).translate_document(document)
 
-    assert len(models.calls) == 2
+    assert len(models.calls) == 1
 
 
 def test_content_filter_on_technical_correction_does_not_publish_invalid_response() -> None:
@@ -1046,7 +1061,7 @@ def test_content_filter_on_technical_correction_does_not_publish_invalid_respons
     with pytest.raises(RuntimeBoundaryError, match="translation_model_failed"):
         content._translate_document(document)
 
-    assert len(models.calls) == 3
+    assert len(models.calls) == 2
     assert "Important correction" in models.calls[1].prompt
 
 
@@ -1275,7 +1290,7 @@ def test_invalid_adaptive_child_is_split_again_until_valid() -> None:
     assert accepted_document.translated_markdown.encode() == source
 
 
-def test_large_chunk_splits_when_technical_correction_is_filtered() -> None:
+def test_large_chunk_stops_when_technical_correction_is_filtered() -> None:
     source = content_filter_witness() + b"## Use `CPUTime` now.\n"
     document = document_for(source)
     prepared = prepare_document(
@@ -1290,13 +1305,13 @@ def test_large_chunk_splits_when_technical_correction_is_filtered() -> None:
     invalid = parent.text.replace(placeholder.token, "", 1)
     models = InvalidThenFilteredThenEchoModels(invalid)
 
-    _accepted, accepted_document = content_with(
-        models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "250000"}
-    )._translate_document(document)
+    with pytest.raises(RuntimeBoundaryError, match="translation_model_failed"):
+        content_with(
+            models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "250000"}
+        )._translate_document(document)
 
-    assert len(models.calls) == 5
+    assert len(models.calls) == 2
     assert "Important correction" in models.calls[1].prompt
-    assert accepted_document.translated_markdown.encode() == source
 
 
 def test_provider_failure_is_not_semantically_retried() -> None:
@@ -1309,7 +1324,7 @@ def test_provider_failure_is_not_semantically_retried() -> None:
     with pytest.raises(RuntimeBoundaryError, match="translation_model_failed"):
         content_with(models).translate_document(document)
 
-    assert len(models.calls) == 2
+    assert len(models.calls) == 1
 
 
 def test_prompt_limit_failure_happens_before_model_call() -> None:

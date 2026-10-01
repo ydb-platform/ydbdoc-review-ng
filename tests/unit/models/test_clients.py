@@ -441,20 +441,16 @@ def test_explicit_provider_zero_cost_is_not_changed_to_unknown() -> None:
     assert result.attempts[0].cost_rub == Decimal(0)
 
 
-def test_retryable_status_is_recorded_before_successful_second_attempt() -> None:
+def test_http_failure_is_recorded_without_transport_retry() -> None:
     first = HttpResponse(503, b'{"billing":{"costRub":"0.05"}}')
     transport = FakeTransport(first, native_response())
     recorded: list[object] = []
 
     result = native_client(transport, recorded).invoke(request())
 
-    assert result.success
-    assert [attempt.attempt_number for attempt in result.attempts] == [1, 2]
-    assert [attempt.status for attempt in result.attempts] == [
-        AttemptStatus.FAILED,
-        AttemptStatus.SUCCEEDED,
-    ]
-    assert [attempt.cost_rub for attempt in result.attempts] == [Decimal("0.05"), None]
+    assert result.failure is AttemptError.HTTP_STATUS
+    assert len(transport.requests) == 1
+    assert [attempt.cost_rub for attempt in result.attempts] == [Decimal("0.05")]
     assert recorded == list(result.attempts)
 
 
@@ -498,7 +494,9 @@ def test_native_content_filter_twice_fails_after_exactly_two_audited_attempts() 
     transport = FakeTransport(response, response, native_response())
     recorded: list[object] = []
 
-    result = native_client(transport, recorded).invoke(request())
+    result = native_client(
+        transport, recorded, execution=ExecutionConfig(max_attempts=5)
+    ).invoke(request())
 
     assert result.text is None
     assert result.failure is AttemptError.CONTENT_FILTER
@@ -515,27 +513,25 @@ def test_native_content_filter_twice_fails_after_exactly_two_audited_attempts() 
     assert recorded == list(result.attempts)
 
 
-def test_native_truncated_final_is_retried_once_then_final_succeeds() -> None:
+def test_native_truncated_final_is_not_retried() -> None:
     truncated = native_response(status="ALTERNATIVE_STATUS_TRUNCATED_FINAL")
     transport = FakeTransport(truncated, native_response())
 
     result = native_client(transport, []).invoke(request())
 
-    assert result.failure is None
-    assert len(result.attempts) == 2
-    assert len(transport.requests) == 2
-    assert [attempt.error for attempt in result.attempts] == [AttemptError.NON_FINAL, None]
+    assert result.failure is AttemptError.NON_FINAL
+    assert len(result.attempts) == 1
+    assert len(transport.requests) == 1
 
 
-def test_native_truncated_final_twice_fails_after_two_attempts() -> None:
-    truncated = native_response(status="ALTERNATIVE_STATUS_TRUNCATED_FINAL")
-    transport = FakeTransport(truncated, truncated, native_response())
+def test_openai_non_final_is_not_retried() -> None:
+    transport = FakeTransport(openai_response(status="length"), openai_response())
 
-    result = native_client(transport, []).invoke(request())
+    result = openai_client(transport, []).invoke(request("deepseek-v4-flash"))
 
     assert result.failure is AttemptError.NON_FINAL
-    assert len(result.attempts) == 2
-    assert len(transport.requests) == 2
+    assert len(result.attempts) == 1
+    assert len(transport.requests) == 1
 
 
 def test_openai_content_filter_is_retried_once_then_stop_succeeds() -> None:
@@ -564,6 +560,19 @@ def test_openai_content_filter_is_retried_once_then_stop_succeeds() -> None:
     assert recorded == list(result.attempts)
 
 
+def test_http_content_filter_is_retried_with_identical_request() -> None:
+    transport = FakeTransport(
+        HttpResponse(400, b'{"error":{"code":"content_filter"}}'), openai_response()
+    )
+    recorded = []
+    result = openai_client(transport, recorded).invoke(request("deepseek-v4-flash"))
+    assert result.success
+    assert len(transport.requests) == 2
+    assert transport.requests[0] == transport.requests[1]
+    assert result.attempts[0].error is AttemptError.CONTENT_FILTER
+    assert recorded == list(result.attempts)
+
+
 def test_nonretryable_and_exhausted_failures_have_bounded_attempt_counts() -> None:
     nonretryable_transport = FakeTransport(HttpResponse(400, b"bad"), native_response())
     nonretryable = native_client(nonretryable_transport, []).invoke(request())
@@ -572,8 +581,18 @@ def test_nonretryable_and_exhausted_failures_have_bounded_attempt_counts() -> No
 
     exhausted_transport = FakeTransport(HttpResponse(503, b"busy"), HttpResponse(503, b"busy"))
     exhausted = native_client(exhausted_transport, []).invoke(request())
-    assert len(exhausted.attempts) == 2
+    assert len(exhausted.attempts) == 1
     assert exhausted.failure is AttemptError.HTTP_STATUS
+
+
+def test_retryable_transport_failure_is_not_retried() -> None:
+    transport = FakeTransport(TransportFailure(retryable=True), openai_response())
+    recorded = []
+    result = openai_client(transport, recorded).invoke(request("deepseek-v4-flash"))
+    assert result.failure is AttemptError.TRANSPORT
+    assert len(transport.requests) == 1
+    assert recorded == list(result.attempts)
+    assert result.attempts[0].cost_rub is None
 
 
 def test_http_error_preserves_nested_provider_status_without_response_text() -> None:
