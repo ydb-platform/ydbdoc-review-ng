@@ -46,7 +46,6 @@ _OUTER_AUTHORITATIVE_SOURCE = re.compile(
     r"(?P<body>.*)</AUTHORITATIVE_SOURCE_(?P=locale)>[ \t]*(?:\r?\n)?\Z",
     re.DOTALL,
 )
-RAW_MARKDOWN_RESPONSE_MAX_CHARACTERS = 16_000
 CORRECTION_SOURCE_EXCERPT_MAX_CHARACTERS = 160
 
 
@@ -777,26 +776,11 @@ def prepare_document(
     plan: SourcePlan,
     /,
     *,
-    max_characters: int,
-    source_locale: str | None = None,
-    target_locale: str | None = None,
-    operator_context: str | None = None,
     link_resolver: Callable[[str], str] | None = None,
-    terminology_context: str | None = None,
 ) -> DocumentTranslationRequest:
     """Expose complete Markdown, replacing only parser-owned opaque regions globally."""
     if type(source) is not bytes or type(plan) is not SourcePlan:
         raise TypeError("source and plan must have exact public contract types")
-    if type(max_characters) is not int or max_characters < 1:
-        raise ValueError("max_characters must be a positive integer")
-    if (source_locale is None) != (target_locale is None) or any(
-        locale is not None and type(locale) is not str for locale in (source_locale, target_locale)
-    ):
-        raise TypeError("source and target locale must both be strings or both be omitted")
-    if operator_context is not None and type(operator_context) is not str:
-        raise TypeError("operator_context must be a string or None")
-    if terminology_context is not None and type(terminology_context) is not str:
-        raise TypeError("terminology_context must be a string or None")
     if link_resolver is not None and not callable(link_resolver):
         raise TypeError("link_resolver must be callable or None")
     validate_source_plan(source, plan)
@@ -889,52 +873,15 @@ def prepare_document(
     if link_pairs:
         raise DocumentTranslationError("document_request:unpaired_link_boundary")
 
-    def fits(text: str, block_start: int, block_end: int) -> bool:
-        if source_locale is None or target_locale is None:
-            return len(text) <= max_characters
-        if len(text) > RAW_MARKDOWN_RESPONSE_MAX_CHARACTERS:
-            return False
-        chunk = DocumentChunk(text, block_start, block_end, tuple(_TOKEN.findall(text)))
-        prompt = build_document_prompt(
-            chunk,
-            source_locale,
-            target_locale,
-            terminology_context=terminology_context,
-        )
-        if operator_context is not None:
-            prompt += document_operator_guidance(operator_context)
-        return len(prompt) <= max_characters
-
-    if not plan.blocks:
-        if not fits("", 0, 0):
-            raise DocumentTranslationError("document_chunk:prompt_overhead_exceeds_limit")
-        return DocumentTranslationRequest((DocumentChunk("", 0, 0, ()),), tuple(placeholders))
     rendered_blocks = _document_block_texts(source, plan, tuple(placeholders))
-    if any(not fits(block, index, index + 1) for index, block in enumerate(rendered_blocks)):
-        raise DocumentTranslationError("document_chunk:top_level_block_exceeds_limit")
-
-    chunks: list[DocumentChunk] = []
-    block_start = 0
-    text = ""
-    for index, block_text in enumerate(rendered_blocks):
-        if text and not fits(text + block_text, block_start, index + 1):
-            boundary = index
-            while boundary > block_start and not _can_start_chunk(rendered_blocks[boundary]):
-                boundary -= 1
-            if boundary == block_start:
-                raise DocumentTranslationError("document_chunk:top_level_block_exceeds_limit")
-            left = "".join(rendered_blocks[block_start:boundary])
-            tokens = tuple(_TOKEN.findall(left))
-            chunks.append(DocumentChunk(left, block_start, boundary, tokens))
-            block_start = boundary
-            text = "".join(rendered_blocks[boundary:index])
-            if text and not fits(text + block_text, block_start, index + 1):
-                raise DocumentTranslationError("document_chunk:top_level_block_exceeds_limit")
-        text += block_text
-    chunks.append(
-        DocumentChunk(text, block_start, len(rendered_blocks), tuple(_TOKEN.findall(text)))
+    text = "".join(rendered_blocks)
+    chunk = DocumentChunk(
+        text,
+        0,
+        len(rendered_blocks),
+        tuple(_TOKEN.findall(text)),
     )
-    return DocumentTranslationRequest(tuple(chunks), tuple(placeholders))
+    return DocumentTranslationRequest((chunk,), tuple(placeholders))
 
 
 def _document_block_texts(

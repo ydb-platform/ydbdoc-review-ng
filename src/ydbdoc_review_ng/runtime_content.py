@@ -98,7 +98,6 @@ from ydbdoc_review_ng.translation import (
     DocumentChunk,
     DocumentPlaceholder,
     DocumentTranslationError,
-    DocumentTranslationRequest,
     Placeholder,
     TranslationField,
     TranslationRequest,
@@ -108,15 +107,11 @@ from ydbdoc_review_ng.translation import (
     parse_translation_response,
     prepare_document,
     restore_document,
-    split_content_filter_chunk,
     validate_chunk_response,
     validate_translation_values,
     verify_document_candidate,
 )
-from ydbdoc_review_ng.translation.document import (
-    _document_block_texts,
-    verify_document_candidate_with_links,
-)
+from ydbdoc_review_ng.translation.document import verify_document_candidate_with_links
 from ydbdoc_review_ng.translation_plan import (
     PathKind,
     TranslationPlan,
@@ -1317,33 +1312,21 @@ class RuntimeContent:
         self, document: Document, /, *, operator_context: str | None = None
     ) -> tuple[AcceptedMap, AcceptedDocument]:
         entry = document.entry
-        limit = int(
-            self.environment.get("YDBDOC_MAX_MODEL_REQUEST_CHARACTERS")
-            or "6000"
-        )
         target_reference_bytes = (
             entry.target_content
             if entry.target_content is not None
             else entry.rename_from_target_content
         )
-        terminology_context = self._terminology_context(document)
         link_resolver = self._link_resolver(document, target_reference_bytes)
         prepared = prepare_document(
             document.source,
             document.plan,
-            max_characters=limit,
-            source_locale=entry.pair.source_locale.value,
-            target_locale=entry.pair.target_locale.value,
-            operator_context=operator_context,
             link_resolver=link_resolver,
-            terminology_context=terminology_context,
         )
-        block_texts = _document_block_texts(document.source, document.plan, prepared.placeholders)
         # The existing target remains available for link/scope analysis, but it is
         # deliberately not sent to the translation model. Translation must be
         # reconstructed from the authoritative source and the accepted response.
-        effective_chunks: list[DocumentChunk] = []
-        responses: list[str] = []
+        chunk = prepared.chunks[0]
 
         def invoke_chunk(
             chunk: DocumentChunk,
@@ -1440,48 +1423,25 @@ class RuntimeContent:
                     return response, None, False
             raise AssertionError("translation technical attempt bound exhausted")
 
-        def translate_chunk(
-            chunk: DocumentChunk,
-            chunk_index: int,
-        ) -> None:
-            if not any(
-                block.fields
-                for block in document.plan.blocks[chunk.block_start : chunk.block_end]
-            ):
-                effective_chunks.append(chunk)
-                responses.append(chunk.text)
-                return
-            accepted_response, failure, should_split = invoke_chunk(
-                chunk,
-                chunk_index,
-            )
-            if accepted_response is not None:
-                effective_chunks.append(chunk)
-                responses.append(accepted_response)
-                return
-            children = split_content_filter_chunk(chunk, block_texts) if should_split else None
-            if children is None:
-                if should_split and failure is None:
-                    raise InvalidTranslationResponse("translation_response_invalid")
-                raise RuntimeBoundaryError("translation_model_failed")
-            for child in children:
-                translate_chunk(
-                    child,
-                    chunk_index,
-                )
-
-        for chunk_index, chunk in enumerate(prepared.chunks, 1):
+        if not any(block.fields for block in document.plan.blocks):
+            response = chunk.text
+        else:
             with traced(
                 "translation",
                 "chunk",
                 article=entry.pair.target_path.value,
-                chunk_index=chunk_index,
-                chunks_total=len(prepared.chunks),
+                chunk_index=1,
+                chunks_total=1,
             ):
-                translate_chunk(
+                accepted_response, failure, invalid_response = invoke_chunk(
                     chunk,
-                    chunk_index,
+                    1,
                 )
+            if accepted_response is None:
+                if invalid_response and failure is None:
+                    raise InvalidTranslationResponse("translation_response_invalid")
+                raise RuntimeBoundaryError("translation_model_failed")
+            response = accepted_response
 
         def assembly_failure(stage: str, error: Exception) -> None:
             write_trace(
@@ -1496,11 +1456,8 @@ class RuntimeContent:
             raise InvalidTranslationResponse("translation_response_invalid") from None
 
         try:
-            effective_request = DocumentTranslationRequest(
-                tuple(effective_chunks), prepared.placeholders
-            )
             candidate = restore_document(
-                document.source, document.plan, effective_request, tuple(responses)
+                document.source, document.plan, prepared, (response,)
             )
         except (DocumentTranslationError, ValueError, TypeError, UnicodeError) as error:
             assembly_failure("restore_document", error)

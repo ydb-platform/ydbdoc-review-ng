@@ -9,9 +9,7 @@ from ydbdoc_review_ng.translation.document import (
     DocumentChunk,
     DocumentTranslationError,
     DocumentTranslationRequest,
-    build_document_correction_note,
     build_document_prompt,
-    document_operator_guidance,
     prepare_document,
     restore_document,
     split_content_filter_chunk,
@@ -22,9 +20,9 @@ SNAPSHOT = SnapshotRef(RepositoryId("ydb-platform/ydb"), GitSha("a" * 40))
 PATH = RepoPath("ydb/docs/ru/test.md")
 
 
-def prepared(source: bytes, *, limit: int = 100_000):
+def prepared(source: bytes):
     plan = build_markdown_plan(SNAPSHOT, PATH, source)
-    return plan, prepare_document(source, plan, max_characters=limit)
+    return plan, prepare_document(source, plan)
 
 
 @pytest.mark.parametrize(("source_locale", "target_locale"), [("ru", "en"), ("en", "ru")])
@@ -55,7 +53,6 @@ def test_translation_prompt_uses_authoritative_source_only() -> None:
     chunk = prepare_document(
         source.encode(),
         build_markdown_plan(SNAPSHOT, PATH, source.encode()),
-        max_characters=100_000,
     ).chunks[0]
     prompt = build_document_prompt(chunk, "ru", "en")
 
@@ -129,7 +126,6 @@ def test_markdown_link_destination_is_always_protected_from_the_model() -> None:
     request = prepare_document(
         source,
         plan,
-        max_characters=100_000,
     )
 
     assert "[query hints]([[YDBDOC_URL_0001]])" in request.chunks[0].text
@@ -144,7 +140,7 @@ def test_dense_links_use_one_url_token_and_keep_labels_visible() -> None:
         b"See [first link](one.md) and [second link](two.md) in one paragraph.\n"
     )
     plan = build_markdown_plan(SNAPSHOT, PATH, source)
-    request = prepare_document(source, plan, max_characters=100_000)
+    request = prepare_document(source, plan)
 
     assert request.chunks[0].text == (
         "See [first link]([[YDBDOC_URL_0001]]) and "
@@ -192,9 +188,6 @@ def test_link_destination_is_hidden_inside_markdown_syntax_and_restored_from_res
     request = prepare_document(
         source,
         plan,
-        max_characters=100_000,
-        source_locale="ru",
-        target_locale="en",
         link_resolver=lambda value: (
             "../dev/query-execution-optimization/query-hints.md"
             if value == "../dev/optimization/hints.md"
@@ -245,7 +238,7 @@ def test_link_boundaries_prevent_model_from_merging_two_links() -> None:
     ).encode()
     plan = build_markdown_plan(SNAPSHOT, PATH, source)
 
-    request = prepare_document(source, plan, max_characters=100_000)
+    request = prepare_document(source, plan)
     tokens = tuple(item.token for item in request.placeholders)
 
     assert tokens == ("[[YDBDOC_URL_0001]]", "[[YDBDOC_URL_0002]]")
@@ -384,26 +377,24 @@ def test_field_local_mobility_rejects_opaque_block_reorder() -> None:
         restore_document(source, plan, request, (reordered,))
 
 
-def test_limit_uses_minimum_ordered_whole_block_chunks() -> None:
+def test_prepare_document_keeps_all_blocks_in_one_request() -> None:
     source = b"# One\n\nParagraph two.\n\n- Three\n\nFinal four.\n"
     plan = build_markdown_plan(SNAPSHOT, PATH, source)
-    block_lengths = [block.span.end - block.span.start for block in plan.blocks]
-    limit = sum(block_lengths[:3])
 
-    request = prepare_document(source, plan, max_characters=limit)
+    request = prepare_document(source, plan)
 
-    assert len(request.chunks) == 2
-    assert "".join(chunk.text for chunk in request.chunks).encode() == source
-    assert request.chunks[0].block_end == 3
-    assert request.chunks[1].block_start == 3
+    assert len(request.chunks) == 1
+    assert request.chunks[0].text.encode() == source
+    assert request.chunks[0].block_start == 0
+    assert request.chunks[0].block_end == len(plan.blocks)
 
 
-def test_missing_final_lf_is_restored_at_each_chunk_boundary() -> None:
+def test_missing_final_lf_is_restored_at_document_boundary() -> None:
     source = b"# First\n# Second\n"
-    plan, request = prepared(source, limit=9)
-    assert tuple(chunk.text for chunk in request.chunks) == ("# First\n", "# Second\n")
+    plan, request = prepared(source)
+    assert tuple(chunk.text for chunk in request.chunks) == ("# First\n# Second\n",)
 
-    candidate = restore_document(source, plan, request, ("# First", "# Second"))
+    candidate = restore_document(source, plan, request, ("# First\n# Second",))
 
     assert candidate == source
     assert build_markdown_plan(SNAPSHOT, PATH, candidate).blocks == plan.blocks
@@ -476,7 +467,7 @@ def test_adaptive_split_does_not_start_inside_nested_list() -> None:
     assert right.text == "## Next\n\nParagraph.\n"
 
 
-def test_initial_chunks_do_not_start_inside_nested_list() -> None:
+def test_prepare_document_keeps_nested_list_in_whole_document() -> None:
     source = (
         b"Intro paragraph text.\n\n"
         b"* Parent:\n"
@@ -484,12 +475,10 @@ def test_initial_chunks_do_not_start_inside_nested_list() -> None:
         b"  * Child two\n\n"
         b"## Next\n"
     )
-    _plan, request = prepared(source, limit=45)
+    _plan, request = prepared(source)
 
     assert tuple(chunk.text for chunk in request.chunks) == (
-        "Intro paragraph text.\n\n",
-        "* Parent:\n  * Child one\n  * Child two\n\n",
-        "## Next\n",
+        "Intro paragraph text.\n\n* Parent:\n  * Child one\n  * Child two\n\n## Next\n",
     )
 
 
@@ -741,66 +730,6 @@ def test_block_kind_change_is_left_for_critic_review() -> None:
     candidate = restore_document(source, plan, request, ("# First\n\nSecond",))
 
     assert candidate == b"# First\n\nSecond\n"
-
-
-def test_configured_limit_applies_to_each_complete_prompt_with_minimum_chunks() -> None:
-    source = (
-        b"\n\n".join(
-            (
-                b"Paragraph one has thirty seven letters.",
-                b"Paragraph two has thirty seven letters.",
-                b"Paragraph three has thirty five chars.",
-                b"Paragraph four has thirty six letters.",
-                b"Paragraph five has thirty six letters.",
-                b"Paragraph six has thirty seven letters.",
-            )
-        )
-        + b"\n"
-    )
-    plan = build_markdown_plan(SNAPSHOT, PATH, source)
-    operator_context = "Reviewer context"
-    terminology_context = "SOURCE: строковые таблицы\nTARGET: row-oriented tables"
-
-    request = prepare_document(
-        source,
-        plan,
-        max_characters=2_450,
-        source_locale="ru",
-        target_locale="en",
-        operator_context=operator_context,
-        terminology_context=terminology_context,
-    )
-    prompts = tuple(
-        (
-            build_document_prompt(
-                chunk, "ru", "en", terminology_context=terminology_context
-            )
-            + document_operator_guidance(operator_context),
-            build_document_prompt(
-                chunk,
-                "ru",
-                "en",
-                correction=True,
-                correction_note=build_document_correction_note(
-                    source,
-                    chunk,
-                    request.placeholders,
-                    chunk.placeholders,
-                ),
-                terminology_context=terminology_context,
-            )
-            + document_operator_guidance(operator_context),
-        )
-        for chunk in request.chunks
-    )
-
-    assert len(request.chunks) == 2
-    assert all(len(pair[0]) <= 2_450 for pair in prompts)
-    assert "".join(chunk.text for chunk in request.chunks).encode() == source
-    assert all(
-        left.block_end == right.block_start
-        for left, right in zip(request.chunks, request.chunks[1:], strict=False)
-    )
 
 
 def test_complete_candidate_reparse_preserves_structural_block_kinds() -> None:
