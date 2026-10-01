@@ -5,6 +5,10 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Protocol
 
+from ydbdoc_review_ng.config import (
+    MAX_DEPENDENCY_FILES_VARIABLE,
+    MAX_SOURCE_CHARACTERS_VARIABLE,
+)
 from ydbdoc_review_ng.domain import GitSha, Mode, RepoPath
 from ydbdoc_review_ng.publication import GitPublicationAdapter, PublicationContext, PublicationError
 from ydbdoc_review_ng.quality import Finding, QualityReviewResult, Verdict
@@ -18,10 +22,14 @@ _STATUS_ICONS = {"GREEN": "🟢", "YELLOW": "🟡", "RED": "🔴"}
 
 _SCOPE_FAILURE_MESSAGES = {
     "dependency_file_limit_exceeded": (
-        "число файлов в группе перевода превышает лимит", "файлов"
+        "число файлов в группе перевода превышает лимит",
+        "файлов",
+        MAX_DEPENDENCY_FILES_VARIABLE,
     ),
     "source_character_limit_exceeded": (
-        "объём исходного текста превышает лимит", "символов"
+        "объём исходного текста превышает лимит",
+        "символов",
+        MAX_SOURCE_CHARACTERS_VARIABLE,
     ),
 }
 _PLAN_FAILURE_MESSAGES = {
@@ -277,10 +285,11 @@ class QAReporter:
         if failure is not None:
             if type(configured_limit) is not int or configured_limit < 0:
                 raise ValueError("scope failure requires the configured limit")
-            reason, unit = failure
+            reason, unit, variable = failure
             details = (
                 f"Причина: {reason}.\n"
-                f"Лимит: {configured_limit} {unit}.\n\n"
+                f"Лимит: {configured_limit} {unit}.\n"
+                f"Переменная: `{variable}`.\n\n"
                 "Что сделать: уменьшить scope PR или увеличить настройку лимита, "
                 "затем повторно добавить метку `doc_translate`."
             )
@@ -374,7 +383,7 @@ class QAReporter:
                 self._backend.create_comment(number, body)
             else:
                 self._backend.update_comment(number, existing.id, body)
-            if mode is Mode.DOC_TRANSLATE and report_context.source_pr_number is not None:
+            if mode in {Mode.DOC_TRANSLATE, Mode.DOC_CONTINUE} and report_context.source_pr_number is not None:
                 source_body = (
                     "Перевод этого PR: "
                     f"https://github.com/{context.repository}/pull/{number}\n"

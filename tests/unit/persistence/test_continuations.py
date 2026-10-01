@@ -729,8 +729,12 @@ def test_direction_resolution_never_changes_frozen_git_facts(field):
 @pytest.mark.parametrize("stage", [ContinuationStage.TRANSLATION, ContinuationStage.REVIEW])
 def test_checkpoint_scope_selection_requires_paths_for_selected_stages(stage):
     selected = selected_checkpoint(stage)
-    with pytest.raises(ydb.PersistenceError):
+    if stage is ContinuationStage.REVIEW:
+        # TOC/resource-only REVIEW may keep an empty document scope (§4.2).
         replace(selected, scope_target_paths=())
+    else:
+        with pytest.raises(ydb.PersistenceError):
+            replace(selected, scope_target_paths=())
     with pytest.raises(ydb.PersistenceError):
         replace(selected, scope_target_paths=(RepoPath("en/foreign.md"),))
     with pytest.raises(ydb.PersistenceError):

@@ -195,10 +195,9 @@ def test_translation_and_review_stages_reject_incompatible_fields() -> None:
         (),
         (TARGET_PATH,),
     )
-    with pytest.raises(ContinuationStateError):
-        dataclasses.replace(review, pending_paths=(PENDING_PATH,))
-    with pytest.raises(ContinuationStateError):
-        dataclasses.replace(review, target_sha=None)
+    # §5.3: REVIEW may keep pending translator holes; §4.2 allows null target_sha.
+    dataclasses.replace(review, pending_paths=(PENDING_PATH,))
+    dataclasses.replace(review, target_sha=None)
     with pytest.raises(ContinuationStateError):
         dataclasses.replace(review, review_paths=())
 

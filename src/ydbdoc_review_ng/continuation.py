@@ -409,10 +409,10 @@ class ContinuationState:
             if (
                 self.direction is None
                 or self.scope_sha256 is None
-                or pending
                 or not review
             ):
                 raise _fail()
+            # pending_paths may list soft-publish translator holes to retry first (§5.3).
             # target_sha may be null when RED with zero commits (§4.2).
         else:
             raise _fail()

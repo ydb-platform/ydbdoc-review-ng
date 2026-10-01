@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from contextlib import suppress
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
@@ -23,7 +23,7 @@ from ydbdoc_review_ng.persistence import (
     semantic_stop_error,
 )
 from ydbdoc_review_ng.ports import Clock
-from ydbdoc_review_ng.quality import QualityReviewResult, Verdict
+from ydbdoc_review_ng.quality import CriticResult, Finding, QualityReviewResult, Verdict
 from ydbdoc_review_ng.trace import write_trace
 
 if TYPE_CHECKING:
@@ -450,8 +450,12 @@ class LinearWorkflows:
             )
             if review.final.verdict is Verdict.RED:
                 stage = WorkflowStage.CHECKPOINT
-                # §4.2 / §5.3: still-zero-commit RED keeps target_sha=null (same as translate).
-                checkpoint_sha = None if self._publisher.noop else final_sha
+                # §4.2 / §5.3: noop keeps prior branch SHA; only never-published stays null.
+                checkpoint_sha = (
+                    final_sha
+                    if not getattr(self._publisher, "noop", False)
+                    else snapshot.target_sha
+                )
                 capture = self._content.review_checkpoint(snapshot, review, checkpoint_sha)
                 terminal_handoff = True
                 self._complete_semantic_handoff(
@@ -547,6 +551,36 @@ class LinearWorkflows:
                 published = getattr(getattr(self._publisher, "context", None), "current_head", None)
                 if published is not None:
                     final_sha = published
+            if (
+                getattr(self._publisher, "noop", False)
+                and review.final.verdict is not Verdict.RED
+                and review.accepted_maps is not None
+                and getattr(self._content, "plans", None) is not None
+                and self._content.plans.manifest is not None
+            ):
+                # §4.2: zero commits after required translation → RED report + null checkpoint.
+                import json
+
+                try:
+                    final_paths = sorted(json.loads(review.final_candidate.decode()).keys())
+                except (UnicodeError, json.JSONDecodeError, AttributeError):
+                    final_paths = []
+                marker = final_paths[0] if final_paths else None
+                documents = getattr(self._content, "documents", None) or ()
+                if marker is None and documents:
+                    marker = documents[0].entry.pair.target_path.value
+                if marker is None:
+                    marker = "resource-review"
+                hole = Finding(
+                    False,
+                    "Ни translator, ни critic не создали commit на translation branch.",
+                    "Повторите перевод через /ydbdoc continue или исправьте вручную.",
+                    None,
+                    marker,
+                    None,
+                )
+                red = CriticResult(Verdict.RED, (hole,))
+                review = replace(review, primary=red, final=red)
             stage = WorkflowStage.REPORT
             self._reporter.update_current_pr(
                 mode=mode,
@@ -557,7 +591,12 @@ class LinearWorkflows:
             )
             if review.final.verdict is Verdict.RED and review.accepted_maps is not None:
                 stage = WorkflowStage.CHECKPOINT
-                checkpoint_sha = None if self._publisher.noop else final_sha
+                # §4.2: never-published translate RED keeps null; continue preserves SHA.
+                checkpoint_sha = (
+                    final_sha
+                    if not getattr(self._publisher, "noop", False)
+                    else snapshot.target_sha
+                )
                 capture = self._content.review_checkpoint(snapshot, review, checkpoint_sha)
                 self._complete_semantic_handoff(
                     capture, job_id, request.pr_number, mode, audit_started_at

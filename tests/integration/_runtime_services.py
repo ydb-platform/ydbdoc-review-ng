@@ -161,6 +161,8 @@ class RuntimeServices:
         self.source_comments = []
         self.branch_head = None
         self.pr_exists = False
+        self.jobs = {}
+        self.checkpoints = {}
         self.files = {
             "ydb/docs/ru/core/page.md": b"# Source\n",
             "ydb/docs/en/core/page.md": b"# Old\n",
@@ -190,6 +192,29 @@ class RuntimeServices:
             ]
         if "SUM" in statement:
             return [{"total_cost_rub": Decimal(0)}]
+        if "/jobs`" in statement:
+            if "SELECT" in statement:
+                row = self.jobs.get(parameters["job_id"])
+                return [] if row is None else [row]
+            self.jobs.setdefault(parameters["job_id"], {}).update(parameters)
+            return []
+        if "/continuations`" in statement:
+            if "UPSERT" in statement:
+                self.checkpoints[parameters["continuation_id"]] = dict(parameters)
+            elif "UPDATE" in statement:
+                row = self.checkpoints[parameters["continuation_id"]]
+                if "SET consumed_by_job_id" in statement:
+                    row["consumed_by_job_id"] = parameters["new_consumed_by_job_id"]
+                elif "SET status = 'open'" in statement:
+                    row["status"] = "open"
+                else:
+                    row["status"] = "closed"
+            elif "continuation_id" in parameters:
+                row = self.checkpoints.get(parameters["continuation_id"])
+                return [] if row is None else [row]
+            else:
+                return list(self.checkpoints.values())
+            return []
         return []
 
     def github(self, method, path, payload):

@@ -199,12 +199,15 @@ def replay_continue(
     elif state.stage is ContinuationStage.REVIEW:
         if not set(state.review_paths).issubset(reviewable):
             raise ContinuationStateError()
+        if state.pending_paths and not set(state.pending_paths).issubset(required):
+            raise ContinuationStateError()
         if state.target_sha is None:
             # §4.2 zero-commit RED: no translation branch yet; nothing accepted.
             accepted_documents = ()
         else:
+            load_paths = reviewable - set(state.pending_paths)
             accepted_documents = _load_accepted_from_branch(
-                content, plans, state.target_sha, reviewable
+                content, plans, state.target_sha, load_paths
             )
             loaded = {item.target_path for item in accepted_documents}
             # Soft-published null targets (new missing pages) stay absent on the
@@ -212,7 +215,7 @@ def replay_continue(
             # Assets are restored via fixed_files, not AcceptedDocument.
             document_required = {
                 path for path in required if _document_like_path(content, path)
-            }
+            } - set(state.pending_paths)
             missing = document_required - loaded
             if missing - set(state.review_paths):
                 raise ContinuationStateError()

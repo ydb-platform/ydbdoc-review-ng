@@ -259,7 +259,7 @@ def test_green_review_only_updates_current_verdict_and_consumes_without_commit(c
     assert services.files[EN + "a.md"] == b"# Corrected\n\n```sql\nSELECT 1;\n```\n"
     assert services.rows[saved.continuation_id]["state"] == saved_state
     assert services.commits == services.initial_commits
-    assert services.timeline == ["critic", "arbiter", "report"]
+    assert services.timeline == ["critic", "arbiter", "report", "report"]
     assert services.rows[saved.continuation_id]["status"] == "closed"
     assert services.rows[saved.continuation_id]["consumed_by_job_id"] == result.job_id
     assert services.jobs[result.job_id]["status"] == "succeeded"
@@ -301,6 +301,7 @@ def test_critic_editor_merges_complete_document_and_finishes_green():
         "commit",
         "push",
         "arbiter",
+        "report",
         "report",
     ]
     assert services.files[EN + "a.md"] == green
@@ -559,7 +560,7 @@ def test_byte_identical_selected_repair_reports_existing_sha_without_empty_commi
     assert result.final_commit_sha == saved.target_sha
     assert services.roles == ["critic", "arbiter"]
     assert services.commits == services.initial_commits
-    assert services.timeline == ["critic", "arbiter", "report"]
+    assert services.timeline == ["critic", "arbiter", "report", "report"]
     assert services.rows[saved.continuation_id]["status"] == "closed"
 
 
@@ -605,7 +606,7 @@ def test_head_change_during_comment_write_fails_without_consuming_checkpoint(
     failed = list(services.jobs.values())[-1]
     assert failed["status"] == "failed" and failed["error"] == "report_failed"
     expected = ["critic", "arbiter"]
-    assert services.roles == expected and services.timeline == [*expected, "report"]
+    assert services.roles == expected and services.timeline == [*expected, "report", "report"]
     assert services.branch_head == new_head
     assert set(services.rows) == {saved.continuation_id}
     assert services.rows[saved.continuation_id]["status"] == "open"

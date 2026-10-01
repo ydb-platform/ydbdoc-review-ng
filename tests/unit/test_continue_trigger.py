@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 
 import pytest
 
@@ -134,15 +135,17 @@ def test_unrelated_labels_do_not_choose_the_boundary():
 
 
 @pytest.mark.parametrize("page", ["events", "comments"])
-def test_incomplete_github_page_is_rejected_without_pagination(page, monkeypatch):
+def test_github_http_follows_link_next_pages(page, monkeypatch):
+    """§1.1 / §5.3: inventory and continue admission must consume every page."""
     from ydbdoc_review_ng.runtime_continue import select_continue_trigger
     from ydbdoc_review_ng.runtime_github import GitHubHTTP
 
-    calls = []
+    calls: list[str] = []
 
     class Response:
-        def __init__(self):
-            self.headers = {"Link": '<https://api.github.com/next>; rel="next"'}
+        def __init__(self, body: object, link: str = "") -> None:
+            self.headers = {"Link": link}
+            self._body = json.dumps(body).encode()
 
         def __enter__(self):
             return self
@@ -151,11 +154,21 @@ def test_incomplete_github_page_is_rejected_without_pagination(page, monkeypatch
             return False
 
         def read(self):
-            raise AssertionError("incomplete page must not be consumed")
+            return self._body
 
     def urlopen(request, timeout):
         calls.append(request.full_url)
-        return Response()
+        if "page=2" in request.full_url:
+            if page == "events":
+                return Response([])
+            return Response([])
+        link = (
+            f'<https://api.github.com/repos/ydb-platform/ydb/issues/42/{page}'
+            f'?per_page=100&page=2>; rel="next"'
+        )
+        if page == "events":
+            return Response([event()], link)
+        return Response([comment()], link)
 
     monkeypatch.setattr("urllib.request.urlopen", urlopen)
     http = GitHubHTTP("test-token", "test-token")
@@ -163,8 +176,10 @@ def test_incomplete_github_page_is_rejected_without_pagination(page, monkeypatch
     def transport(method, path, payload):
         if page == "comments" and "/events?" in path:
             return [event()]
+        if page == "events" and "/comments?" in path:
+            return [comment()]
         return http(method, path, payload)
 
-    with pytest.raises(RuntimeBoundaryError, match="github_result_exceeds_single_page"):
-        select_continue_trigger(GitHubBackend(transport), 42, frozenset({"writer"}))
-    assert calls == [f"https://api.github.com/repos/ydb-platform/ydb/issues/42/{page}?per_page=100"]
+    result = select_continue_trigger(GitHubBackend(transport), 42, frozenset({"writer"}))
+    assert result.comment_id == 2
+    assert any("page=2" in url for url in calls)
