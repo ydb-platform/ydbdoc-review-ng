@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal
 
+import pytest
+
 from ydbdoc_review_ng.application.workflows import (
     AuthorizedRun,
     ImmutableRunSnapshot,
@@ -14,7 +16,7 @@ from ydbdoc_review_ng.application.workflows import (
 )
 from ydbdoc_review_ng.domain import GitSha, Mode
 from ydbdoc_review_ng.quality import Verdict
-from ydbdoc_review_ng.runtime_github import GitHubBackend
+from ydbdoc_review_ng.runtime_github import GitHubBackend, RuntimeBoundaryError
 
 
 NOW = datetime(2026, 9, 21, 9, tzinfo=UTC)
@@ -76,6 +78,16 @@ def test_remove_label_deletes_trigger_label() -> None:
         "/repos/ydb-platform/ydb/issues/42/labels/doc_translate",
         None,
     ) in ((method, path, payload) for method, path, payload in transport.calls)
+
+
+def test_remove_label_surfaces_mutation_transport_failure() -> None:
+    """§5.3: label mutation 403/5xx/network must terminate, not be swallowed."""
+
+    def unavailable(method: str, path: str, payload: object) -> object:
+        raise RuntimeBoundaryError("github_request_failed")
+
+    with pytest.raises(RuntimeBoundaryError, match="github_request_failed"):
+        GitHubBackend(unavailable).remove_label(42, "doc_translate")
 
 
 class FakeClock:

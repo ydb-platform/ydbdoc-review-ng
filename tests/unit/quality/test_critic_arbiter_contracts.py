@@ -106,3 +106,58 @@ def test_zero_text_pairs_still_invoke_critic_and_arbiter() -> None:
     assert [call.role for call in models.calls] == [ModelRole.CRITIC, ModelRole.ARBITER]
     assert corrected == {}
     assert final.verdict is Verdict.GREEN
+
+
+def test_critic_non_final_marks_chunk_unreviewed_red() -> None:
+    """REQUIREMENTS §4: critic NON_FINAL → unreviewed → RED, not arbiter GREEN."""
+    source = {"docs/ru/a.md": b"# A\n"}
+    translated = {"docs/en/a.md": b"# Draft\n"}
+    models = _Scripted(
+        [
+            ModelCallResult(None, AttemptError.NON_FINAL, ()),
+            ModelCallResult(None, AttemptError.NON_FINAL, ()),
+        ]
+    )
+
+    corrected, final = review_pr(
+        models,
+        critic_model="critic",
+        arbiter_model="arbiter",
+        source_files=source,
+        translated_files=translated,
+        glossary_files={},
+        validate_files=lambda files: None,
+    )
+
+    assert [call.role for call in models.calls] == [ModelRole.CRITIC, ModelRole.CRITIC]
+    assert corrected == translated
+    assert final.verdict is Verdict.RED
+    assert final.findings
+    assert final.findings[0].target_path == "docs/en/a.md"
+
+
+def test_arbiter_non_final_produces_unreviewed_red_report() -> None:
+    """REQUIREMENTS §4: arbiter NON_FINAL → RED with unreviewed finding, not abort."""
+    source = {"docs/ru/a.md": b"# A\n"}
+    translated = {"docs/en/a.md": b"# Draft\n"}
+    models = _Scripted(
+        [
+            json.dumps({"files": {"docs/en/a.md": "# Draft\n"}}),
+            ModelCallResult(None, AttemptError.NON_FINAL, ()),
+        ]
+    )
+
+    corrected, final = review_pr(
+        models,
+        critic_model="critic",
+        arbiter_model="arbiter",
+        source_files=source,
+        translated_files=translated,
+        glossary_files={},
+        validate_files=lambda files: None,
+    )
+
+    assert [call.role for call in models.calls] == [ModelRole.CRITIC, ModelRole.ARBITER]
+    assert final.verdict is Verdict.RED
+    assert final.findings
+    assert final.findings[0].target_path == "docs/en/a.md"

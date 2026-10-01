@@ -495,17 +495,18 @@ def test_provider_non_final_translation_is_rejected_before_publication():
 
     services = NonFinalServices(names=("a",))
 
-    with pytest.raises(WorkflowError):
-        services.translate()
+    result = services.translate()
 
     attempts = [row for row in services.audit if "attempt_id" in row]
-    # Soft-publish (§5.1): translator NON_FINAL becomes a null path and the job
-    # still reaches critic/arbiter. Critic NON_FINAL likewise retries then fails.
+    # Soft-publish (§5.1): translator NON_FINAL becomes a null path.
+    # Critic NON_FINAL (§4) marks the chunk unreviewed → RED + checkpoint.
+    assert result.verdict is Verdict.RED
     assert "translate" in services.roles
     assert "critic" in services.roles
     translate_attempts = [row for row in attempts if row["role"] == "translate"]
     assert translate_attempts and all(row["error"] == "non_final" for row in translate_attempts)
     assert services.commits == 0 and services.blobs == {} and services.tree == []
+    assert any(row["status"] == "open" for row in services.rows.values())
 
 
 def test_red_pure_rename_replays_whole_counterpart_as_a_complete_document():
@@ -644,16 +645,21 @@ def test_review_path_cannot_name_a_selected_delete_operation():
         replay_continue(content, corrupted)
 
 
-def test_red_without_a_published_current_verdict_never_opens_checkpoint():
+def test_red_without_commits_opens_source_report_and_null_checkpoint():
+    """REQUIREMENTS §4.2: zero-commit RED still reports and opens target_sha=null."""
     services = CaptureServices(names=("a",), stop="rename_red")
     services.branch_head = services.translated
     services.snapshots[services.translated] = dict(services.files)
     for files in [services.files, *services.snapshots.values()]:
         files["ydb/docs/en/core/a.md"] = b"# Translated\n"
-    with pytest.raises(WorkflowError):
-        services.translate()
-    assert services.comments == []
-    assert services.rows == {}
+    result = services.translate()
+    assert result.verdict is Verdict.RED
+    assert any(
+        "RED" in comment["body"] or "🔴" in comment["body"] for comment in services.comments
+    )
+    open_rows = [row for row in services.rows.values() if row["status"] == "open"]
+    assert open_rows
+    assert open_rows[0]["target_sha"] is None
 
 
 @pytest.mark.parametrize(
@@ -668,7 +674,6 @@ def test_red_without_a_published_current_verdict_never_opens_checkpoint():
         "publish",
         "report",
         "head",
-        "candidate",
         "checkpoint",
         "terminal",
     ],

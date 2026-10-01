@@ -42,6 +42,26 @@ def test_deleted_group_matches_target_peer_by_nested_hrefs() -> None:
     assert _items(result.content) == [{"name": "Keep EN", "href": "keep.md"}]
 
 
+def test_deleted_group_preserves_unrelated_target_only_child() -> None:
+    """§3.1: overlap delete must not drop target-only siblings inside the group."""
+    before = (
+        b"items:\n- name: Source group\n  items:\n  - name: A\n    href: a.md\n"
+        b"- name: Keep\n  href: keep.md\n"
+    )
+    after = b"items:\n- name: Keep\n  href: keep.md\n"
+    target = (
+        b"items:\n- name: Target group\n  items:\n"
+        b"  - name: A EN\n    href: a.md\n"
+        b"  - name: Target only\n    href: target-only.md\n"
+        b"- name: Keep EN\n  href: keep.md\n"
+    )
+    result = apply_toc_delta(before, after, target, toc_path=TOC)
+    items = _items(result.content)
+    assert {"name": "Keep EN", "href": "keep.md"} in items
+    group = next(item for item in items if isinstance(item, dict) and item.get("name") == "Target group")
+    assert group["items"] == [{"name": "Target only", "href": "target-only.md"}]
+
+
 def test_removed_source_condition_is_cleared_on_target() -> None:
     """§3.1: non-visible keys deleted in source are deleted on the matched target."""
     before = b"items:\n- name: A\n  href: a.md\n  when: old\n"
@@ -62,7 +82,8 @@ def test_new_target_toc_prunes_unchanged_nested_siblings() -> None:
     assert _items(result.content) == [
         {"name": "Parent", "items": [{"name": "New", "href": "new.md"}]}
     ]
-    assert {item.text for item in result.string_changes} == {"New"}
+    # Ancestor scaffolding first appears in the target locale and needs a string ID.
+    assert {item.text for item in result.string_changes} == {"Parent", "New"}
     assert any(item.string_id.endswith("/name") and item.text == "New" for item in result.string_changes)
 
 

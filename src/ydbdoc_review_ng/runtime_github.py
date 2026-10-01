@@ -149,7 +149,11 @@ class GitHubHTTP:
                         # Do not silently publish a truncated scope or duplicate a comment.
                         if 'rel="next"' in response.headers.get("Link", ""):
                             raise RuntimeBoundaryError("github_result_exceeds_single_page")
-                        return json.loads(response.read())
+                        body = response.read()
+                        # GitHub DELETE often returns 204 No Content with an empty body.
+                        if not body:
+                            return None
+                        return json.loads(body)
                 except urllib.error.HTTPError as error:
                     if error.code == 404 and method in {"GET", "DELETE"}:
                         return None
@@ -291,13 +295,13 @@ class GitHubBackend:
         self.request("DELETE", "/git/refs/heads/" + urllib.parse.quote(branch, safe="/"))
 
     def remove_label(self, pr_number: int, label: str) -> None:
-        """Drop an accepted trigger label. Missing labels are a successful no-op (§0)."""
+        """Drop an accepted trigger label. Missing labels are a successful no-op (§0).
+
+        Transport already maps DELETE 404 → None. Other mutation failures (403/5xx/
+        network) must terminate the job (§5.3): do not swallow them.
+        """
         encoded = urllib.parse.quote(label, safe="")
-        try:
-            self.request("DELETE", f"/issues/{pr_number}/labels/{encoded}")
-        except RuntimeBoundaryError:
-            # Label already absent or race with another unlabel — admission already passed.
-            return
+        self.request("DELETE", f"/issues/{pr_number}/labels/{encoded}")
 
     def commit(self, context: PublicationContext, plan: PublicationPlan, /) -> GitSha:
         if plan.metadata:

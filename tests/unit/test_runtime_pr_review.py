@@ -229,14 +229,14 @@ def test_invalid_second_file_retries_then_passes_draft_to_arbiter(has_document_p
     content, candidate = review_fixture()
     if not has_document_plans:
         content.documents = ()
-    invalid_files = {
+    # Missing required path is a hard contract failure (not a soft §2 diagnostic).
+    incomplete_files = {
         EN + "a.md": "# BlobDepot\n\nUse `BlobDepot`.\n",
-        EN + "b.md": "# BlobDepot\n\nUse `WrongCode`.\n",
     }
     models = FifoModels(
         [
-            json.dumps({"files": invalid_files}),
-            json.dumps({"files": invalid_files}),
+            json.dumps({"files": incomplete_files}),
+            json.dumps({"files": incomplete_files}),
             json.dumps({"verdict": "GREEN", "findings": []}),
         ]
     )

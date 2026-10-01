@@ -6,7 +6,7 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import Protocol
 
 from ydbdoc_review_ng.domain import RepoPath
-from ydbdoc_review_ng.models import ModelCallResult, ModelRequest
+from ydbdoc_review_ng.models import AttemptError, ModelCallResult, ModelRequest
 from ydbdoc_review_ng.parser.markdown import build_markdown_plan
 from ydbdoc_review_ng.plan import ProtectedKind, SourcePlan, fields_of
 from ydbdoc_review_ng.quality.critic import (
@@ -92,7 +92,7 @@ def _pack_pair_chunks(
 ) -> tuple[tuple[tuple[str, str], ...], ...]:
     """Greedy whole-pair packing. Oversized single pairs are omitted (unreviewed)."""
     if not pairs:
-        return ((),)
+        return ()
     if fits(build_request(pairs)):
         return (tuple(pairs),)
     chunks: list[tuple[tuple[str, str], ...]] = []
@@ -205,7 +205,6 @@ def review_pr(
                 except Exception:
                     if attempt == 2:
                         # After one retry, files go to arbiter as-is (§4.1).
-                        response = None
                         break
                     continue
                 corrected.update(chunk_corrected)
@@ -213,9 +212,11 @@ def review_pr(
                     on_successful_critic_chunk(chunk_corrected)
                 break
             if attempt == 2:
-                # Provider failure after retry: keep draft bytes for arbiter.
-                response = None
-        # Critic failure itself does not mark unreviewed / force RED.
+                # §4: NON_FINAL marks the chunk unreviewed → RED. Ordinary provider
+                # failure keeps draft bytes for arbiter and is not itself RED.
+                if response.failure is AttemptError.NON_FINAL:
+                    unreviewed.update(target_paths)
+                break
 
     arbiter_targets: dict[str, bytes | None] = {
         path: corrected.get(path, translated_files.get(path)) for path in translated_files
@@ -250,6 +251,10 @@ def review_pr(
         response = executor.invoke(arbiter)
         chunk_files = {target: arbiter_targets[target] for _source, target in chunk_pairs}
         if not response.success or response.text is None:
+            # §4: NON_FINAL → unreviewed RED with report, never a bare abort.
+            if response.failure is AttemptError.NON_FINAL:
+                unreviewed.update(target for _source, target in chunk_pairs)
+                continue
             if len(arbiter_chunks) <= 1 and not unreviewed:
                 raise QualityExecutionError("arbiter")
             unreviewed.update(target for _source, target in chunk_pairs)

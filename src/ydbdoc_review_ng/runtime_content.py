@@ -719,6 +719,28 @@ class RuntimeContent:
                 "action": action,
                 "source_path": item.change.path.value,
             }
+        # §4.1: auto-copied missing binary dependencies also belong in the manifest.
+        for path, value in candidate_files.items():
+            if value is None or path in binary_manifest:
+                continue
+            if posixpath.splitext(path)[1].lower() not in {
+                ".svg",
+                ".png",
+                ".jpg",
+                ".jpeg",
+                ".gif",
+                ".webp",
+                ".avif",
+                ".ico",
+                ".pdf",
+            }:
+                continue
+            source_peer = (
+                path.replace("/docs/en/", "/docs/ru/", 1)
+                if "/docs/en/" in path
+                else path.replace("/docs/ru/", "/docs/en/", 1)
+            )
+            binary_manifest[path] = {"action": "copy", "source_path": source_peer}
 
         glossary_files: dict[str, bytes] = {}
         for root, snapshot in (
@@ -1152,7 +1174,7 @@ class RuntimeContent:
                 content = draft.content
                 if (
                     translate
-                    and preparation.snapshot.mode is not Mode.DOC_CONTINUE
+                    and not review_documents
                     and content is not None
                     and draft.string_changes
                 ):
@@ -1433,7 +1455,22 @@ class RuntimeContent:
             if plans is None:
                 raise RuntimeBoundaryError("continue_review_plans_missing")
             if checkpoint.state.target_sha is None:
-                raise RuntimeBoundaryError("continue_review_target_missing")
+                # §4.2 zero-commit RED: re-translate unresolved paths, then full review.
+                by_path = {
+                    doc.entry.pair.target_path: doc
+                    for doc in plans.documents
+                    if doc.entry.operation is not FileOperation.RENAME_TARGET
+                }
+                documents = tuple(
+                    by_path[path]
+                    for path in checkpoint.state.review_paths
+                    if path in by_path
+                )
+                if not documents:
+                    documents = tuple(by_path[path] for path in sorted(by_path, key=lambda p: p.value))
+                return self._translate_documents(
+                    plans, documents, (), (), operator_context
+                )
             # Source reconstruction is checked before reading the exact published
             # candidate. Target branch owns accepted document bytes in v3.
             if self.source.github.head(checkpoint.translation_branch) != checkpoint.target_sha:
@@ -1723,6 +1760,29 @@ class RuntimeContent:
                     continue
                 try:
                     validate_chunk_response(chunk, prepared.placeholders, response)
+                except DocumentTranslationError as error:
+                    structure_code = str(error)
+                    if "structure_mismatch" not in structure_code:
+                        write_trace(
+                            "translation",
+                            "chunk_validation",
+                            "retry" if attempt == 1 else "fail",
+                            article=entry.pair.target_path.value,
+                            chunk_index=chunk_index,
+                            chunks_total=len(prepared.chunks),
+                            attempt=attempt,
+                            code=structure_code,
+                        )
+                        if attempt == 2:
+                            return None, None, True
+                        note = structure_code
+                        previous_response = result.text
+                        continue
+                    structure_ok = False
+                else:
+                    structure_ok = True
+                    structure_code = ""
+                try:
                     validate_translated_prose(
                         chunk,
                         response,
@@ -1731,20 +1791,6 @@ class RuntimeContent:
                     )
                 except DocumentTranslationError as error:
                     code = str(error)
-                    # REQUIREMENTS §2: assembled UTF-8 always publishes.
-                    # Markdown/YFM/table/protected diagnostics do not block (#6).
-                    if "structure_mismatch" in code:
-                        write_trace(
-                            "translation",
-                            "chunk_validation",
-                            "ok",
-                            article=entry.pair.target_path.value,
-                            chunk_index=chunk_index,
-                            chunks_total=len(prepared.chunks),
-                            attempt=attempt,
-                            code=code,
-                        )
-                        return response, None, False
                     # §2.2: one source-echo correction; residual echo still publishes.
                     if code == "document_response:untranslated_source_prose":
                         write_trace(
@@ -1780,8 +1826,21 @@ class RuntimeContent:
                         return None, None, True
                     note = code
                     previous_response = result.text
-                else:
-                    return response, None, False
+                    continue
+                if not structure_ok:
+                    # REQUIREMENTS §2: assembled UTF-8 always publishes.
+                    # Markdown/YFM/table/protected diagnostics do not block (#6).
+                    write_trace(
+                        "translation",
+                        "chunk_validation",
+                        "ok",
+                        article=entry.pair.target_path.value,
+                        chunk_index=chunk_index,
+                        chunks_total=len(prepared.chunks),
+                        attempt=attempt,
+                        code=structure_code,
+                    )
+                return response, None, False
             raise AssertionError("translation technical attempt bound exhausted")
 
         if not any(block.fields for block in document.plan.blocks):
@@ -2131,16 +2190,24 @@ class RuntimeContent:
             if target is None:
                 # Soft-publish leaves failed translator targets as null for critic.
                 continue
-            target_plan = build_markdown_plan(
-                document.plan.source_snapshot, document.entry.pair.target_path, target
-            )
-            verify_document_candidate_with_links(
-                document.source,
-                document.plan,
-                target,
-                target_plan,
-                self._link_resolver(document, target),
-            )
+            try:
+                target_plan = build_markdown_plan(
+                    document.plan.source_snapshot, document.entry.pair.target_path, target
+                )
+                verify_document_candidate_with_links(
+                    document.source,
+                    document.plan,
+                    target,
+                    target_plan,
+                    self._link_resolver(document, target),
+                )
+            except DocumentTranslationError as error:
+                # §2 / §7: assembled UTF-8 always publishes; structure is diagnostic.
+                if "structure_mismatch" not in str(error):
+                    raise
+            except (ValueError, TypeError, UnicodeError):
+                # Parser/YFM diagnostics must not block soft-publish.
+                pass
         if self.plans is None:
             raise RuntimeBoundaryError("translation_plan_missing")
         for name, expected in self.plans.fixed_files:
@@ -2291,6 +2358,10 @@ class RuntimeContent:
                         target_plan,
                         self._link_resolver(document, translated_files.get(name)),
                     )
+                except DocumentTranslationError as error:
+                    # §2 / §4.1: critic UTF-8 corrections still publish with diagnostics.
+                    if "structure_mismatch" not in str(error):
+                        raise QualityInputError("invalid_corrected_markdown") from error
                 except (ValueError, TypeError) as error:
                     raise QualityInputError("invalid_corrected_markdown") from error
                 try:
@@ -2403,6 +2474,9 @@ class RuntimeContent:
                 plans.preparation.snapshots.source_snapshot.repository, target_sha
             )
             for path, content in unpack(review.final_candidate).items():
+                # Pending/unreviewed null means "not assembled", not a Git deletion (§5.1).
+                if content is None:
+                    continue
                 if self.source.github.read_bytes(published, RepoPath(path)) != content:
                     raise RuntimeBoundaryError("review_checkpoint_candidate_mismatch")
         unresolved = {RepoPath(item.target_path) for item in review.final.findings}

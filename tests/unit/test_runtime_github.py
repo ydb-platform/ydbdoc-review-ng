@@ -188,6 +188,31 @@ def test_github_http_rejects_the_missing_credential_for_the_method(
         GitHubHTTP(read_token, mutation_token)(method, path, None)
 
 
+def test_github_http_accepts_empty_204_delete_body(monkeypatch) -> None:
+    """§5.1: successful GitHub DELETE 204 No Content must not fail JSON parse."""
+
+    class EmptyResponse:
+        headers: dict[str, str] = {}
+        status = 204
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self) -> bytes:
+            return b""
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda *args, **kwargs: EmptyResponse())
+    assert (
+        GitHubHTTP("fake", "fake")(
+            "DELETE", "/repos/ydb-platform/ydb/git/refs/heads/translation/pr-42", None
+        )
+        is None
+    )
+
+
 def test_failed_authenticated_read_is_not_retried_without_credentials(monkeypatch) -> None:
     authorizations = []
 

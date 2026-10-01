@@ -56,11 +56,28 @@ vs `REQUIREMENTS_RU.md`. Fix only contract violations; skip invented requirement
 | 24 | direction_undetermined → `/ydbdoc continue` | **fixed** (`14d01dd`) |
 | 25 | Strip SHA/internal codes from public comments | **fixed** (`14d01dd`) |
 
+## Second external review residuals (ba0acf2, 2026-10-01)
+
+| # | Residual | Status | Notes |
+|---|---|---|---|
+| 1 | Partial translator success + RED null checkpoint mismatch | **fixed** | Skip null pending equality vs remote bytes |
+| 2 | Critic/arbiter NON_FINAL → GREEN / bare abort | **fixed** | NON_FINAL → unreviewed RED with findings |
+| 3 | Structure diagnostics block validate/critic publish | **fixed** | Soft-allow structure_mismatch on validate |
+| 4 | Zero-commit RED checkpoint not continuable | **fixed** | REVIEW + `target_sha=null` re-translates |
+| 5 | Resource path `en/core/core/logo.png` | **fixed** | Locale-root pairing for ASSET/REDIRECTS |
+| 6 | Auto-copied binary deps missing from manifest | **fixed** | Candidate assets added to binary_manifest |
+| 7 | TOC group delete drops target-only child | **fixed** | Prune overlap, keep unrelated descendants |
+| 8 | TOC add existing page / nested ancestor labels | **fixed** | Drop uncovered gate; collect scaffolding strings |
+| 9 | DOC_CONTINUE skips first TOC string translate | **fixed** | Skip only `review_documents` continue |
+| 10 | GitHub DELETE 204 empty body as error | **fixed** | Accept empty successful response body |
+| 11 | Source echo requires full maximal run | **fixed** | ≥32 Cyrillic fragment detection |
+| 12 | Label removal swallows 403/5xx/network | **fixed** | Mutation failures terminate |
+
 ## Известные расхождения в коде
 
 - Complete-pair Git heuristic removed; both-locale edits stay in translate scope.
 - Resource/TOC-only PRs select with empty Markdown inventories and `COPY_TARGET`.
 - New `doc_translate` deletes `translation/pr-{n}` and closes checkpoints; labels removed.
 - `doc_verify` GREEN/YELLOW closes prior RED checkpoint.
-- TOC scope hash ignores volatile `expected_sha256` wording; continue skips TOC string retranslate.
+- TOC scope hash ignores volatile `expected_sha256` wording; review-stage continue skips TOC string retranslate.
 - Offline suite mostly green; **live PR / production `doc_translate` still pending**.

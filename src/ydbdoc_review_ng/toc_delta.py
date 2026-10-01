@@ -174,6 +174,22 @@ def _collect_string_changes(
         out.append(TocStringChange(f"{path_prefix}/{field}", after_value, field))
 
 
+def _collect_new_target_strings(
+    entry: Mapping[str, Any],
+    path_prefix: str,
+    out: list[TocStringChange],
+) -> None:
+    """Collect visible labels for scaffolding that appears for the first time in target."""
+    for field in _VISIBLE:
+        value = entry.get(field)
+        if type(value) is not str or not value.strip():
+            continue
+        string_id = f"{path_prefix}/{field}"
+        if any(item.string_id == string_id for item in out):
+            continue
+        out.append(TocStringChange(string_id, value, field))
+
+
 def _subtree_keys(entry: Mapping[str, Any]) -> frozenset[str]:
     keys: set[str] = set()
     href = entry.get("href")
@@ -187,6 +203,32 @@ def _subtree_keys(entry: Mapping[str, Any]) -> frozenset[str]:
         for child in children:
             keys |= _subtree_keys(_mapping(child))
     return frozenset(keys)
+
+
+def _prune_deleted_descendants(
+    entry: Mapping[str, Any], deleted_keys: frozenset[str], /
+) -> dict[str, Any] | None:
+    """Drop descendants covered by a source deletion; keep target-only siblings (§3.1)."""
+    node = dict(entry)
+    children = entry.get("items")
+    if type(children) is not list:
+        return None if _subtree_keys(entry) <= deleted_keys else dict(entry)
+    kept: list[Any] = []
+    for child in children:
+        child_entry = _mapping(child)
+        child_keys = _subtree_keys(child_entry)
+        if child_keys and child_keys <= deleted_keys:
+            continue
+        if child_keys & deleted_keys:
+            pruned = _prune_deleted_descendants(child_entry, deleted_keys)
+            if pruned is not None:
+                kept.append(pruned)
+        else:
+            kept.append(child)
+    if not kept:
+        return None
+    node["items"] = kept
+    return node
 
 
 def _find_target_entry(
@@ -290,7 +332,11 @@ def _apply_items(
                 continue
             overlap = _subtree_keys(entry) & deleted_keys
             if overlap and not (deleted_keys & after_subtree):
-                working[index] = None
+                # Preserve unrelated target-only descendants inside a matched group.
+                if _subtree_keys(entry) <= deleted_keys:
+                    working[index] = None
+                else:
+                    working[index] = _prune_deleted_descendants(entry, deleted_keys)
                 break
 
     # Apply after entries: updates, renames, and additions.
@@ -559,7 +605,10 @@ def _prune_new_target_items(
         if before_entry is not None and before_entry == after_entry and before_key == key:
             continue
         prefix = f"{path_prefix}/{position}"
-        _collect_string_changes(before_entry, after_entry, prefix, strings)
+        # New target TOC materializes ancestor scaffolding for the first time in
+        # the target locale: every visible string in the pruned tree needs an ID
+        # even when unchanged in the source PR (§3.3 / §3.4).
+        _collect_new_target_strings(after_entry, prefix, strings)
         node = _copy_structure(after_entry)
         assert type(node) is dict
         for field in _VISIBLE:

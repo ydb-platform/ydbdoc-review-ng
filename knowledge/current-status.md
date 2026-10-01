@@ -15,8 +15,8 @@
 
 ## Код
 
-Срезы 1–10 закрыты на local `main`. Offline non-live suite ранее: **2222 passed**.
-
-Neural review triage: P0 + D-modes + E (TOC/continue/echo) + P2 закрыты на `main`.
-Rename+RED continue xfail снят (publish re-validate из `7cdf352`). Остаётся live
-`doc_translate` gate. См. `debt-map.md`.
+Срезы 1–10 закрыты на `main`. Second external review residuals 1–12 (ba0acf2)
+закрыты: NON_FINAL→RED, soft structure publish, null-checkpoint continue, resource
+locale pairing, binary dependency manifest, TOC group-delete/ancestor/uncovered,
+direction-continue TOC strings, GitHub 204, source-echo fragments, label mutation
+terminal. См. `debt-map.md`. Остаётся live `doc_translate` gate.

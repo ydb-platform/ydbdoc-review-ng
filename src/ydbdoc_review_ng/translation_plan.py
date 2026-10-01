@@ -402,7 +402,10 @@ def mirror_classified_files(
         if current.locale != source_locale or current.relative is None:
             mirrored.append(ClassifiedFile(change, "none", None))
             continue
-        target = RepoPath(target_root.value + "/" + current.relative)
+        if current.kind in {PathKind.ASSET, PathKind.REDIRECTS, PathKind.LOCALIZED_OTHER}:
+            target = RepoPath(_locale_root(target_root).value + "/" + current.relative)
+        else:
+            target = RepoPath(target_root.value + "/" + current.relative)
         previous_target = None
         if current.kind is PathKind.MARKDOWN and change.previous_path is not None:
             previous_target = paired_markdown_path(roots, change.previous_path)
@@ -521,19 +524,9 @@ def build_translation_plan(
                 raise TranslationPlanError("translation_plan_toc_delta_unsupported")
             if change.status == "modified" and before is None:
                 raise TranslationPlanError("translation_plan_toc_delta_unsupported")
-            additions = _planned_toc_additions(change.path, before, after)
-            planned_sources = {
-                entry.pair.source_path
-                for entry in manifest.entries
-                if entry.operation
-                in {
-                    FileOperation.TRANSLATE,
-                    FileOperation.RENAME_TARGET,
-                    FileOperation.RENAME_TARGET_AND_TRANSLATE,
-                }
-            }
-            if not set(additions).issubset(planned_sources):
-                raise TranslationPlanError("translation_plan_toc_delta_uncovered")
+            # Validate the delta is representable. §3.5: links to missing or
+            # already-existing target pages are diagnostics, not a plan gate.
+            _planned_toc_additions(change.path, before, after)
             item = PlannedInput(
                 change,
                 current.kind,
@@ -546,7 +539,10 @@ def build_translation_plan(
             )
         elif current.kind in {PathKind.ASSET, PathKind.REDIRECTS, PathKind.LOCALIZED_OTHER}:
             # §1.2: locale resources are deterministic copy/delete/rename.
-            target = _paired(target_root, current.relative)
+            # Asset/redirect relatives are locale-root-relative (incl. "core/…"),
+            # not core-root-relative like Markdown/TOC.
+            locale_target_root = _locale_root(target_root)
+            target = _paired(locale_target_root, current.relative)
             if change.status == "removed":
                 item = PlannedInput(
                     change, current.kind, PlanAction.DELETE_TARGET, target, (target,)
@@ -556,7 +552,7 @@ def build_translation_plan(
                 previous = classify_path(roots, change.previous_path)
                 if previous.relative is None:
                     raise TranslationPlanError("translation_plan_rename_preimage_missing")
-                previous_target = _paired(target_root, previous.relative)
+                previous_target = _paired(locale_target_root, previous.relative)
                 item = PlannedInput(
                     change,
                     current.kind,

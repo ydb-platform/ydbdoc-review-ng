@@ -173,11 +173,17 @@ def replay_continue(
             if {item.target_path for item in accepted_documents} != accepted_paths:
                 raise ContinuationStateError()
     elif state.stage is ContinuationStage.REVIEW:
-        if state.target_sha is None or not set(state.review_paths).issubset(reviewable):
+        if not set(state.review_paths).issubset(reviewable):
             raise ContinuationStateError()
-        accepted_documents = _load_accepted_from_branch(content, plans, state.target_sha, reviewable)
-        if not required.issubset({item.target_path for item in accepted_documents}):
-            raise ContinuationStateError()
+        if state.target_sha is None:
+            # §4.2 zero-commit RED: no translation branch yet; nothing accepted.
+            accepted_documents = ()
+        else:
+            accepted_documents = _load_accepted_from_branch(
+                content, plans, state.target_sha, reviewable
+            )
+            if not required.issubset({item.target_path for item in accepted_documents}):
+                raise ContinuationStateError()
     else:
         raise ContinuationStateError()
     accepted_maps = content.restore_accepted_documents(plans, accepted_documents)

@@ -375,15 +375,15 @@ def test_toc_rename_inside_locale_is_rejected_until_executor_supports_it() -> No
 
 
 @pytest.mark.parametrize(
-    "path,action",
+    "path,action,target",
     [
-        ("ydb/docs/ru/redirects.yaml", PlanAction.COPY_TARGET),
-        ("ydb/docs/ru/core/image.png", PlanAction.COPY_TARGET),
-        ("ydb/docs/ru/core/config.json", PlanAction.COPY_TARGET),
+        ("ydb/docs/ru/redirects.yaml", PlanAction.COPY_TARGET, "ydb/docs/en/redirects.yaml"),
+        ("ydb/docs/ru/core/image.png", PlanAction.COPY_TARGET, "ydb/docs/en/core/image.png"),
+        ("ydb/docs/ru/core/config.json", PlanAction.COPY_TARGET, "ydb/docs/en/core/config.json"),
     ],
 )
 def test_source_localized_resources_are_planned_as_copy_target(
-    path: str, action: PlanAction
+    path: str, action: PlanAction, target: str
 ) -> None:
     """§1.2: locale resources are deterministic copy ops, not unsupported."""
     document = entry("page.md")
@@ -394,6 +394,7 @@ def test_source_localized_resources_are_planned_as_copy_target(
     )
     resource = next(item for item in plan.inputs if item.change.path.value == path)
     assert resource.action is action
+    assert resource.target_path == RepoPath(target)
 
 
 def test_metadata_only_pr_fails_before_models_instead_of_being_no_translation() -> None:
@@ -481,28 +482,30 @@ def test_pr50839_plan_contains_three_documents_and_its_toc() -> None:
     )
 
 
-def test_toc_delta_rejects_an_unplanned_second_entry_even_when_target_file_exists() -> None:
+def test_toc_delta_allows_link_to_existing_page_without_translate_entry() -> None:
+    """§3.5: TOC add of an existing target page is structural, not uncovered."""
     document = entry("manual/page.md")
     source_toc = "manual/toc_i.yaml"
-    with pytest.raises(TranslationPlanError, match="toc_delta_uncovered"):
-        build_translation_plan(
-            inventory(
-                change(document.pair.source_path.value),
-                change("ydb/docs/ru/core/manual/toc_i.yaml"),
-            ),
-            ROOTS,
-            manifest(document),
-            toc_postconditions=toc_postcondition(
-                source_toc,
-                b"items:\n- name: Page\n  href: page.md\n"
-                b"- name: Forgotten\n  href: forgotten.md\n",
-            ),
-            toc_source_snapshots=toc_source_snapshots(
-                source_toc,
-                ("Page", "page.md"),
-                ("Forgotten", "forgotten.md"),
-            ),
-        )
+    plan = build_translation_plan(
+        inventory(
+            change(document.pair.source_path.value),
+            change("ydb/docs/ru/core/manual/toc_i.yaml"),
+        ),
+        ROOTS,
+        manifest(document),
+        toc_postconditions=toc_postcondition(
+            source_toc,
+            b"items:\n- name: Page\n  href: page.md\n"
+            b"- name: Forgotten\n  href: forgotten.md\n",
+        ),
+        toc_source_snapshots=toc_source_snapshots(
+            source_toc,
+            ("Page", "page.md"),
+            ("Forgotten", "forgotten.md"),
+        ),
+    )
+    toc = next(item for item in plan.inputs if item.action is PlanAction.SYNC_TOC)
+    assert toc.target_path == RepoPath("ydb/docs/en/core/manual/toc_i.yaml")
 
 
 @pytest.mark.parametrize(
