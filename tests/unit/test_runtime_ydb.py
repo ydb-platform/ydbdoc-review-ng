@@ -170,7 +170,8 @@ def test_create_runtime_composes_distinct_github_read_and_mutation_credentials(m
     runtime.shutdown()
 
 
-def test_create_runtime_runs_diplodoc_after_candidate_validation(monkeypatch, tmp_path) -> None:
+def test_create_runtime_validates_candidate_without_diplodoc(monkeypatch, tmp_path) -> None:
+    import ydbdoc_review_ng.diplodoc as diplodoc_module
     import ydbdoc_review_ng.runtime as runtime_module
     import ydbdoc_review_ng.runtime_content as content_module
 
@@ -180,15 +181,8 @@ def test_create_runtime_runs_diplodoc_after_candidate_validation(monkeypatch, tm
     def validate_content(self, snapshot, candidate, plan):
         events.append("candidate")
 
-    class FakeDiplodoc:
-        def __init__(self, docs_root):
-            assert docs_root == tmp_path / "ydb/docs"
-
-        def validate_baseline(self):
-            events.append("baseline")
-
-        def __call__(self, plan):
-            events.append("diplodoc")
+    def forbidden_build(*args, **kwargs):
+        raise AssertionError("semantic runtime accessed the Diplodoc builder")
 
     def make_publisher(github, build_plan, validate_plan):
         captured["validate_plan"] = validate_plan
@@ -196,7 +190,8 @@ def test_create_runtime_runs_diplodoc_after_candidate_validation(monkeypatch, tm
 
     executor = SimpleNamespace(execute=lambda statement, parameters: [], close=lambda: None)
     monkeypatch.setattr(content_module.RuntimeContent, "validate_plan", validate_content)
-    monkeypatch.setattr(runtime_module, "DiplodocBuildValidator", FakeDiplodoc)
+    for name in ("__init__", "validate_baseline", "__call__"):
+        monkeypatch.setattr(diplodoc_module.DiplodocBuildValidator, name, forbidden_build)
     monkeypatch.setattr(runtime_module, "GitPublicationAdapter", make_publisher)
 
     runtime = runtime_module.create_runtime(
@@ -205,5 +200,5 @@ def test_create_runtime_runs_diplodoc_after_candidate_validation(monkeypatch, tm
     )
     captured["validate_plan"](object(), object(), object())
 
-    assert events == ["candidate", "diplodoc"]
+    assert events == ["candidate"]
     runtime.shutdown()

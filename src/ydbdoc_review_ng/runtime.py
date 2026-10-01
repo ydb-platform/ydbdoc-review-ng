@@ -11,7 +11,6 @@ import re
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from decimal import Decimal
-from pathlib import Path
 from typing import cast
 
 from ydbdoc_review_ng.application import (
@@ -21,11 +20,9 @@ from ydbdoc_review_ng.application import (
     LinearWorkflows,
     TranslateWorkflowInput,
     VerifyWorkflowInput,
-    WorkflowCandidate,
     WorkflowResult,
 )
 from ydbdoc_review_ng.continuation import SourceChangeInventory, normalize_source_inventory
-from ydbdoc_review_ng.diplodoc import DiplodocBuildValidator
 from ydbdoc_review_ng.domain import GitSha, Mode, RepositoryId, SnapshotRef
 from ydbdoc_review_ng.models import (
     AttemptResult,
@@ -43,7 +40,6 @@ from ydbdoc_review_ng.persistence import ContinuationCheckpoint, YdbExecutor, Yd
 from ydbdoc_review_ng.publication import (
     GitPublicationAdapter,
     PublicationContext,
-    PublicationPlan,
 )
 from ydbdoc_review_ng.quality import QualityReviewResult
 from ydbdoc_review_ng.reporting import ProbableDuplicate, QAReporter, ReportContext
@@ -514,23 +510,8 @@ def create_runtime(
     )
     models = RecordedModels(env, persistence, model_transport or UrllibTransport())
     source = RuntimeSource(env, github)
-    docs_root = env.get("YDBDOC_DOCS_ROOT", "").strip()
-    diplodoc = DiplodocBuildValidator(Path(docs_root)) if docs_root else None
-    content = RuntimeContent(
-        source, models, env,
-        baseline_validator=None if diplodoc is None else diplodoc.validate_baseline,
-    )
-
-    def validate_plan(
-        snapshot: ImmutableRunSnapshot,
-        candidate: WorkflowCandidate,
-        plan: PublicationPlan,
-    ) -> None:
-        content.validate_plan(snapshot, candidate, plan)
-        if diplodoc is not None:
-            diplodoc(plan)
-
-    publisher = GitPublicationAdapter(github, content.publication_plan, validate_plan)
+    content = RuntimeContent(source, models, env)
+    publisher = GitPublicationAdapter(github, content.publication_plan, content.validate_plan)
     content.publisher = publisher
     return Runtime(
         LinearWorkflows(

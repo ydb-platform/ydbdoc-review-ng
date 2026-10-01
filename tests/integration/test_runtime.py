@@ -18,6 +18,104 @@ from _runtime_services import (
 )
 
 
+@pytest.mark.parametrize("mode", ["translate", "verify", "continue"])
+@pytest.mark.parametrize("verdict", ["GREEN", "YELLOW", "RED"])
+@pytest.mark.parametrize("docs_root", ["", "/unavailable/ydb/docs"])
+def test_semantic_modes_publish_without_build_or_ci(monkeypatch, mode, verdict, docs_root):
+    from ydbdoc_review_ng.application import (
+        ContinueWorkflowInput,
+        TranslateWorkflowInput,
+        VerifyWorkflowInput,
+    )
+    from ydbdoc_review_ng.diplodoc import DiplodocBuildValidator
+    from ydbdoc_review_ng.domain import GitSha
+    from ydbdoc_review_ng.runtime import create_runtime
+
+    class Services(InstalledContinueServices):
+        def github(self, method, path, payload):
+            if method == "POST" and path.endswith("/git/commits"):
+                self.translated = f"{int(self.translated, 16) + 1:040x}"
+            return super().github(method, path, payload)
+
+    services = Services()
+    environment = {
+        "GITHUB_ACTOR": "maintainer",
+        "YDBDOC_ALLOWED_ACTORS": "maintainer",
+        "YANDEX_API_KEY": "offline",
+        "YANDEX_FOLDER_ID": "offline",
+    }
+    finding = {
+        "repairable": False,
+        "reason": "Residual meaning issue.",
+        "expected_correction": "Restore the intended meaning.",
+        "searchable_snippet": "Corrected",
+        "target_path": "ydb/docs/en/core/page.md",
+        "target_line": 1,
+    }
+
+    def runtime():
+        return create_runtime(
+            environment=environment,
+            ydb_executor=services,
+            github_transport=github_without_ci,
+            model_transport=services.model,
+        )
+
+    def github_without_ci(method, path, payload):
+        assert not any(
+            part in path for part in ("/check-runs", "/check-suites", "/status", "/actions/")
+        ), f"semantic workflow read CI state: {path}"
+        return services.github(method, path, payload)
+
+    if mode != "translate":
+        services.branch_head = services.translated
+        services.pr_exists = True
+    if mode == "continue":
+        services.semantic_responses = [
+            {"files": {"ydb/docs/en/core/page.md": "# Corrected\n"}},
+            {"verdict": "RED", "findings": [finding]},
+        ]
+        seed = runtime().doc_verify(
+            VerifyWorkflowInput(43, GitSha(services.source), GitSha(services.translated))
+        )
+        assert seed.verdict.value == "RED"
+        assert any(row["status"] == "open" for row in services.checkpoints.values())
+        services.continuing = True
+
+    def forbidden_build(*args, **kwargs):
+        raise AssertionError("semantic workflow accessed the Diplodoc builder")
+
+    for name in ("__init__", "validate_baseline", "__call__"):
+        monkeypatch.setattr(DiplodocBuildValidator, name, forbidden_build)
+    environment["YDBDOC_DOCS_ROOT"] = docs_root
+    services.events.clear()
+    services.semantic_responses = [
+        {"files": {"ydb/docs/en/core/page.md": "# Corrected final\n"}},
+        {"verdict": verdict, "findings": [] if verdict == "GREEN" else [finding]},
+    ]
+    dispatcher = runtime()
+    if mode == "translate":
+        result = dispatcher.doc_translate(
+            TranslateWorkflowInput(42, GitSha(services.source), Decimal(10))
+        )
+    elif mode == "verify":
+        result = dispatcher.doc_verify(
+            VerifyWorkflowInput(43, GitSha(services.source), GitSha(services.translated))
+        )
+    else:
+        result = dispatcher.doc_continue(ContinueWorkflowInput(43))
+
+    assert result.verdict.value == verdict
+    assert services.files["ydb/docs/en/core/page.md"] == b"# Corrected final\n"
+    assert any(
+        method in {"POST", "PATCH"} and "/git/refs" in path
+        for method, path in services.events
+    )
+    assert len(services.comments) == 1
+    assert verdict in services.comments[0]["body"]
+    assert not services.semantic_responses
+
+
 class WholePRServices(InstalledContinueServices):
     """Pinned HTTP snapshots and a literal two-response semantic script."""
 
@@ -2243,7 +2341,7 @@ def test_runtime_never_reports_green_after_branch_moves_during_critic():
     assert not services.comments
 
 
-def test_broken_trusted_base_stops_before_any_model_call(monkeypatch, tmp_path, capsys):
+def test_broken_build_does_not_block_translation_publication(monkeypatch, tmp_path):
     from ydbdoc_review_ng.cli import main
     from ydbdoc_review_ng.diplodoc import DiplodocBuildError, DiplodocBuildValidator
     from ydbdoc_review_ng.runtime import create_runtime
@@ -2251,11 +2349,12 @@ def test_broken_trusted_base_stops_before_any_model_call(monkeypatch, tmp_path, 
     services = RuntimeServices()
     calls = []
 
-    def reject_baseline(self):
+    def reject_build(self, *args):
         calls.append(self.docs_root)
         raise DiplodocBuildError(("ERR ru/changelog-server.md: unreachable link",))
 
-    monkeypatch.setattr(DiplodocBuildValidator, "validate_baseline", reject_baseline)
+    monkeypatch.setattr(DiplodocBuildValidator, "validate_baseline", reject_build)
+    monkeypatch.setattr(DiplodocBuildValidator, "__call__", reject_build)
     runtime = create_runtime(
         environment={
             "GITHUB_ACTOR": "maintainer",
@@ -2272,11 +2371,9 @@ def test_broken_trusted_base_stops_before_any_model_call(monkeypatch, tmp_path, 
         ["translate", "--pr", "42", "--source-sha", services.source, "--budget-rub", "10"],
         dispatcher=runtime,
     )
-    assert result != 0
-    assert calls == [tmp_path.resolve()]
-    assert not any(event[0] == "MODEL" for event in services.events)
-    assert not any(
-        method in {"POST", "PATCH", "DELETE"} for method, _ in services.events if method != "MODEL"
-    )
-    assert not services.comments
-    assert "trusted_base_build" in capsys.readouterr().err
+    assert result == 0
+    assert calls == []
+    assert services.files["ydb/docs/en/core/page.md"] == b"# Translated\n"
+    assert services.pr_exists
+    assert len(services.comments) == 1
+    assert services.comments[0]["body"].startswith("🟢 GREEN\n")
