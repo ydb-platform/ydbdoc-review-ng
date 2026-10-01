@@ -267,18 +267,31 @@ def _apply_items(
     def _target_identity(entry: Mapping[str, Any]) -> str:
         return _identity(entry)
 
-    # Deletes (and identities renamed away).
+    # Deletes (and identities renamed away). Localized group names match by nested
+    # href/include fingerprint when the visible group title differs (§3.1).
     deleted = {
         key for key in before_index if key not in after_index and key not in renames
     }
+    deleted_entries = [before_index[key] for key in deleted]
+    after_subtree = frozenset().union(
+        *(_subtree_keys(_mapping(item)) for item in after_items)
+    ) if after_items else frozenset()
     for index, entry in enumerate(list(working)):
         assert entry is not None
         key = _target_identity(entry)
         if key in deleted:
             working[index] = None
-        elif key in renames:
-            # Placeholder until rename write; mark consumed via href update below.
-            pass
+            continue
+        if key in renames:
+            continue
+        for deleted_entry in deleted_entries:
+            deleted_keys = _subtree_keys(deleted_entry)
+            if not deleted_keys:
+                continue
+            overlap = _subtree_keys(entry) & deleted_keys
+            if overlap and not (deleted_keys & after_subtree):
+                working[index] = None
+                break
 
     # Apply after entries: updates, renames, and additions.
     consumed_target_indexes: set[int] = set()
@@ -330,6 +343,13 @@ def _apply_items(
                         break
 
         if match_index is None:
+            # Unchanged source peers that the target never had stay absent (§3.1).
+            if (
+                before_entry is not None
+                and before_entry == after_entry
+                and before_key == after_key
+            ):
+                continue
             node = _copy_structure(after_entry)
             assert type(node) is dict
             for field in _VISIBLE:
@@ -384,6 +404,13 @@ def _apply_items(
             if key in _VISIBLE or key == "items":
                 continue
             node[key] = _copy_structure(value)
+        # Drop non-visible keys that the source delta removed (§3.1 conditions).
+        if before_entry is not None:
+            for key in list(node):
+                if key in _VISIBLE or key in {"items", "href", "include"}:
+                    continue
+                if key in before_entry and key not in after_entry:
+                    node.pop(key, None)
         if "href" in after_entry:
             node["href"] = after_entry["href"]
         for field in _VISIBLE:
@@ -488,6 +515,81 @@ def _added_markdown_paths(
     return tuple(sorted(set(paths), key=lambda item: item.value))
 
 
+def _root_visible_changes(
+    before_root: Mapping[str, Any],
+    after_root: Mapping[str, Any],
+    translations: Mapping[str, str],
+    strings: list[TocStringChange],
+) -> dict[str, Any]:
+    """Apply / collect root-level visible string delta (title/name/label)."""
+    updates: dict[str, Any] = {}
+    for field in _VISIBLE:
+        after_value = after_root.get(field)
+        before_value = before_root.get(field)
+        if after_value == before_value:
+            continue
+        if type(after_value) is str and after_value.strip():
+            strings.append(TocStringChange(field, after_value, field))
+            updates[field] = translations.get(field, after_value)
+        elif after_value is None and before_value is not None:
+            updates[field] = None
+        elif after_value is not None:
+            updates[field] = after_value
+    return updates
+
+
+def _prune_new_target_items(
+    before_items: list[Any],
+    after_items: list[Any],
+    *,
+    path_prefix: str,
+    translations: Mapping[str, str],
+    strings: list[TocStringChange],
+) -> list[dict[str, Any]]:
+    """Build a new target TOC from PR-changed entries only (§3.4)."""
+    before_index = _index(list(before_items)) if before_items else {}
+    after_index = _index(list(after_items))
+    renames = _match_rename(before_index, after_index)
+    created: list[dict[str, Any]] = []
+    for position, after_raw in enumerate(after_items):
+        after_entry = _mapping(after_raw)
+        key = _identity(after_entry)
+        before_key = next((b for b, a in renames.items() if a == key), key)
+        before_entry = before_index.get(before_key)
+        if before_entry is not None and before_entry == after_entry and before_key == key:
+            continue
+        prefix = f"{path_prefix}/{position}"
+        _collect_string_changes(before_entry, after_entry, prefix, strings)
+        node = _copy_structure(after_entry)
+        assert type(node) is dict
+        for field in _VISIBLE:
+            string_id = f"{prefix}/{field}"
+            if field in node and string_id in translations:
+                node[field] = translations[string_id]
+        if type(after_entry.get("items")) is list:
+            child_before = (
+                []
+                if before_entry is None or type(before_entry.get("items")) is not list
+                else list(before_entry["items"])
+            )
+            children = _prune_new_target_items(
+                child_before,
+                list(after_entry["items"]),
+                path_prefix=prefix,
+                translations=translations,
+                strings=strings,
+            )
+            if before_entry is not None and type(before_entry.get("items")) is list:
+                if not children:
+                    # Nested PR change produced no new-target children; skip shell.
+                    continue
+                node["items"] = children
+            else:
+                node["items"] = children
+        created.append(node)
+    return created
+
+
 def apply_toc_delta(
     source_before: bytes | None,
     source_after: bytes,
@@ -506,6 +608,10 @@ def apply_toc_delta(
     else:
         before_root = _load_root(source_before)
         before_items = list(before_root.get("items") or [])
+
+    before_root_keys = {key: value for key, value in before_root.items() if key != "items"}
+    after_root_keys = {key: value for key, value in after_root.items() if key != "items"}
+    root_changed = before_root_keys != after_root_keys
 
     if source_before is not None and before_root == after_root:
         raise TocDeltaError()
@@ -526,37 +632,42 @@ def apply_toc_delta(
         for key, after_entry in after_index.items()
         if next((b for b, a in renames.items() if a == key), key) in before_index
     )
-    if not added_keys and not deleted_keys and not renames and not order_changed and not body_changed:
+    if (
+        not added_keys
+        and not deleted_keys
+        and not renames
+        and not order_changed
+        and not body_changed
+        and not root_changed
+    ):
         raise TocDeltaError()
 
     strings: list[TocStringChange] = []
     mapping = {} if translations is None else dict(translations)
     added = _added_markdown_paths(toc_path, before_items, after_items)
+    root_updates = _root_visible_changes(before_root_keys, after_root_keys, mapping, strings)
 
     if target is None:
-        if not added_keys and not renames and not body_changed:
+        if not added_keys and not renames and not body_changed and not root_changed:
             # Deletes only (or empty after) and no target TOC → do not create.
             return TocDeltaResult(None, (), ())
-        created: list[dict[str, Any]] = []
-        for position, after_raw in enumerate(after_items):
-            after_entry = _mapping(after_raw)
-            key = _identity(after_entry)
-            before_key = next((b for b, a in renames.items() if a == key), key)
-            before_entry = before_index.get(before_key)
-            if before_entry is not None and before_entry == after_entry and before_key == key:
-                continue
-            prefix = f"items/{position}"
-            _collect_string_changes(before_entry, after_entry, prefix, strings)
-            node = _copy_structure(after_entry)
-            assert type(node) is dict
-            for field in _VISIBLE:
-                string_id = f"{prefix}/{field}"
-                if field in node and string_id in mapping:
-                    node[field] = mapping[string_id]
-            created.append(node)
-        if not created:
+        created = _prune_new_target_items(
+            before_items,
+            after_items,
+            path_prefix="items",
+            translations=mapping,
+            strings=strings,
+        )
+        if not created and not root_updates:
             return TocDeltaResult(None, (), tuple(strings))
-        return TocDeltaResult(_dump_root({"items": created}), added, tuple(strings))
+        new_root: dict[str, Any] = {"items": created}
+        for key, value in after_root_keys.items():
+            if key in root_updates:
+                if root_updates[key] is not None:
+                    new_root[key] = root_updates[key]
+            elif before_root_keys.get(key) != value:
+                new_root[key] = value
+        return TocDeltaResult(_dump_root(new_root), added, tuple(strings))
 
     target_root = _load_root(target)
     target_items = list(target_root.get("items") or [])
@@ -570,11 +681,19 @@ def apply_toc_delta(
     )
     new_root = dict(target_root)
     new_root["items"] = applied_items
-    before_root_keys = {key: value for key, value in before_root.items() if key != "items"}
-    after_root_keys = {key: value for key, value in after_root.items() if key != "items"}
     for key, value in after_root_keys.items():
-        if before_root_keys.get(key) != value:
+        if key in root_updates:
+            if root_updates[key] is None:
+                new_root.pop(key, None)
+            else:
+                new_root[key] = root_updates[key]
+        elif before_root_keys.get(key) != value:
             new_root[key] = value
+    for key in list(new_root):
+        if key == "items":
+            continue
+        if key in before_root_keys and key not in after_root_keys:
+            new_root.pop(key, None)
     return TocDeltaResult(_dump_root(new_root), added, tuple(strings))
 
 
