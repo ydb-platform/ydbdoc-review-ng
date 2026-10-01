@@ -750,7 +750,9 @@ target `target_line` является положительным integer, а `se
    продолжает обычный pipeline. Для незавершённого перевода вызвать модель только для pending
    документов из `pending_paths`, не переводя заново уже опубликованные файлы.
    Все успешно полученные pending-файлы опубликовать следующим commit в той же
-   translation branch. Для review использовать точный опубликованный translation
+   translation branch. Если одновременно есть непустые `pending_paths` и прежние YELLOW/RED findings,
+   checkpoint остаётся на `stage = translation`: сначала повторяются pending-файлы. Для review
+   использовать точный опубликованный translation
    commit из checkpoint. После этого critic и arbiter заново проверяют всю группу
    перевода, включая ранее опубликованные файлы, а не только `pending_paths` или
    прежние проблемные файлы.
@@ -856,6 +858,10 @@ pagination или event sourcing.
   call ещё требуется;
 - `review_paths`: упорядоченный список проблемных target paths только на stage
   `review`.
+
+Если после arbiter stage одновременно остались незавершённые переводы и YELLOW/RED findings,
+`stage = translation` и непустые `pending_paths` имеют приоритет. `stage = review` сохраняется только когда
+`pending_paths` пуст. После попытки завершить pending-файлы critic и arbiter заново проверяют всю группу.
 
 Scope hash включает direction, операции, source/target paths и content hashes
 source документов. При восстановлении candidate читается только из точного
