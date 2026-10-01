@@ -429,6 +429,10 @@ code по-прежнему защищены. Семантическую неиз
    внутреннем аудите. Если arbiter-чанк остаётся неуспешным после повторной попытки, остальные
    arbiter-чанки всё равно проверяются, общий результат становится RED, а отчёт
    перечисляет непроверенные файлы и прямо сообщает о падении модели.
+   Если translator stage не опубликовал ни одного commit и ни один critic-чанк не завершился
+   успешно, обязательные target-файлы остаются `null`, итоговый результат RED, а пустой translation PR
+   не создаётся. RED-отчёт публикуется в исходном PR, а continuation checkpoint сохраняется для этого
+   source PR с `target_sha = null`.
 9. Замечания арбитра автоматически не исправляются и никуда не передаются.
 10. YELLOW обрабатывается как RED: findings публикуются, checkpoint остаётся
     открытым, пользователю предлагается `/ydbdoc continue`, а job не считается
@@ -689,7 +693,9 @@ target `target_line` является положительным integer, а `se
    непосредственно в отчёт, автоматически
    не исправляются и никуда не передаются. Build/CI не участвуют в verdict.
 9. Обновить translation PR, записать актуальный verdict и terminal
-   job status.
+   job status. Если ни translator stage, ни critic stage не создали ни одного commit,
+   translation PR не создаётся: RED-отчёт публикуется в исходном PR, а continuation
+   checkpoint сохраняется и связывается с этим же PR.
 
 ### 6.2 `doc_verify`
 
@@ -726,6 +732,8 @@ target `target_line` является положительным integer, а `se
    остаются ошибкой. Проверить 14-дневный срок, исходную job, stage, source/base
    SHA и точный head translation branch. Истёкший, закрытый, неоднозначный или
    stale checkpoint не продолжается.
+   Для checkpoint исходного PR с `target_sha = null` translation branch ещё не существует и её head не
+   проверяется.
 4. Заново прочитать authoritative source только по сохранённым immutable SHA и
    построить source plans. Проверить scope digest. HEAD и текст комментария не
    заменяют authoritative source.
@@ -740,6 +748,8 @@ target `target_line` является положительным integer, а `se
 6. Checkpoint не хранит содержимое TOC, Markdown или других файлов. Candidate
    читается из точного сохранённого SHA translation branch; новые успешно
    проверенные файлы сразу публикуются следующими commits этой же ветки.
+   При `target_sha = null` сохранённого candidate ещё нет; первый успешно собранный pending-файл или
+   critic-чанк создаёт translation branch, первый commit и translation PR.
    Protected fragments восстанавливаются из authoritative source.
 7. Runtime проверяет и применяет исправления критика; каждый успешный
    critic-чанк сразу публикуется отдельным commit в ту же branch. Независимый
@@ -973,6 +983,9 @@ gate не выполняется. Конкурентная атомарная re
 - После публикации translation PR в исходном PR создаётся или обновляется один
   короткий комментарий со ссылкой на translation PR. Повторный `doc_translate`
   не создаёт дубликаты этого комментария.
+- Если пустой translation PR не создан, потому что translator и все critic-чанки не смогли
+  создать ни одного файла, в исходном PR публикуется RED-отчёт и сохраняется continuation checkpoint.
+  Владелец запускает `/ydbdoc continue` в исходном PR.
 - `GREEN` означает, что независимый арбитр проверил окончательный полный
   результат и перевод корректен. Build/CI не участвуют в семантическом verdict.
   `YELLOW` допустим только для ограниченных некритичных проблем самого перевода
