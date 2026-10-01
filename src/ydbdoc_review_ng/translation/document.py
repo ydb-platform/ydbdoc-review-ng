@@ -1119,23 +1119,51 @@ def restore_document(
     request: DocumentTranslationRequest,
     responses: tuple[str, ...],
     /,
+    *,
+    allow_structure_diagnostics: bool = False,
 ) -> bytes:
-    """Restore exact source fragments and validate the complete Markdown candidate."""
+    """Restore exact source fragments and validate the complete Markdown candidate.
+
+    When ``allow_structure_diagnostics`` is true, Markdown/YFM/table/protected
+    structure mismatches still return the assembled UTF-8 candidate so soft
+    publication can proceed (§2). Placeholder/ID contract failures remain hard.
+    """
     if type(request) is not DocumentTranslationRequest or type(responses) is not tuple:
         raise TypeError("request and responses must have exact public contract types")
     if len(responses) != len(request.chunks) or any(type(item) is not str for item in responses):
         raise DocumentTranslationError("document_response:unit_mismatch")
-    normalized_inputs = tuple(
-        _normalize_publishable_markdown(
-            chunk.text.encode("utf-8"),
-            _restore_chunk_boundary_newlines(
-                chunk, _normalize_provider_wrapping(response)
-            ).encode("utf-8"),
-        ).decode("utf-8")
-        for chunk, response in zip(request.chunks, responses, strict=True)
-    )
+    try:
+        normalized_inputs = tuple(
+            _normalize_publishable_markdown(
+                chunk.text.encode("utf-8"),
+                _restore_chunk_boundary_newlines(
+                    chunk, _normalize_provider_wrapping(response)
+                ).encode("utf-8"),
+            ).decode("utf-8")
+            for chunk, response in zip(request.chunks, responses, strict=True)
+        )
+    except (DocumentTranslationError, UnicodeError, ValueError, TypeError, yaml.YAMLError) as error:
+        if not allow_structure_diagnostics:
+            raise
+        # Best-effort UTF-8 publish when only Markdown/YFM diagnostics fail.
+        rendered = "".join(
+            _restore_chunk_boundary_newlines(chunk, _normalize_provider_wrapping(response))
+            for chunk, response in zip(request.chunks, responses, strict=True)
+        )
+        by_token = {item.token: item.source_bytes for item in request.placeholders}
+        try:
+            return _TOKEN.sub(
+                lambda match: by_token[match.group()].decode("utf-8"), rendered
+            ).encode("utf-8")
+        except KeyError as restore_error:
+            raise DocumentTranslationError("document_response:placeholder_mismatch") from restore_error
+        raise DocumentTranslationError(str(error)) from error
     for chunk, response in zip(request.chunks, normalized_inputs, strict=True):
-        validate_chunk_response(chunk, request.placeholders, response)
+        try:
+            validate_chunk_response(chunk, request.placeholders, response)
+        except DocumentTranslationError as error:
+            if not allow_structure_diagnostics or "structure_mismatch" not in str(error):
+                raise
     normalized_responses = tuple(
         _restore_chunk_boundary_syntax(
             chunk,
@@ -1170,8 +1198,12 @@ def restore_document(
             localized_links=localized_links,
         )
     except DocumentTranslationError as error:
+        if allow_structure_diagnostics and "structure_mismatch" in str(error):
+            return candidate
         raise DocumentTranslationError(f"{error}:final_candidate") from None
-    except (UnicodeError, ValueError, TypeError):
+    except (UnicodeError, ValueError, TypeError, yaml.YAMLError):
+        if allow_structure_diagnostics:
+            return candidate
         raise DocumentTranslationError(
             "document_response:structure_mismatch:final_candidate"
         ) from None

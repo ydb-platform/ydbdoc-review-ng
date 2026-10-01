@@ -33,7 +33,10 @@ vs `REQUIREMENTS_RU.md`. Fix only contract violations; skip invented requirement
 | # | Finding | Status |
 |---|---|---|
 | 1 | GREEN vs unpublished critic bytes (`publication_plan` old base head) | **fixed** |
-| 2–25 | P1/P2 batch | in progress |
+| 3 | Provider failure one page aborts whole job | **fixed** |
+| 6 | Markdown/YFM diagnostics block assembled UTF-8 publish | **fixed** |
+| 22 | Raw Markdown fallback bypasses segment ID contract | **fixed** |
+| 2,4,5,7–21,23–25 | Remaining P1/P2 | in progress |
 
 ## Известные расхождения в коде
 

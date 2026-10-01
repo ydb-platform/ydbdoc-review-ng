@@ -1432,6 +1432,11 @@ class RuntimeContent:
                 # Soft-publish: keep successful UTF-8 assemblies, leave failed
                 # targets as null for critic, and do not open a translation checkpoint.
                 continue
+            except RuntimeBoundaryError as error:
+                # Provider/transport failure for one page must not abort siblings (§5.1).
+                if str(error) != "translation_model_failed":
+                    raise
+                continue
             accepted.append(accepted_map)
             accepted_full.append(accepted_document)
             self.accepted_maps = tuple(sorted(accepted, key=lambda item: item.target_path.value))
@@ -1607,14 +1612,9 @@ class RuntimeContent:
                         segments,
                         result.text,
                     )
-                except (AssemblyError, ValueError):
-                    # Compatibility for deterministic test doubles and old
-                    # providers which still return raw Markdown. Production
-                    # providers receive the strict segment schema above.
-                    response = result.text
-                try:
-                    validate_chunk_response(chunk, prepared.placeholders, response)
-                except DocumentTranslationError as error:
+                except (AssemblyError, ValueError) as error:
+                    # REQUIREMENTS §2: only the segment ID-map is accepted. Raw
+                    # Markdown must not bypass the contract (#22).
                     write_trace(
                         "translation",
                         "chunk_validation",
@@ -1623,11 +1623,45 @@ class RuntimeContent:
                         chunk_index=chunk_index,
                         chunks_total=len(prepared.chunks),
                         attempt=attempt,
-                        code=str(error),
+                        code="segment_map_invalid",
+                        error_type=type(error).__name__,
                     )
                     if attempt == 2:
                         return None, None, True
-                    note = str(error)
+                    note = "segment_map_invalid"
+                    previous_response = result.text
+                    continue
+                try:
+                    validate_chunk_response(chunk, prepared.placeholders, response)
+                except DocumentTranslationError as error:
+                    code = str(error)
+                    # REQUIREMENTS §2: assembled UTF-8 always publishes.
+                    # Markdown/YFM/table/protected diagnostics do not block (#6).
+                    if "structure_mismatch" in code:
+                        write_trace(
+                            "translation",
+                            "chunk_validation",
+                            "ok",
+                            article=entry.pair.target_path.value,
+                            chunk_index=chunk_index,
+                            chunks_total=len(prepared.chunks),
+                            attempt=attempt,
+                            code=code,
+                        )
+                        return response, None, False
+                    write_trace(
+                        "translation",
+                        "chunk_validation",
+                        "retry" if attempt == 1 else "fail",
+                        article=entry.pair.target_path.value,
+                        chunk_index=chunk_index,
+                        chunks_total=len(prepared.chunks),
+                        attempt=attempt,
+                        code=code,
+                    )
+                    if attempt == 2:
+                        return None, None, True
+                    note = code
                     previous_response = result.text
                 else:
                     return response, None, False
@@ -1667,26 +1701,66 @@ class RuntimeContent:
 
         try:
             candidate = restore_document(
-                document.source, document.plan, prepared, (response,)
+                document.source,
+                document.plan,
+                prepared,
+                (response,),
+                allow_structure_diagnostics=True,
             )
         except (DocumentTranslationError, ValueError, TypeError, UnicodeError) as error:
             assembly_failure("restore_document", error)
+        except Exception as error:  # noqa: BLE001 - YAML/parser diagnostics must not block UTF-8.
+            write_trace(
+                "translation",
+                "document_assembly",
+                "ok",
+                article=entry.pair.target_path.value,
+                stage="restore_document",
+                code="structure_diagnostic",
+                error_type=type(error).__name__,
+            )
+            # Last-resort publish of assembled chunk text with placeholders restored.
+            by_token = {
+                item.token: item.source_bytes for item in prepared.placeholders
+            }
+            rendered = response
+            for token, source_bytes in by_token.items():
+                rendered = rendered.replace(token, source_bytes.decode("utf-8"))
+            candidate = rendered.encode("utf-8")
         try:
             candidate_plan = build_markdown_plan(
                 document.plan.source_snapshot, entry.pair.target_path, candidate
             )
-        except (DocumentTranslationError, ValueError, TypeError, UnicodeError) as error:
-            assembly_failure("build_markdown_plan", error)
-        try:
-            verify_document_candidate_with_links(
-                document.source,
-                document.plan,
-                candidate,
-                candidate_plan,
-                self._link_resolver(document, candidate),
+        except Exception as error:  # noqa: BLE001 - structure diagnostics only.
+            write_trace(
+                "translation",
+                "document_assembly",
+                "ok",
+                article=entry.pair.target_path.value,
+                stage="build_markdown_plan",
+                code="structure_diagnostic",
+                error_type=type(error).__name__,
             )
-        except (DocumentTranslationError, ValueError, TypeError, UnicodeError) as error:
-            assembly_failure("verify_document_candidate", error)
+            candidate_plan = None
+        if candidate_plan is not None:
+            try:
+                verify_document_candidate_with_links(
+                    document.source,
+                    document.plan,
+                    candidate,
+                    candidate_plan,
+                    self._link_resolver(document, candidate),
+                )
+            except Exception as error:  # noqa: BLE001 - structure diagnostics only.
+                write_trace(
+                    "translation",
+                    "document_assembly",
+                    "ok",
+                    article=entry.pair.target_path.value,
+                    stage="verify_document_candidate",
+                    code="structure_diagnostic",
+                    error_type=type(error).__name__,
+                )
         try:
             values = _derive_target_translations(
                 document.source,
@@ -1695,10 +1769,8 @@ class RuntimeContent:
                 candidate,
                 entry.pair.target_path,
             )
-        except QualityInputError:
+        except Exception:  # noqa: BLE001 - map derivation is best-effort for soft publish.
             values = {}
-        except (DocumentTranslationError, ValueError, TypeError, UnicodeError) as error:
-            assembly_failure("derive_target_translations", error)
         try:
             candidate_text = candidate.decode("utf-8")
         except UnicodeError as error:
