@@ -73,13 +73,7 @@ def _translator_probe_contract(
     path = RepoPath("ydb/docs/ru/probe.md")
     snapshot = SnapshotRef(RepositoryId("ydb-platform/ydb"), GitSha("0" * 40))
     plan = build_markdown_plan(snapshot, path, _TRANSLATOR_SOURCE)
-    document = prepare_document(
-        _TRANSLATOR_SOURCE,
-        plan,
-        max_characters=6000,
-        source_locale="ru",
-        target_locale="en",
-    )
+    document = prepare_document(_TRANSLATOR_SOURCE, plan)
     chunk = document.chunks[0]
     request, field, contract, segments = _document_chunk_translation_request(
         ModelRequest(
@@ -87,7 +81,6 @@ def _translator_probe_contract(
             model,
             "translator probe",
             None,
-            8000,
             RepoPath("ydb/docs/en/probe.md"),
         ),
         chunk,

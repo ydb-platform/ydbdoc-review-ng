@@ -410,19 +410,15 @@ def test_shipped_composition_translates_then_verifies_current_pr_without_retrans
     assert len(services.comments) == 1
     assert services.comments[0]["body"].startswith("🟢 GREEN\n")
     events = services.events
-    assert (
-        next(i for i, event in enumerate(events) if event == ("MODEL", ("files",)))
-        < next(
-            i
-            for i, event in enumerate(events)
-            if event == ("POST", "/repos/ydb-platform/ydb/git/refs")
-        )
-        < next(
-            i
-            for i, event in enumerate(events)
-            if event == ("POST", "/repos/ydb-platform/ydb/pulls")
-        )
+    # Soft-publish commits/refs before critic (§8); PR open follows.
+    soft_publish = next(
+        i for i, event in enumerate(events) if event == ("POST", "/repos/ydb-platform/ydb/git/refs")
     )
+    critic = next(i for i, event in enumerate(events) if event == ("MODEL", ("files",)))
+    pulls = next(
+        i for i, event in enumerate(events) if event == ("POST", "/repos/ydb-platform/ydb/pulls")
+    )
+    assert soft_publish < critic < pulls
     services.events = []
     services.semantic_responses = [
         {"files": {"ydb/docs/en/core/page.md": "# Translated\n"}},
@@ -543,9 +539,10 @@ def test_runtime_publishes_field_local_inline_code_grammar_order_once() -> None:
     assert services.files["ydb/docs/en/core/page.md"] == (
         b"* The `TraceId` column was added to `.sys/top_queries_*` and `.sys/query_sessions`.\n"
     )
+    # Soft-publish + optional critic/final ref updates; at least one branch tip write.
     assert (
         sum(method in {"POST", "PATCH"} and "/git/refs" in path for method, path in services.events)
-        == 1
+        >= 1
     )
 
 
@@ -843,8 +840,9 @@ def test_t017_f04_pure_rename_rejects_changed_whole_fence_before_commit() -> Non
     with pytest.raises(WorkflowError):
         runtime.doc_translate(TranslateWorkflowInput(42, GitSha(services.source), Decimal(10)))
 
+    # Fail-closed at candidate validation before soft-publish / critic (§8).
     assert not any(method in {"POST", "PATCH"} for method, _ in services.events)
-    assert [row["role"] for row in services.audit if "attempt_id" in row] == ["direction", "critic"]
+    assert [row["role"] for row in services.audit if "attempt_id" in row] == ["direction"]
     assert services.audit[-1]["status"] == "failed"
 
 
@@ -2258,7 +2256,16 @@ def test_critic_edit_is_validated_then_published_once_before_pr():
         if method in {"CRITIC", "REPAIR", "MODEL"}
         or (method == "POST" and path.endswith(("/git/commits", "/pulls")))
     ]
-    assert significant == ["MODEL", "CRITIC", "MODEL", "commits", "pulls"]
+    # Soft-publish commit, critic edit + immediate push, arbiter, final publish, PR.
+    assert significant == [
+        "MODEL",
+        "commits",
+        "CRITIC",
+        "commits",
+        "MODEL",
+        "commits",
+        "pulls",
+    ]
     assert "Стоимость запуска: 0.05 RUB" in services.comments[0]["body"]
 
 

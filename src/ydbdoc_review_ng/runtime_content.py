@@ -91,6 +91,14 @@ from ydbdoc_review_ng.scope import (
     freeze_scope_manifest,
 )
 from ydbdoc_review_ng.terminology import bilingual_glossary_context
+from ydbdoc_review_ng.toc_delta import (
+    TocDeltaError,
+    TocStringChange,
+    TocStringTranslationError,
+    apply_toc_delta,
+    build_toc_string_request,
+    parse_toc_string_response,
+)
 from ydbdoc_review_ng.trace import traced, write_trace
 from ydbdoc_review_ng.translation import (
     AssemblyError,
@@ -126,14 +134,6 @@ from ydbdoc_review_ng.translation_plan import (
     reconcile_fixed_outputs,
     translation_plan_sha256,
     validate_toc_correction,
-)
-from ydbdoc_review_ng.toc_delta import (
-    TocDeltaError,
-    TocStringChange,
-    TocStringTranslationError,
-    apply_toc_delta,
-    build_toc_string_request,
-    parse_toc_string_response,
 )
 
 if TYPE_CHECKING:
@@ -974,16 +974,32 @@ class RuntimeContent:
                     for kind, relative in _complete_pairs(preparation.inventory, self.roots)
                     if kind is PathKind.MARKDOWN
                 }
+                verify_targets = (
+                    frozenset()
+                    if translate
+                    else frozenset(self.source.verification_target_paths)
+                )
+
+                def _pair_verdict(pair: LocalePairInventory) -> DirectionPairVerdict:
+                    if translate:
+                        if pair.key.relative_path in complete:
+                            return DirectionPairVerdict.COMPLETE_PAIR
+                    else:
+                        # doc_verify: source PR may also list target-locale noise.
+                        # Scope direction from frozen verification targets, not
+                        # source-inventory complete-pair detection.
+                        target_side = (
+                            pair.en if selected_direction is Direction.RU_TO_EN else pair.ru
+                        )
+                        if target_side.path not in verify_targets:
+                            return DirectionPairVerdict.COMPLETE_PAIR
+                    return DirectionPairVerdict(selected_direction.value)
+
                 direction = DirectionSelectionResult(
                     DirectionSelectionState.SELECTED,
                     selected_direction,
                     tuple(
-                        DirectionPairDecision(
-                            pair,
-                            DirectionPairVerdict.COMPLETE_PAIR
-                            if pair.key.relative_path in complete
-                            else DirectionPairVerdict(selected_direction.value),
-                        )
+                        DirectionPairDecision(pair, _pair_verdict(pair))
                         for pair in preparation.inventories
                     ),
                     None,

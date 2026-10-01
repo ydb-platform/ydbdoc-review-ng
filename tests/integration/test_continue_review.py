@@ -297,8 +297,12 @@ def test_critic_editor_merges_complete_document_and_finishes_green():
     result = services.resume()
     assert result.verdict is Verdict.GREEN and result.repair_applied
     assert services.roles == ["critic", "arbiter"]
+    # §4.1: successful critic chunk commits/pushes before arbiter; final head
+    # may still be published after arbiter when the candidate differs.
     assert services.timeline == [
         "critic",
+        "commit",
+        "push",
         "arbiter",
         "commit",
         "push",
@@ -312,11 +316,12 @@ def test_critic_editor_merges_complete_document_and_finishes_green():
     assert "Translated" in raw_repair_context(repair_prompt, "translation-pr-files")
     assert "Source detail b" in repair_prompt
     assert services.rows[saved.continuation_id]["status"] == "closed"
-    assert services.parents == [[saved.target_sha.value]]
+    assert services.parents[0] == [saved.target_sha.value]
+    assert len(services.parents) == 2
     assert all(CONTEXT in prompt for _, prompt in services.prompts)
     assert all(CONTEXT.encode() not in value for value in services.files.values())
     assert len(services.comments) == 1 and services.comments[0]["body"].startswith("🟢 GREEN\n")
-    assert services.commits == services.initial_commits + 1
+    assert services.commits == services.initial_commits + 2
     with pytest.raises(application.WorkflowError):
         services.resume()
 
@@ -376,7 +381,8 @@ def test_saved_review_paths_do_not_narrow_the_complete_review():
     ]
     assert services.files[EN + "c.md"] == b"# Repaired c\n"
     assert services.files[EN + "b.md"] == b"# Repaired b\n\nTranslated\n"
-    assert services.commits == services.initial_commits + 1
+    # Critic immediate push + final publish after arbiter.
+    assert services.commits == services.initial_commits + 2
     with pytest.raises(PersistenceError):
         services.checkpoint()
 
@@ -451,7 +457,8 @@ def test_pinned_rename_review_never_derives_maps_from_target_and_replays_metadat
         path: value for path, value in services.files.items() if path.endswith(".yaml")
     } == metadata
     assert EN + "old.md" not in services.files
-    assert services.commits == services.initial_commits + int(repair)
+    # Repair publishes via critic immediate push, then again after arbiter.
+    assert services.commits == services.initial_commits + (2 if repair else 0)
     if repair:
         with pytest.raises(PersistenceError):
             services.checkpoint()
@@ -504,7 +511,8 @@ def test_infrastructure_failure_preserves_old_checkpoint(failure):
         == {
             "critic": ["critic"],
             "repair": ["critic"],
-            "publish": ["critic", "arbiter"],
+            # Critic immediate push fails before arbiter runs.
+            "publish": ["critic"],
             "report": ["critic", "arbiter"],
             "attempt": ["critic"],
         }[failure]
@@ -634,7 +642,9 @@ def test_pinned_branch_change_during_repair_commit_cannot_create_or_update_ref(m
     services = ChangedDuringCommit(names=("a", "b"))
     saved = services.start_review()
     services.outcomes = {EN + "b.md": ["repair", "green"]}
-    with pytest.raises(application.WorkflowError, match="publish"):
+    # Critic pushes the repair immediately; a head change during that commit
+    # fails the review stage before arbiter (and before a later publish stage).
+    with pytest.raises(application.WorkflowError, match="review"):
         if mode == "continue":
             services.resume()
         else:
@@ -645,7 +655,7 @@ def test_pinned_branch_change_during_repair_commit_cannot_create_or_update_ref(m
                     saved.target_sha,
                 )
             )
-    assert services.roles == ["critic", "arbiter"]
+    assert services.roles == ["critic"]
     assert services.timeline[-1] == "commit"
     assert services.commits == services.initial_commits + 1
     assert services.branch_head == new_head

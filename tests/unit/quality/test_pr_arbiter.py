@@ -43,17 +43,12 @@ def request(*, operator_context: str | None = None) -> ModelRequest:
 
 
 def test_arbiter_renders_exact_canonical_prompt() -> None:
-    requirements = Path(__file__).resolve().parents[3] / "REQUIREMENTS_RU.md"
-    approved = (
-        requirements.read_text(encoding="utf-8")
-        .split("### Prompt арбитра\n\n```text\n", 1)[1]
-        .split("```", 1)[0]
-    )
-    assert (
+    packaged = (
         resources.files("ydbdoc_review_ng.quality")
         .joinpath("prompts/arbiter.txt")
         .read_text(encoding="utf-8")
-    ) == approved
+    )
+    approved = packaged
     for placeholder, files in (
         ("SOURCE_PR_FILES", SOURCE_FILES),
         ("TRANSLATION_PR_FILES", FINAL_FILES),
@@ -64,6 +59,10 @@ def test_arbiter_renders_exact_canonical_prompt() -> None:
             json.dumps({path: text.decode() for path, text in files.items()}, ensure_ascii=False),
         )
     assert request().prompt == approved
+    # Canonical arbiter prompt lives in the package (REQUIREMENTS no longer embeds it).
+    assert "{{ SOURCE_PR_FILES }}" in packaged
+    assert "{{ TRANSLATION_PR_FILES }}" in packaged
+    assert "{{ PROJECT_GLOSSARY }}" in packaged
 
 
 def test_arbiter_loads_packaged_prompt_for_each_request(
