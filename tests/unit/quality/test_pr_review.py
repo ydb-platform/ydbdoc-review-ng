@@ -85,25 +85,32 @@ def test_two_file_pr_has_exactly_one_critic_then_one_arbiter(verdict, changed):
     assert executor.responses == []
 
 
-def test_invalid_files_are_not_applied_and_arbiter_is_not_called():
+def test_invalid_files_retry_then_pass_draft_to_arbiter():
+    """REQUIREMENTS §4.1: after one critic retry, drafts go to arbiter as-is."""
     original = {"en/a.md": b"# Before\n"}
-    executor = FifoModels(['{"files":{"en/a.md":"# After\\n"}}'])
+    executor = FifoModels(
+        [
+            '{"files":{"en/a.md":"# After\\n"}}',
+            '{"files":{"en/a.md":"# After\\n"}}',
+            '{"verdict":"GREEN","findings":[]}',
+        ]
+    )
 
     def reject(_files):
         raise quality.QualityInputError("protected")
 
-    with pytest.raises(quality.QualityInputError, match="protected"):
-        quality.review_pr(
-            executor,
-            critic_model="editor",
-            arbiter_model="judge",
-            source_files={"ru/a.md": b"# Source\n"},
-            translated_files=original,
-            glossary_files={},
-            validate_files=reject,
-        )
-    assert original == {"en/a.md": b"# Before\n"}
-    assert len(executor.calls) == 1
+    corrected, result = quality.review_pr(
+        executor,
+        critic_model="editor",
+        arbiter_model="judge",
+        source_files={"ru/a.md": b"# Source\n"},
+        translated_files=original,
+        glossary_files={},
+        validate_files=reject,
+    )
+    assert corrected == original
+    assert result.verdict.value == "GREEN"
+    assert [call.role.value for call in executor.calls] == ["critic", "critic", "arbiter"]
 
 
 @pytest.mark.parametrize(
@@ -113,19 +120,20 @@ def test_invalid_files_are_not_applied_and_arbiter_is_not_called():
         ModelCallResult(None, AttemptError.CONTENT_FILTER, ()),
     ],
 )
-def test_critic_failure_raises_without_synthetic_red_or_retry(response):
-    executor = FifoModels([response])
-    with pytest.raises((quality.CriticResponseError, quality.QualityExecutionError)):
-        quality.review_pr(
-            executor,
-            critic_model="editor",
-            arbiter_model="judge",
-            source_files={"ru/a.md": b"# Source\n"},
-            translated_files={"en/a.md": b"# Before\n"},
-            glossary_files={},
-            validate_files=lambda files: None,
-        )
-    assert len(executor.calls) == 1
+def test_critic_failure_retries_once_then_passes_draft_to_arbiter(response):
+    executor = FifoModels([response, response, '{"verdict":"GREEN","findings":[]}'])
+    corrected, result = quality.review_pr(
+        executor,
+        critic_model="editor",
+        arbiter_model="judge",
+        source_files={"ru/a.md": b"# Source\n"},
+        translated_files={"en/a.md": b"# Before\n"},
+        glossary_files={},
+        validate_files=lambda files: None,
+    )
+    assert corrected == {"en/a.md": b"# Before\n"}
+    assert result.verdict.value == "GREEN"
+    assert [call.role.value for call in executor.calls] == ["critic", "critic", "arbiter"]
 
 
 def test_large_complete_input_is_not_split_or_glossary_filtered():

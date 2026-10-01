@@ -322,7 +322,7 @@ def test_pr_inputs_use_current_pinned_source_not_diff_or_preimage() -> None:
     )
     candidate = WorkflowCandidate(pack({EN + "page.md": b"# Current translation\n"}), None)
 
-    source_files, _, _ = content._pr_review_inputs(candidate)
+    source_files, _, _, _, _ = content._pr_review_inputs(candidate)
 
     assert source_files == {
         RU + "page.md": "# BlobDepot\n\nТекущий текст.\n\nНеизменённый абзац.\n".encode()
@@ -365,7 +365,7 @@ def test_pr_inputs_include_complete_translation_files_and_index() -> None:
         None,
     )
 
-    source_files, translated_files, _ = content._pr_review_inputs(candidate)
+    source_files, translated_files, _, _, _ = content._pr_review_inputs(candidate)
 
     assert source_files == {
         RU + "page.md": b"# BlobDepot\n\nCurrent.\n\nUnchanged.\n",
@@ -402,7 +402,7 @@ def test_pr_inputs_include_current_source_toc_and_target_toc(direction, toc_name
         None,
     )
 
-    source_files, translated_files, _ = content._pr_review_inputs(candidate)
+    source_files, translated_files, _, _, _ = content._pr_review_inputs(candidate)
 
     assert source_files == {source_root + toc_name: b"items:\n- name: BlobDepot\n  href: page.md\n"}
     assert translated_files == {
@@ -432,7 +432,7 @@ def test_pr_inputs_include_whole_bilingual_glossary() -> None:
     )
     content.environment = {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "10"}
 
-    _, _, glossary_files = content._pr_review_inputs(
+    _, _, glossary_files, _, _ = content._pr_review_inputs(
         WorkflowCandidate(pack({EN + "page.md": b"# Complete current candidate\n"}), None)
     )
 
@@ -482,7 +482,7 @@ def test_pr_inputs_exclude_files_outside_the_actual_corresponding_pr_sets() -> N
         None,
     )
 
-    source_files, translated_files, glossary_files = content._pr_review_inputs(candidate)
+    source_files, translated_files, glossary_files, _, _ = content._pr_review_inputs(candidate)
 
     assert source_files == {
         RU + "page.md": b"# Current\n\n[Dependency](dependency.md)\n",

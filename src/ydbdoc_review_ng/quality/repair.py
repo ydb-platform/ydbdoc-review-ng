@@ -156,6 +156,8 @@ def review_pr(
     before_model_call: Callable[[], None] | None = None,
     on_successful_critic_chunk: Callable[[Mapping[str, bytes]], None] | None = None,
     request_fits: Callable[[ModelRequest], bool] | None = None,
+    toc_snapshots: Mapping[str, Mapping[str, str | None]] | None = None,
+    binary_manifest: Mapping[str, Mapping[str, str]] | None = None,
 ) -> tuple[dict[str, bytes], CriticResult]:
     """Correct/judge the PR in context-fitting whole source/target pair chunks."""
     pairs = _review_pairs(source_files, translated_files)
@@ -171,6 +173,8 @@ def review_pr(
             translated_files=_subset_targets(translated_files, chunk_pairs),
             glossary_files=glossary_files,
             operator_context=operator_context,
+            toc_snapshots=toc_snapshots,
+            binary_manifest=binary_manifest,
         )
 
     def fits(request: ModelRequest) -> bool:
@@ -224,6 +228,8 @@ def review_pr(
             translated_files={target: arbiter_targets[target] for _source, target in chunk_pairs},
             glossary_files=glossary_files,
             operator_context=operator_context,
+            toc_snapshots=toc_snapshots,
+            binary_manifest=binary_manifest,
         )
 
     reviewed_pairs = tuple(pair for pair in pairs if pair[1] not in unreviewed)

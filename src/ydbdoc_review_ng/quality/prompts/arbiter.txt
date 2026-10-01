@@ -7,6 +7,9 @@ You receive:
 2. Complete final target-language files from the translation branch.
    A required target file can be represented by JSON null if it is missing.
 3. Every complete paired YDB glossary section relevant to the supplied files.
+4. Source TOC before/after snapshots for every TOC in this frozen group.
+5. A binary manifest of deterministic locale resource operations (copy/delete/
+   rename) without file bytes.
 
 For every changed TOC file, you also receive its complete source content before
 and after the source pull request. Use that pair as the authoritative navigation
@@ -90,3 +93,11 @@ repair instructions for another model, or additional JSON fields.
 <project-glossary>
 {{ PROJECT_GLOSSARY }}
 </project-glossary>
+
+<source-toc-snapshots>
+{{ SOURCE_TOC_SNAPSHOTS }}
+</source-toc-snapshots>
+
+<binary-manifest>
+{{ BINARY_MANIFEST }}
+</binary-manifest>

@@ -611,8 +611,14 @@ class RuntimeContent:
 
     def _pr_review_inputs(
         self, candidate: WorkflowCandidate
-    ) -> tuple[dict[str, bytes], dict[str, bytes], dict[str, bytes]]:
-        """Read complete pinned PR text and glossary without expanding translation scope."""
+    ) -> tuple[
+        dict[str, bytes],
+        dict[str, bytes | None],
+        dict[str, bytes],
+        dict[str, dict[str, str | None]],
+        dict[str, dict[str, str]],
+    ]:
+        """Read complete pinned PR text, TOC context, glossary, and binary manifest."""
         plans = self.plans
         if plans is None or plans.manifest is None:
             raise RuntimeBoundaryError("review_inputs_missing_scope")
@@ -626,7 +632,7 @@ class RuntimeContent:
         source_locale = "ru" if plans.manifest.direction is Direction.RU_TO_EN else "en"
         candidate_files = unpack(candidate.content)
         source_files: dict[str, bytes] = {}
-        translated_files: dict[str, bytes] = {}
+        translated_files: dict[str, bytes | None] = {}
         for change in preparation.inventory.files:
             classified = classify_path(self.roots, change.path)
             if (
@@ -654,6 +660,48 @@ class RuntimeContent:
             if target_path not in translated_files:
                 translated_files[target_path] = candidate_files.get(target_path)
 
+        # §3.6 / §4.1: generated or inventory TOC must reach critic/arbiter with
+        # source before/after snapshots, even when MetadataProducer wrote them.
+        toc_snapshots: dict[str, dict[str, str | None]] = {}
+        for path, value in plans.fixed_files:
+            classified = classify_path(self.roots, RepoPath(path))
+            if classified.kind is not PathKind.TOC or classified.relative is None:
+                continue
+            translated_files[path] = value if value is not None else candidate_files.get(path)
+            source_path = RepoPath(f"{source_root.value}/{classified.relative}")
+            if source_path.value not in source_files:
+                source_bytes = self.source.github.read_bytes(source_snapshot, source_path)
+                if source_bytes is not None:
+                    source_files[source_path.value] = source_bytes
+            before = self.source.github.read_bytes(self.source.source_base_snapshot, source_path)
+            after = self.source.github.read_bytes(self.source.source_change_snapshot, source_path)
+            if after is None and source_path.value in source_files:
+                after = source_files[source_path.value]
+            toc_snapshots[source_path.value] = {
+                "before": None if before is None else before.decode("utf-8"),
+                "after": None if after is None else after.decode("utf-8"),
+            }
+
+        binary_manifest: dict[str, dict[str, str]] = {}
+        for item in plans.translation_plan.inputs:
+            if item.target_path is None or item.kind not in {
+                PathKind.ASSET,
+                PathKind.REDIRECTS,
+                PathKind.LOCALIZED_OTHER,
+            }:
+                continue
+            action = {
+                PlanAction.COPY_TARGET: "copy",
+                PlanAction.DELETE_TARGET: "delete",
+                PlanAction.RENAME_TARGET: "rename",
+            }.get(item.action)
+            if action is None:
+                continue
+            binary_manifest[item.target_path.value] = {
+                "action": action,
+                "source_path": item.change.path.value,
+            }
+
         glossary_files: dict[str, bytes] = {}
         for root, snapshot in (
             (source_root, source_snapshot),
@@ -663,7 +711,7 @@ class RuntimeContent:
             glossary = self.source.github.read_bytes(snapshot, path)
             if glossary is not None:
                 glossary_files[path.value] = glossary
-        return source_files, translated_files, glossary_files
+        return source_files, translated_files, glossary_files, toc_snapshots, binary_manifest
 
     def _terminology_context(
         self,
@@ -2126,7 +2174,9 @@ class RuntimeContent:
         if self.plans is None or self.plans.manifest is None:
             return unchanged
         # REQUIREMENTS §4.1: zero text pairs still invoke critic {"files":{}} + arbiter.
-        source_files, translated_files, glossary_files = self._pr_review_inputs(candidate)
+        source_files, translated_files, glossary_files, toc_snapshots, binary_manifest = (
+            self._pr_review_inputs(candidate)
+        )
         assert self.plans is not None and self.plans.manifest is not None
         source_snapshot = self.plans.preparation.snapshots.source_snapshot
         direction = self.plans.manifest.direction
@@ -2158,7 +2208,7 @@ class RuntimeContent:
                     self._validate_toc_correction(
                         source_snapshot,
                         path,
-                        toc_postconditions.get(path, translated_files[name]),
+                        toc_postconditions.get(path, translated_files.get(name) or b""),
                         target,
                     )
                     continue
@@ -2174,7 +2224,7 @@ class RuntimeContent:
                     entry = ScopeEntry(
                         FilePair(source_locale, target_locale, source_path, path),
                         source,
-                        translated_files[name],
+                        translated_files.get(name),
                         ScopeOrigin.INITIAL,
                         FileOperation.TRANSLATE,
                         (PairKey(RepoPath(classified.relative)),),
@@ -2193,7 +2243,7 @@ class RuntimeContent:
                         source_plan,
                         target,
                         target_plan,
-                        self._link_resolver(document, translated_files[name]),
+                        self._link_resolver(document, translated_files.get(name)),
                     )
                 except (ValueError, TypeError) as error:
                     raise QualityInputError("invalid_corrected_markdown") from error
@@ -2238,6 +2288,8 @@ class RuntimeContent:
             operator_context=self.review_operator_context,
             before_model_call=check_head if snapshot.mode is Mode.DOC_CONTINUE else None,
             on_successful_critic_chunk=publish_critic_chunk,
+            toc_snapshots=toc_snapshots,
+            binary_manifest=binary_manifest,
         )
         repaired = corrected != translated_files
         files.update(corrected)

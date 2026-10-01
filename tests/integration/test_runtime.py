@@ -2027,7 +2027,7 @@ def test_verify_replays_pinned_toc_plan_instead_of_translated_h1(toc_label) -> N
     assert files[directory.format("en") + "blobdepot_decommit.md"] == (
         b"# Group decommissioning\n\nCurrent translation.\n\nUnchanged paragraph.\n"
     )
-    source_files, translated_files, glossary_files = content._pr_review_inputs(candidate)
+    source_files, translated_files, glossary_files, _, _ = content._pr_review_inputs(candidate)
     assert source_files == {
         directory.format("ru") + "blobdepot_decommit.md": (
             b"# Decommission source\n\nCurrent source.\n\nUnchanged paragraph.\n"

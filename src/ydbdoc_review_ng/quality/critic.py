@@ -67,6 +67,8 @@ def build_pr_critic_request(
     translated_files: Mapping[str, bytes | None],
     glossary_files: Mapping[str, bytes],
     operator_context: str | None = None,
+    toc_snapshots: Mapping[str, Mapping[str, str | None]] | None = None,
+    binary_manifest: Mapping[str, Mapping[str, str]] | None = None,
 ) -> ModelRequest:
     template = (
         resources.files("ydbdoc_review_ng.quality")
@@ -88,8 +90,16 @@ def build_pr_critic_request(
         )
         for name, files in values.items()
     }
+    rendered["SOURCE_TOC_SNAPSHOTS"] = json.dumps(
+        {} if toc_snapshots is None else dict(toc_snapshots),
+        ensure_ascii=False,
+    )
+    rendered["BINARY_MANIFEST"] = json.dumps(
+        {} if binary_manifest is None else dict(binary_manifest),
+        ensure_ascii=False,
+    )
     prompt = re.sub(
-        r"\{\{ (SOURCE_PR_FILES|TRANSLATION_PR_FILES|PROJECT_GLOSSARY) \}\}",
+        r"\{\{ (SOURCE_PR_FILES|TRANSLATION_PR_FILES|PROJECT_GLOSSARY|SOURCE_TOC_SNAPSHOTS|BINARY_MANIFEST) \}\}",
         lambda match: rendered[match.group(1)],
         template,
     )
@@ -146,6 +156,8 @@ def build_pr_arbiter_request(
     translated_files: Mapping[str, bytes | None],
     glossary_files: Mapping[str, bytes],
     operator_context: str | None = None,
+    toc_snapshots: Mapping[str, Mapping[str, str | None]] | None = None,
+    binary_manifest: Mapping[str, Mapping[str, str]] | None = None,
 ) -> ModelRequest:
     template = (
         resources.files("ydbdoc_review_ng.quality")
@@ -167,8 +179,16 @@ def build_pr_arbiter_request(
         )
         for name, files in values.items()
     }
+    rendered["SOURCE_TOC_SNAPSHOTS"] = json.dumps(
+        {} if toc_snapshots is None else dict(toc_snapshots),
+        ensure_ascii=False,
+    )
+    rendered["BINARY_MANIFEST"] = json.dumps(
+        {} if binary_manifest is None else dict(binary_manifest),
+        ensure_ascii=False,
+    )
     prompt = re.sub(
-        r"\{\{ (SOURCE_PR_FILES|TRANSLATION_PR_FILES|PROJECT_GLOSSARY) \}\}",
+        r"\{\{ (SOURCE_PR_FILES|TRANSLATION_PR_FILES|PROJECT_GLOSSARY|SOURCE_TOC_SNAPSHOTS|BINARY_MANIFEST) \}\}",
         lambda match: rendered[match.group(1)],
         template,
     )
