@@ -322,7 +322,13 @@ def _apply_items(
         assert entry is not None
         key = _target_identity(entry)
         if key in deleted:
-            working[index] = None
+            deleted_entry = before_index[key]
+            deleted_keys = _subtree_keys(deleted_entry)
+            # Same-name RU/EN groups hit exact identity; still keep target-only kids (§3.1).
+            if deleted_keys and not (_subtree_keys(entry) <= deleted_keys):
+                working[index] = _prune_deleted_descendants(entry, deleted_keys)
+            else:
+                working[index] = None
             continue
         if key in renames:
             continue
@@ -396,6 +402,9 @@ def _apply_items(
                 and before_key == after_key
             ):
                 continue
+            # First appearance of this scaffolding in an existing target TOC still
+            # needs visible-string IDs even when the source label did not change (§3.3).
+            _collect_new_target_strings(after_entry, prefix, strings)
             node = _copy_structure(after_entry)
             assert type(node) is dict
             for field in _VISIBLE:
