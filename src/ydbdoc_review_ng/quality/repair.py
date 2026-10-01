@@ -47,7 +47,7 @@ def review_pr(
     critic_model: str,
     arbiter_model: str,
     source_files: Mapping[str, bytes],
-    translated_files: Mapping[str, bytes],
+    translated_files: Mapping[str, bytes | None],
     glossary_files: Mapping[str, bytes],
     validate_files: Callable[[Mapping[str, bytes]], None],
     operator_context: str | None = None,

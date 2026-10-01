@@ -705,7 +705,8 @@ def reconcile_candidate_outputs(
         if item.action in {
             PlanAction.TRANSLATE_DOCUMENT,
         }:
-            if target not in candidate or candidate[target] is None:
+            # Soft-publish may leave a failed translator target as null for critic.
+            if target not in candidate:
                 raise TranslationPlanError("translation_plan_candidate_output_missing")
         elif item.action is PlanAction.SYNC_TOC:
             if target is None:

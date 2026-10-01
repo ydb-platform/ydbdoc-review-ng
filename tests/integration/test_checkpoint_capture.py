@@ -215,6 +215,10 @@ class CaptureServices(RuntimeServices):
             role = "critic"
             self.critics += 1
             files = json.loads(raw_repair_context(prompt, "translation-pr-files"))
+            for path, content in list(files.items()):
+                if content is None:
+                    # Soft-publish null target: critic must create the full file.
+                    files[path] = "# Translated\n"
             if self.stop == "review":
                 path = "ydb/docs/en/core/a.md"
                 files[path] = rewrite_markdown(files[path], "Corrected")
@@ -238,9 +242,13 @@ class CaptureServices(RuntimeServices):
                     {
                         "reason": "The meaning is incomplete. Prior arbiter sentinel.",
                         "expected_correction": "Restore the missing meaning.",
-                        "searchable_snippet": files[path].splitlines()[0],
+                        "searchable_snippet": (
+                            None
+                            if files[path] is None
+                            else files[path].splitlines()[0]
+                        ),
                         "target_path": path,
-                        "target_line": 1,
+                        "target_line": None if files[path] is None else 1,
                     }
                     for path in paths
                 ],
@@ -370,27 +378,22 @@ def test_direction_stop_is_strict_and_warns_before_saving():
 
 
 @pytest.mark.parametrize("stop", ["translation", "translation_assembly"])
-def test_two_invalid_current_field_responses_preserve_first_map_and_pending_order(stop):
+def test_partial_translation_failure_soft_publishes_successes_and_nulls_for_critic(stop):
+    """REQUIREMENTS §5.1: partial model-fail still publishes; failed paths = null."""
     services = CaptureServices(stop=stop)
     services.changes.append({"status": "removed", "filename": "ydb/docs/ru/core/z.md"})
     for files in [services.files, *services.snapshots.values()]:
         files["ydb/docs/en/core/z.md"] = b"# Remove this counterpart\n"
-    with pytest.raises(WorkflowError):
-        services.translate()
-    checkpoint = services.checkpoint()
-    assert checkpoint.state.stage is ContinuationStage.TRANSLATION
-    assert checkpoint.state.target_sha is None
-    assert checkpoint.state.pending_paths == tuple(
-        RepoPath(f"ydb/docs/en/core/{n}.md") for n in ("a", "b", "c")
-    )
-    assert checkpoint.scope_target_paths == tuple(
-        RepoPath(f"ydb/docs/en/core/{n}.md") for n in ("a", "b", "c", "z")
-    )
-    assert services.roles == ["direction", "translate", "translate", "translate"]
-    attempts = [row for row in services.audit if "attempt_id" in row]
-    assert len(attempts) == 4
-    assert sum(row["cost_rub"] for row in attempts) == Decimal("0.04")
-    assert services.commits == 0 and services.audit[-1]["status"] == "failed"
+
+    result = services.translate()
+
+    assert result.verdict is Verdict.GREEN
+    assert services.commits >= 1
+    assert "critic" in services.roles and "arbiter" in services.roles
+    assert services.files["ydb/docs/en/core/a.md"].startswith(b"#")
+    # Failed translator targets must not wipe an existing counterpart as a deletion.
+    assert services.files.get("ydb/docs/en/core/b.md") is not None
+    assert services.rows == {}
 
 
 def test_structured_translation_restores_known_placeholder_before_review() -> None:
@@ -659,10 +662,12 @@ def test_lost_terminal_ack_and_failed_close_cannot_be_resumed():
                 raise OSError("terminal committed, acknowledgement lost")
             return result
 
-    services = LostTerminalAck(stop="translation")
+    # Soft-publish no longer opens translation checkpoints on model-fail; direction
+    # remains the durable semantic stop used for this handoff witness.
+    services = LostTerminalAck(stop="direction")
     with pytest.raises((WorkflowError, PersistenceError)):
         services.translate()
-    assert services.roles == ["direction", "translate", "translate", "translate"]
+    assert services.roles == ["direction"]
     assert services.rows  # The real checkpoint write reached storage.
     with pytest.raises(PersistenceError):
         services.checkpoint()
@@ -670,7 +675,7 @@ def test_lost_terminal_ack_and_failed_close_cannot_be_resumed():
     assert next(iter(services.jobs.values()))["error"] == "terminal_audit_failed"
 
 
-@pytest.mark.parametrize("stop", ["direction", "translation", "review"])
+@pytest.mark.parametrize("stop", ["direction", "review"])
 @pytest.mark.parametrize("activation_failure", ["before", "after", "readback"])
 def test_activation_ambiguity_requires_exact_readback_and_semantic_job(stop, activation_failure):
     class ActivationServices(CaptureServices):
@@ -733,11 +738,11 @@ def test_pending_remains_non_resumable_when_both_cleanup_writes_are_unavailable(
                 raise OSError("terminal acknowledgement or infrastructure write unavailable")
             return super().execute(statement, parameters)
 
-    services = UnavailableCleanup(stop="translation")
+    services = UnavailableCleanup(stop="direction")
     with pytest.raises(WorkflowError):
         services.translate()
     assert services.closes == 1 and services.terminal_writes == 2
-    assert next(iter(services.jobs.values()))["error"] == "continuable_translation"
+    assert next(iter(services.jobs.values()))["error"] == "continuable_direction"
     assert next(iter(services.rows.values()))["status"] == "pending"
     with pytest.raises(PersistenceError):
         services.checkpoint()

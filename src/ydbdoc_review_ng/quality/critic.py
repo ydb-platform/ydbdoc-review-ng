@@ -64,7 +64,7 @@ def build_pr_critic_request(
     *,
     model: str,
     source_files: Mapping[str, bytes],
-    translated_files: Mapping[str, bytes],
+    translated_files: Mapping[str, bytes | None],
     glossary_files: Mapping[str, bytes],
     operator_context: str | None = None,
 ) -> ModelRequest:
@@ -73,14 +73,17 @@ def build_pr_critic_request(
         .joinpath("prompts/critic.txt")
         .read_text(encoding="utf-8")
     )
-    values = {
+    values: dict[str, Mapping[str, bytes | None]] = {
         "SOURCE_PR_FILES": source_files,
         "TRANSLATION_PR_FILES": translated_files,
         "PROJECT_GLOSSARY": glossary_files,
     }
     rendered = {
         name: json.dumps(
-            {path: content.decode("utf-8") for path, content in files.items()},
+            {
+                path: content.decode("utf-8") if content is not None else None
+                for path, content in files.items()
+            },
             ensure_ascii=False,
         )
         for name, files in values.items()

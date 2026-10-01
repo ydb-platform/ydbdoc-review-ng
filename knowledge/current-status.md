@@ -15,9 +15,8 @@
 
 ## Код
 
-Срезы 1, 3, 6, 7 закрыты на local `main`. Continuation state v3: нет
-`accepted_documents`/`candidate_sha256` в YDB; candidate читается с
-`target_sha` ветки. TOC §3 пока append-only (coverage tests фиксируют gaps).
-Остаётся: dependency polish, полный TOC delta, soft-publish частичных
-translation success, удаление мёртвого `select_direction`, `doc_verify`/budget —
-см. `debt-map.md`.
+Срезы 1–3, 6–8 закрыты на local `main` (dependency+limits, soft-publish,
+continuation v3, YELLOW=success, whole-file translate, direction-only).
+TOC §3 пока append-only (coverage tests фиксируют gaps).
+Остаётся: critic chunk + immediate push (§4.1), полный TOC delta, удаление
+мёртвого `select_direction`, `doc_verify`/budget — см. `debt-map.md`.

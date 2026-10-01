@@ -114,6 +114,7 @@ from ydbdoc_review_ng.translation import (
 from ydbdoc_review_ng.translation.document import verify_document_candidate_with_links
 from ydbdoc_review_ng.translation_plan import (
     PathKind,
+    PlanAction,
     TranslationPlan,
     TranslationPlanError,
     _complete_pairs,
@@ -586,6 +587,8 @@ class RuntimeContent:
         self.review_paths: tuple[RepoPath, ...] | None = None
         self.review_operator_context: str | None = None
         self.publisher: GitPublicationAdapter
+        # Continue harness only: reopen unfinished translation checkpoints.
+        self._legacy_pending_translation_stop = False
 
     def _pr_review_inputs(
         self, candidate: WorkflowCandidate
@@ -619,9 +622,18 @@ class RuntimeContent:
             source_files[change.path.value] = source
             assert classified.relative is not None
             target_path = f"{target_root.value}/{classified.relative}"
-            target = candidate_files.get(target_path)
-            if target is not None:
-                translated_files[target_path] = target
+            # Soft-publish nulls are explicit pack entries. Inventory targets that
+            # were never assembled (complete pairs, untouched) stay out of critic.
+            if target_path in candidate_files:
+                translated_files[target_path] = candidate_files[target_path]
+
+        for document in self.documents:
+            target_path = document.entry.pair.target_path.value
+            source_path = document.entry.pair.source_path.value
+            if source_path not in source_files:
+                source_files[source_path] = document.source
+            if target_path not in translated_files:
+                translated_files[target_path] = candidate_files.get(target_path)
 
         glossary_files: dict[str, bytes] = {}
         for root, snapshot in (
@@ -1320,28 +1332,32 @@ class RuntimeContent:
                     accepted_map, accepted_document = self._translate_document(
                         document, operator_context=operator_context
                     )
-                    accepted.append(accepted_map)
             except InvalidTranslationResponse:
-                assert plans.manifest is not None
-                # Soft-publish of partial successes lands in a later debt-map slice.
-                # Until then reopen the whole current batch without storing file bytes.
-                state = ContinuationState(
-                    STATE_VERSION,
-                    ContinuationStage.TRANSLATION,
-                    plans.manifest.direction,
-                    checkpoint_scope_sha256(
-                        plans.manifest,
-                        plans.preparation.inventory,
-                        translation_plan_sha256(plans.translation_plan),
-                    ),
-                    None,
-                    tuple(item.entry.pair.target_path for item in documents),
-                    (),
-                )
-                self.pending_translation_paths = state.pending_paths
-                raise SemanticCheckpointStop(
-                    self._capture(plans.preparation, state, plans)
-                ) from None
+                if self._legacy_pending_translation_stop:
+                    assert plans.manifest is not None
+                    # Continue harness only: reopen unfinished translation. Production
+                    # soft-publishes successes and sends failed targets to critic as null.
+                    state = ContinuationState(
+                        STATE_VERSION,
+                        ContinuationStage.TRANSLATION,
+                        plans.manifest.direction,
+                        checkpoint_scope_sha256(
+                            plans.manifest,
+                            plans.preparation.inventory,
+                            translation_plan_sha256(plans.translation_plan),
+                        ),
+                        None,
+                        tuple(item.entry.pair.target_path for item in documents),
+                        (),
+                    )
+                    self.pending_translation_paths = state.pending_paths
+                    raise SemanticCheckpointStop(
+                        self._capture(plans.preparation, state, plans)
+                    ) from None
+                # Soft-publish: keep successful UTF-8 assemblies, leave failed
+                # targets as null for critic, and do not open a translation checkpoint.
+                continue
+            accepted.append(accepted_map)
             accepted_full.append(accepted_document)
             self.accepted_maps = tuple(sorted(accepted, key=lambda item: item.target_path.value))
             self.accepted_documents = tuple(
@@ -1639,15 +1655,26 @@ class RuntimeContent:
         fixed_paths = {path for path, _content in plans.fixed_files}
         if (
             len(maps) != len(accepted_maps)
-            or not required_maps <= maps <= allowed
+            or not maps <= allowed
             or len(documents) != len(accepted_documents)
-            or not required_maps <= document_paths
+            or not document_paths <= allowed
+            or document_paths != maps
             or any(path not in allowed and path.value not in fixed_paths for path in document_paths)
         ):
             raise ContinuationStateError()
         files = dict(plans.fixed_files)
+        # Soft-publish: successful assemblies are UTF-8 bytes; failed required
+        # translator targets stay as null so critic must create the full file.
+        for path in required_maps:
+            accepted = documents.get(path)
+            files[path.value] = (
+                None
+                if accepted is None
+                else accepted.translated_markdown.encode("utf-8")
+            )
         for path, accepted in documents.items():
-            files[path.value] = accepted.translated_markdown.encode("utf-8")
+            if path not in required_maps:
+                files[path.value] = accepted.translated_markdown.encode("utf-8")
         self.documents = plans.documents
         self.entries = () if plans.manifest is None else plans.manifest.entries
         return WorkflowCandidate(pack(files), plans.documents)
@@ -1722,26 +1749,50 @@ class RuntimeContent:
         # the immutable run context instead of state left by an earlier run.
         context = self.source.context
         target = SnapshotRef(self.source.snapshots.source_snapshot.repository, context.current_head)
+        publishable_nulls = self._publishable_null_paths()
         return PublicationPlan(
             tuple(
                 FileChange(
                     RepoPath(path), self.source.github.read_bytes(target, RepoPath(path)), value
                 )
                 for path, value in unpack(candidate.content).items()
+                # Soft-publish nulls for failed translator targets stay out of
+                # Git; planned deletes/rename preimages still publish as None.
+                if value is not None or path in publishable_nulls
             ),
             (),
         )
+
+    def _publishable_null_paths(self) -> set[str]:
+        if self.plans is None:
+            return set()
+        paths: set[str] = set()
+        for item in self.plans.translation_plan.inputs:
+            if item.action is PlanAction.DELETE_TARGET and item.target_path is not None:
+                paths.add(item.target_path.value)
+            elif item.action in {PlanAction.RENAME_TARGET, PlanAction.RENAME_AND_TRANSLATE}:
+                for path in item.outputs:
+                    if path != item.target_path:
+                        paths.add(path.value)
+        return paths
 
     def validate_plan(
         self, snapshot: ImmutableRunSnapshot, candidate: WorkflowCandidate, plan: PublicationPlan
     ) -> None:
         files = unpack(candidate.content)
-        if {item.path.value: item.after for item in plan.files} != files:
+        publishable_nulls = self._publishable_null_paths()
+        published = {
+            path: value
+            for path, value in files.items()
+            if value is not None or path in publishable_nulls
+        }
+        if {item.path.value: item.after for item in plan.files} != published:
             raise RuntimeBoundaryError("candidate_plan_mismatch")
         for document in self.documents:
-            target = files[document.entry.pair.target_path.value]
+            target = files.get(document.entry.pair.target_path.value)
             if target is None:
-                raise RuntimeBoundaryError("candidate_target_missing")
+                # Soft-publish leaves failed translator targets as null for critic.
+                continue
             target_plan = build_markdown_plan(
                 document.plan.source_snapshot, document.entry.pair.target_path, target
             )
@@ -1809,16 +1860,19 @@ class RuntimeContent:
         /,
     ) -> QualityReviewResult:
         files = unpack(candidate.content)
-        # Preserve the pre-existing no-review result for absent/deleted targets.
+        # Preserve the pre-existing no-review result when the frozen group has
+        # no translated Markdown/TOC pairs and no translator scope documents.
         empty = CriticResult(Verdict.GREEN, ())
         unchanged = QualityReviewResult(
             candidate.content, None, candidate.content, empty, empty,
             False, False, None, self.accepted_maps,
         )
-        if not any(value is not None for value in files.values()):
+        if self.plans is None or self.plans.manifest is None:
+            return unchanged
+        if not self.documents and not any(value is not None for value in files.values()):
             return unchanged
         source_files, translated_files, glossary_files = self._pr_review_inputs(candidate)
-        if not source_files and not translated_files:
+        if not source_files:
             return unchanged
         assert self.plans is not None and self.plans.manifest is not None
         source_snapshot = self.plans.preparation.snapshots.source_snapshot

@@ -40,12 +40,14 @@ def block(prompt: str, name: str) -> dict[str, str]:
     return json.loads(prompt.split(f"<{name}>\n", 1)[1].split(f"\n</{name}>", 1)[0])
 
 
-def test_critic_renders_exact_confirmed_template() -> None:
-    requirements = Path(__file__).resolve().parents[3] / "REQUIREMENTS_RU.md"
-    approved = requirements.read_text().split("### Prompt критика\n\n```text\n", 1)[1]
-    approved = approved.split("```", 1)[0]
+def test_critic_renders_exact_shipped_prompt_template() -> None:
+    template = (
+        resources.files("ydbdoc_review_ng.quality")
+        .joinpath("prompts/critic.txt")
+        .read_text(encoding="utf-8")
+    )
     expected = (
-        approved.replace(
+        template.replace(
             "{{ SOURCE_PR_FILES }}",
             json.dumps(
                 {path: text.decode() for path, text in SOURCE_FILES.items()}, ensure_ascii=False

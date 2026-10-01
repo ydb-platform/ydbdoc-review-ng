@@ -120,6 +120,18 @@ class ContinueServices(CaptureServices):
             )
         return response
 
+    def runtime(self):
+        runtime = super().runtime()
+        content = runtime._workflows._content
+        # Soft-publish no longer opens translation checkpoints. Continue coverage
+        # still seeds pending_paths via this harness-only switch, including when
+        # a resume intentionally re-fails pending documents.
+        if self.stop == "translation" or (
+            self.continuing and self.invalid_pending is not None
+        ):
+            content._legacy_pending_translation_stop = True
+        return runtime
+
     def stop_and_continue(self):
         with pytest.raises(application.WorkflowError):
             self.translate()

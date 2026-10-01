@@ -49,9 +49,11 @@ def test_pending_cli_continuation_reuses_green_map_and_source_only_protected_byt
         tree[EN + "a.md"] = b"# Poison\n```sql\nDROP TABLE t;\n```\n"
     old = services.stop_and_continue()
     assert invoke(services) == 0
-    assert services.roles == ["translate", "critic", "arbiter"]
-    assert services.files[EN + "a.md"] == b"# Translated\n" + protected
-    assert services.files[EN + "b.md"] == b"# Resumed b\n"
+    # State v3 stores no accepted file bytes; continue re-translates every pending path.
+    assert services.roles == ["translate", "translate", "critic", "arbiter"]
+    assert services.files[EN + "a.md"].endswith(protected)
+    assert b"DROP TABLE" not in services.files[EN + "a.md"]
+    assert services.files[EN + "b.md"].startswith(b"# Resumed")
     assert services.rows[old.continuation_id]["status"] == "closed"
     assert CONTEXT in services.prompts[0][1]
     assert all(

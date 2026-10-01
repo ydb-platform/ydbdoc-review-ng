@@ -352,10 +352,10 @@ def test_translate_success_reviews_then_publishes_once_and_terminalizes() -> Non
         "snapshot:translate",
         "budget",
         "prepare:direction-scope-translate-assemble-reparse",
-        "review:t011",
-        "review:critic-editor",
         "validate:initial",
         "publish:initial",
+        "review:t011",
+        "review:critic-editor",
         "report:current-pr-verdict",
         "job:finish:succeeded",
     ]
@@ -379,6 +379,8 @@ def test_translate_applies_critic_edit_and_publishes_exactly_once() -> None:
         "snapshot:translate",
         "budget",
         "prepare:direction-scope-translate-assemble-reparse",
+        "validate:initial",
+        "publish:initial",
         "review:t011",
         "review:critic-editor",
         "validate:repair",
@@ -387,7 +389,7 @@ def test_translate_applies_critic_edit_and_publishes_exactly_once() -> None:
         "job:finish:succeeded",
     ]
     assert scenario.model_calls == ["translate", "critic"]
-    assert scenario.published_branches == ["translation/pr-42"]
+    assert scenario.published_branches == ["translation/pr-42", "translation/pr-42"]
 
 
 def test_verify_success_never_checks_budget_or_translates_and_publishes_once() -> None:
@@ -450,14 +452,15 @@ def test_t017_f10_success_terminal_audit_receives_final_translate_and_repair_sha
     assert verify_persistence.finished_target_shas == [REPAIRED_SHA.value]
 
 
-def test_t017_r08_failed_during_review_audits_no_published_sha() -> None:
+def test_t017_r08_failed_during_review_audits_soft_published_sha() -> None:
+    """Soft-publish commits before critic; review failure still audits that SHA."""
     scenario = Scenario(fail_once_at={"review:t011"})
     workflows, persistence = build_workflows(scenario)
 
     with pytest.raises(WorkflowError):
         workflows.doc_translate(translate_input())
 
-    assert persistence.finished_target_shas == [None]
+    assert persistence.finished_target_shas == [INITIAL_SHA.value]
 
 
 def test_t017_r08_failed_after_repair_publication_audits_repaired_sha() -> None:
@@ -548,8 +551,6 @@ def test_scope_limit_failure_stops_before_model_calls_and_publication(diagnostic
                 "snapshot:translate",
                 "budget",
                 "prepare:direction-scope-translate-assemble-reparse",
-                "review:t011",
-                "review:critic-editor",
                 "validate:initial",
             ],
         ),
@@ -561,8 +562,6 @@ def test_scope_limit_failure_stops_before_model_calls_and_publication(diagnostic
                 "snapshot:translate",
                 "budget",
                 "prepare:direction-scope-translate-assemble-reparse",
-                "review:t011",
-                "review:critic-editor",
                 "validate:initial",
                 "publish:initial",
             ],
@@ -575,6 +574,8 @@ def test_scope_limit_failure_stops_before_model_calls_and_publication(diagnostic
                 "snapshot:translate",
                 "budget",
                 "prepare:direction-scope-translate-assemble-reparse",
+                "validate:initial",
+                "publish:initial",
                 "review:t011",
             ],
         ),
@@ -586,10 +587,10 @@ def test_scope_limit_failure_stops_before_model_calls_and_publication(diagnostic
                 "snapshot:translate",
                 "budget",
                 "prepare:direction-scope-translate-assemble-reparse",
-                "review:t011",
-                "review:critic-editor",
                 "validate:initial",
                 "publish:initial",
+                "review:t011",
+                "review:critic-editor",
                 "report:current-pr-verdict",
             ],
         ),
@@ -670,7 +671,12 @@ def test_invalid_critic_edit_fails_review_without_publication_or_semantic_verdic
 
     assert captured.value.stage is WorkflowStage.REVIEW
     preparation = (
-        ["budget", "prepare:direction-scope-translate-assemble-reparse"]
+        [
+            "budget",
+            "prepare:direction-scope-translate-assemble-reparse",
+            "validate:initial",
+            "publish:initial",
+        ]
         if mode == "translate"
         else ["load:verify-candidate", "validate:initial"]
     )
@@ -684,7 +690,9 @@ def test_invalid_critic_edit_fails_review_without_publication_or_semantic_verdic
         "job:finish:failed",
     ]
     assert scenario.model_calls == (["translate", "critic"] if mode == "translate" else ["critic"])
-    assert scenario.published_branches == []
+    assert scenario.published_branches == (
+        ["translation/pr-42"] if mode == "translate" else []
+    )
     assert persistence.finished_errors == ["review_failed"]
     assert "RED" not in str(captured.value)
 
