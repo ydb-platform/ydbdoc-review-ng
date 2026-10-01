@@ -117,7 +117,8 @@ def test_undetermined_uses_canonical_diagnostic() -> None:
         diagnostic,
     )
     assert result.unresolved_pairs == (pair,)
-    assert "doc_verify" in DIRECTION_UNDETERMINED_ACTION
+    assert "doc_continue" in DIRECTION_UNDETERMINED_ACTION
+    assert "/ydbdoc continue" in DIRECTION_UNDETERMINED_ACTION
 
 
 def test_complete_verdict_requires_both_present() -> None:

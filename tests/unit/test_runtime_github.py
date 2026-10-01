@@ -98,7 +98,7 @@ def test_rerun_does_not_replace_a_translation_head_that_moved() -> None:
     assert not any(method == "PATCH" for method, _path, _payload in calls)
 
 
-def test_existing_pr_body_records_the_new_translation_commit() -> None:
+def test_existing_pr_body_keeps_provenance_without_public_sha() -> None:
     calls: list[tuple[str, str, object]] = []
 
     def transport(method: str, path: str, payload: object) -> object:
@@ -125,8 +125,8 @@ def test_existing_pr_body_records_the_new_translation_commit() -> None:
     body = calls[-1][2]["body"]
     assert body.count("ydbdoc-source-pr:") == 1
     assert body.count("ydbdoc-source-sha:") == 1
-    assert body.count("Checked translation commit:") == 1
-    assert f"Checked translation commit: {translated.value}" in body
+    assert "Checked translation commit:" not in body
+    assert translated.value not in body.replace(backend.source_sha.value, "")
     assert body.endswith("Operator note\n")
 
 

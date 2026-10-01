@@ -372,8 +372,7 @@ class GitHubBackend:
                 "head": context.branch,
                 "base": context.base,
                 "body": f"<!-- ydbdoc-source-pr:{self.source_pr} -->\n"
-                f"<!-- ydbdoc-source-sha:{self.source_sha.value if self.source_sha else ''} -->\n"
-                "Checked translation commit: " + sha.value,
+                f"<!-- ydbdoc-source-sha:{self.source_sha.value if self.source_sha else ''} -->\n",
             },
         )
         return int(result["number"])
@@ -399,7 +398,7 @@ class GitHubBackend:
             f"/pulls/{pr_number}",
             {
                 "base": context.base,
-                "body": provenance + "Checked translation commit: " + sha.value + "\n" + body,
+                "body": provenance + body,
             },
         )
 

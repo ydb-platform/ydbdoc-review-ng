@@ -43,8 +43,8 @@ DIRECTION_UNDETERMINED_WARNING = (
     "Автоматический перевод не запущен: не удалось определить направление перевода"
 )
 DIRECTION_UNDETERMINED_ACTION = (
-    "Уточните исходные изменения и запустите новый `doc_translate`. "
-    "Для проверки исправленной translation branch используйте `doc_verify`."
+    "Добавьте комментарий `/ydbdoc continue` с пояснением направления перевода "
+    "и снова поставьте label `doc_continue`."
 )
 
 

@@ -21,9 +21,8 @@
 | 11 | Full suite + live PR | pending |
 
 > [!success] Offline suite (2026-10-01)
-> Full non-live pytest: **2222 passed**, 3 deselected (`live`). Continue_review
-> timeline/commits и soft-publish/critic-push ожидания выровнены под контракт.
-> Остаётся только live `doc_translate` gate (нужны credentials / push).
+> Full non-live pytest earlier: **2222 passed**, 3 deselected (`live`).
+> Live `doc_translate` gate still needs credentials / push.
 
 ## Neural review triage (2026-10-01)
 
@@ -39,51 +38,32 @@ vs `REQUIREMENTS_RU.md`. Fix only contract violations; skip invented requirement
 | 5 | First push must create translation PR | **fixed** |
 | 6 | Markdown/YFM diagnostics block assembled UTF-8 publish | **fixed** |
 | 7 | Critic cannot rewrite TOC href/hierarchy or fill null TOC | **fixed** |
+| 8 | doc_verify missing target → null to critic | **fixed** (`5e0c140`) |
+| 9 | doc_verify only translation PR diff, not full frozen group | **fixed** (`5e0c140`) |
 | 10 | Findings with target_line=null not publishable | **fixed** |
 | 11 | Zero commits + RED → source report + null checkpoint | **fixed** |
-| 15 | Zero text pairs auto-GREEN without critic/arbiter | **fixed** |
-| 22 | Raw Markdown fallback bypasses segment ID contract | **fixed** |
-| 8 | doc_verify missing target → verification_target_missing | deferred |
-| 9 | doc_verify only translation PR diff, not full frozen group | deferred |
-| 12 | Resource/TOC-only PRs rejected after direction | deferred |
-| 13 | Both-locale changes auto COMPLETE_PAIR | deferred |
+| 12 | Resource/TOC-only PRs rejected after direction | **fixed** (`5e0c140`) |
+| 13 | Both-locale changes auto COMPLETE_PAIR | **fixed** (`5e0c140`) |
 | 14 | Critic/arbiter missing TOC before/after + binary manifest | deferred |
+| 15 | Zero text pairs auto-GREEN without critic/arbiter | **fixed** |
 | 16–18 | TOC delta / continue scope_sha issues | deferred |
-| 19–20 | Verify close RED checkpoint; new translate deletes branch | deferred |
+| 19 | Verify GREEN/YELLOW closes prior RED checkpoint | **fixed** (`4d1b991`) |
+| 20 | New translate deletes branch + closes checkpoints | **fixed** (`4d1b991`) |
 | 21 | Source echo correction not wired | deferred |
-| 23 | Trigger label not removed after acceptance | deferred |
-| 24–25 | direction_undetermined / strip SHA from comments | deferred (P2) |
+| 22 | Raw Markdown fallback bypasses segment ID contract | **fixed** |
+| 23 | Trigger label not removed after acceptance | **fixed** (`4d1b991`) |
+| 24 | direction_undetermined → `/ydbdoc continue` | **fixed** (P2) |
+| 25 | Strip SHA/internal codes from public comments | **fixed** (P2) |
 
 ## Известные расхождения в коде
 
-- ~~`direction.parse_inventory_response` требует `files[]` с `action`/`toc_delta` от модели.~~
-  Direction-only schema landed; Python `mirror_classified_files` владеет actions.
-  Complete pairs (оба locale modified/added) помечаются `none` / `COMPLETE_PAIR` из Git.
-- `SourceSemanticAction` / `semantic_actions` в inventory ещё пишутся для continue codec (временный bridge).
-- ~~`DocumentChunk` / chunk translator в `translation/document.py`.~~
-  Один файл = один translate request; adaptive content-filter split удалён.
-  Тип `DocumentChunk` ещё живёт как внутренний whole-file контейнер — см. срез ниже.
-- ~~`STATE_VERSION = 2` (нужен 3); поля `accepted_documents`, `candidate_sha256`.~~
-  State v3: `target_sha` + `pending_paths`/`review_paths`; candidate bytes только с ветки.
-- ~~Soft-publish частичных translation success до critic.~~
-  `doc_translate` публикует собранный UTF-8 до critic; failed translator paths = JSON null
-  в critic payload (не delete в Git). Continue harness ещё умеет открыть translation
-  checkpoint через `_legacy_pending_translation_stop` для pending_paths coverage.
-- ~~YELLOW в continuation трактуется как незакрытый semantic stop (как RED).~~
-  Checkpoint открывает только RED; YELLOW = успех, в QA — руки + `doc_verify`.
-- ~~Critic: успешный one-shot чанк сразу commit/push до arbiter.~~
-  Context chunking по целым source/target парам + immediate push; пара, которая
-  не влезает одна, остаётся unreviewed → RED с null location.
-- ~~Старые per-pair `select_direction` / `DirectionModel*` живут рядом с inventory classifier.~~
-  Удалены. Остаются bridge-типы `DirectionPairVerdict` /
-  `DirectionSelectionResult` для `freeze_scope_manifest`.
-- ~~TOC §3: append-only `{name,href}` + fail-closed на delete/rename/reorder/hierarchy.~~
-  Structural applicator `toc_delta.apply_toc_delta`: add/delete/rename/change,
-  href, hierarchy, includes, conditions; unrelated target entries preserved;
-  delete-only without target TOC creates no file. DeepSeek JSON-ID string
-  translation for new/changed `name`/`title`/`label`: one retry; map failure →
-  TOC pending null, other files continue (same soft-publish path as docs).
-- ~~Reporting: public findings capped by files (10), not by findings (25).~~
-  QA comment caps at 25 findings with omitted counter; GREEN/YELLOW/RED icons,
-  cost (unknown ≠ 0), YELLOW success recipe (`doc_verify`).
-- Offline suite green; **live PR / production `doc_translate` still pending**.
+- Complete-pair Git heuristic removed from direction/mirror; both-locale edits
+  stay in translate scope when direction requires it.
+- Resource/TOC-only PRs can select direction with empty Markdown inventories and
+  plan `COPY_TARGET` / delete / rename for locale assets.
+- New `doc_translate` deletes `translation/pr-{n}` and closes open/pending
+  checkpoints before snapshot; trigger labels removed after authorize.
+- `doc_verify` GREEN/YELLOW closes prior RED checkpoint for the translation.
+- Remaining deferred: critic TOC/binary review context (#14), TOC delta §3
+  edges (#16–17), continue TOC scope_sha (#18), source-echo correction (#21).
+- Offline suite mostly green; **live PR / production `doc_translate` still pending**.
