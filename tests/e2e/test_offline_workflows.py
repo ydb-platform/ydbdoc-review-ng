@@ -22,15 +22,7 @@ from ydbdoc_review_ng.application import (
     WorkflowError,
     WorkflowStage,
 )
-from ydbdoc_review_ng.direction import (
-    Direction,
-    DirectionModelDecision,
-    DirectionModelRequest,
-    DirectionModelResponse,
-    DirectionPairVerdict,
-    DirectionSelectionState,
-    select_direction,
-)
+from ydbdoc_review_ng.direction import Direction
 from ydbdoc_review_ng.domain import (
     GitSha,
     Locale,
@@ -38,15 +30,6 @@ from ydbdoc_review_ng.domain import (
     RepoPath,
     RepositoryId,
     SnapshotRef,
-)
-from ydbdoc_review_ng.locales import (
-    ChangedFileKind,
-    ChangedMarkdownFile,
-    LocalePairInventory,
-    LocaleRoots,
-    PairFileState,
-    PairKey,
-    SnapshotLocaleFile,
 )
 from ydbdoc_review_ng.models import ModelCallResult, ModelRequest
 from ydbdoc_review_ng.parser.markdown import build_markdown_plan
@@ -249,18 +232,6 @@ class FixedClock:
         return NOW
 
 
-class DirectionModel:
-    def __init__(self, calls: list[str], verdict: DirectionPairVerdict) -> None:
-        self.calls = calls
-        self.verdict = verdict
-
-    def invoke(self, request: DirectionModelRequest, /) -> DirectionModelResponse:
-        self.calls.append("direction")
-        return DirectionModelResponse(
-            tuple(DirectionModelDecision(pair.key, self.verdict) for pair in request.pairs)
-        )
-
-
 class TranslationModel:
     def __init__(self, calls: list[str], prefix: str, *, malformed: bool = False) -> None:
         self.calls = calls
@@ -301,34 +272,6 @@ class Case:
     malformed_translation: bool = False
     mixed_locale: bool = False
     repair: bool = False
-
-
-def inventory(case: Case, snapshot: SnapshotRef) -> LocalePairInventory:
-    roots = LocaleRoots(RepoPath("ydb/docs/ru"), RepoPath("ydb/docs/en"))
-    key = PairKey(RepoPath("core/page.md"))
-    ru_path = RepoPath("ydb/docs/ru/core/page.md")
-    en_path = RepoPath("ydb/docs/en/core/page.md")
-    changes = tuple(
-        ChangedMarkdownFile(
-            roots,
-            ChangedFileKind.MODIFIED,
-            locale,
-            key,
-            path,
-            path,
-            None,
-            None,
-        )
-        for locale, path in ((Locale.RU, ru_path), (Locale.EN, en_path))
-    )
-    return LocalePairInventory(
-        roots,
-        key,
-        SnapshotLocaleFile(roots, Locale.RU, key, ru_path, snapshot, case.source),
-        SnapshotLocaleFile(roots, Locale.EN, key, en_path, snapshot, b"Incomplete target\n"),
-        changes,
-        PairFileState.BOTH_PRESENT,
-    )
 
 
 class SourceAdapter:
@@ -396,19 +339,11 @@ class ContentAdapter:
     def prepare_translation(self, snapshot: ImmutableRunSnapshot, /) -> WorkflowCandidate:
         source_snapshot = SnapshotRef(RepositoryId("ydb-platform/ydb"), snapshot.source_sha)
         if self.case.mixed_locale:
-            expected = (
-                DirectionPairVerdict.RU_TO_EN
-                if self.case.source_locale is Locale.RU
-                else DirectionPairVerdict.EN_TO_RU
-            )
-            selected = select_direction(
-                DirectionModel(self.case.calls, expected),
-                (inventory(self.case, source_snapshot),),
-            )
-            assert selected.state is DirectionSelectionState.SELECTED
-            assert selected.direction is (
-                Direction.RU_TO_EN if self.case.source_locale is Locale.RU else Direction.EN_TO_RU
-            )
+            # Inventory classifier owns production direction; offline harness only
+            # records the role call for timeline assertions.
+            self.case.calls.append("direction")
+            assert self.case.source_locale in {Locale.RU, Locale.EN}
+            _ = Direction.RU_TO_EN if self.case.source_locale is Locale.RU else Direction.EN_TO_RU
         plan = build_markdown_plan(source_snapshot, self.case.source_path, self.case.source)
         request = build_translation_request(self.case.source, plan)
         raw = TranslationModel(
@@ -646,9 +581,10 @@ def test_offline_translate_runs_real_pipeline_in_both_directions(
         assert b"```" + language in target
     assert case.calls == ["translate", "critic", "arbiter"]
     assert (
-        case.events.index("critic")
-        < case.events.index("validate")
+        case.events.index("validate")
         < case.events.index("publish")
+        < case.events.index("critic")
+        < case.events.index("arbiter")
         < case.events.index("create_pr")
     )
     assert ydb.terminal_rows[-1]["status"] == JobStatus.SUCCEEDED.value
@@ -710,14 +646,10 @@ def test_critic_edit_is_validated_and_published_once(tmp_path: Path, existing_pr
     result = workflows.doc_translate(translate_input(case))
 
     assert result.repair_applied
-    assert case.backend.commit_count == 1
-    editor_index = case.events.index("critic")
-    assert case.events[editor_index : editor_index + 4] == [
-        "critic",
-        "arbiter",
-        "validate",
-        "publish",
-    ]
+    # Soft-publish of translator output, then critic repair push (and optional
+    # final publish when the reviewed candidate still needs a head update).
+    assert case.backend.commit_count >= 2
+    assert case.events[:4] == ["validate", "publish", "critic", "arbiter"]
     pr_event = "update_pr" if existing_pr else "create_pr"
     assert [event for event in case.events if event.endswith("_pr")] == [pr_event]
     assert case.events.index("publish") < case.events.index(pr_event)

@@ -40,6 +40,8 @@
 - ~~Critic: успешный one-shot чанк сразу commit/push до arbiter.~~
   Context chunking по целым source/target парам + immediate push; пара, которая
   не влезает одна, остаётся unreviewed → RED с null location.
-- Старые per-pair `DirectionPairVerdict` / `select_direction` живут рядом с inventory classifier.
+- ~~Старые per-pair `select_direction` / `DirectionModel*` живут рядом с inventory classifier.~~
+  Удалены. Остаются bridge-типы `DirectionPairVerdict` /
+  `DirectionSelectionResult` для `freeze_scope_manifest`.
 - TOC §3: append-only `{name,href}` + fail-closed на delete/rename/reorder/hierarchy
   (`tests/unit/test_toc_section3_coverage.py`). Нужен полный structural delta applicator.
