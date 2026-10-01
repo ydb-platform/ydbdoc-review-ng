@@ -12,6 +12,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, cast
 
+import yaml
+
 from ydbdoc_review_ng.anchors import markdown_anchors
 from ydbdoc_review_ng.application import ImmutableRunSnapshot, WorkflowCandidate
 from ydbdoc_review_ng.application.workflows import CheckpointCapture, SemanticCheckpointStop
@@ -1992,16 +1994,20 @@ class RuntimeContent:
                     )
                     continue
                 document = by_path[accepted.target_path]
-                target_plan = build_markdown_plan(
-                    document.plan.source_snapshot, accepted.target_path, target
-                )
-                verify_document_candidate_with_links(
-                    document.source,
-                    document.plan,
-                    target,
-                    target_plan,
-                    self._link_resolver(document, target),
-                )
+                try:
+                    target_plan = build_markdown_plan(
+                        document.plan.source_snapshot, accepted.target_path, target
+                    )
+                    verify_document_candidate_with_links(
+                        document.source,
+                        document.plan,
+                        target,
+                        target_plan,
+                        self._link_resolver(document, target),
+                    )
+                except (DocumentTranslationError, ValueError, TypeError, UnicodeError, yaml.YAMLError):
+                    # Soft-published diagnostics must remain continuable (§2 / §5.3).
+                    pass
                 try:
                     values = _derive_target_translations(
                         document.source,
@@ -2201,12 +2207,9 @@ class RuntimeContent:
                     target_plan,
                     self._link_resolver(document, target),
                 )
-            except DocumentTranslationError as error:
-                # §2 / §7: assembled UTF-8 always publishes; structure is diagnostic.
-                if "structure_mismatch" not in str(error):
-                    raise
-            except (ValueError, TypeError, UnicodeError):
-                # Parser/YFM diagnostics must not block soft-publish.
+            except (DocumentTranslationError, ValueError, TypeError, UnicodeError, yaml.YAMLError):
+                # §2 / §7: assembled UTF-8 always publishes; Markdown/YFM/YAML
+                # diagnostics are semantic input, not publication gates.
                 pass
         if self.plans is None:
             raise RuntimeBoundaryError("translation_plan_missing")
@@ -2358,12 +2361,9 @@ class RuntimeContent:
                         target_plan,
                         self._link_resolver(document, translated_files.get(name)),
                     )
-                except DocumentTranslationError as error:
+                except (DocumentTranslationError, ValueError, TypeError, UnicodeError, yaml.YAMLError):
                     # §2 / §4.1: critic UTF-8 corrections still publish with diagnostics.
-                    if "structure_mismatch" not in str(error):
-                        raise QualityInputError("invalid_corrected_markdown") from error
-                except (ValueError, TypeError) as error:
-                    raise QualityInputError("invalid_corrected_markdown") from error
+                    pass
                 try:
                     values = _derive_target_translations(
                         source, source_plan, document.request, target, path
@@ -2486,8 +2486,14 @@ class RuntimeContent:
         )
         reviewable = {doc.entry.pair.target_path for doc in plans.documents} | {
             RepoPath(path)
-            for path, value in plans.fixed_files
-            if value is not None and classify_path(self.roots, RepoPath(path)).kind is PathKind.TOC
+            for path, _value in plans.fixed_files
+            if classify_path(self.roots, RepoPath(path)).kind is PathKind.TOC
+        } | {
+            item.target_path
+            for item in plans.translation_plan.inputs
+            if item.target_path is not None
+            and item.kind
+            in {PathKind.ASSET, PathKind.REDIRECTS, PathKind.LOCALIZED_OTHER}
         }
         if not set(review_paths).issubset(reviewable):
             raise RuntimeBoundaryError("review_checkpoint_path_mismatch")

@@ -1280,33 +1280,105 @@ def test_malformed_unknown_placeholder_remains_terminal_after_correction(
     assert len(models.calls) == 2
 
 
-def test_validate_plan_never_allows_unvalidated_translation_bytes() -> None:
+def test_validate_plan_soft_publishes_malformed_yaml_frontmatter() -> None:
+    """REQUIREMENTS §2/§7: YAML/parser diagnostics must not block publication (#5)."""
+    from ydbdoc_review_ng.continuation import SourceChangeInventory
+    from ydbdoc_review_ng.direction import Direction
+    from ydbdoc_review_ng.domain import Mode
+    from ydbdoc_review_ng.repository import BaseBranch, PullRequestState, ResolvedRepositorySnapshots
+    from ydbdoc_review_ng.runtime_github import GitHubBackend
+    from ydbdoc_review_ng.scope import PotentialScopeSet, ScopeManifest
+
     document = document_for(b"# Source\n")
     target_path = document.entry.pair.target_path
     invalid = b'---\ntitle: "unterminated\n---\n'
-    content = content_with(ScriptedModels([]))
+    snap = SnapshotRef(RepositoryId("ydb-platform/ydb"), GitSha("a" * 40))
+    source = RuntimeSource({}, cast(GitHubBackend, object()))
+    source.snapshots = ResolvedRepositorySnapshots(
+        PullRequestState.MERGED,
+        BaseBranch("main"),
+        snap,
+        snap,
+        snap,
+        snap,
+        snap,
+        snap,
+        snap,
+    )
+    content = RuntimeContent(source, cast(RecordedModels, ScriptedModels([])), {})
+    preparation = FrozenPreparation(
+        ImmutableRunSnapshot(Mode.DOC_TRANSLATE, snap.commit_sha, None, "translation/pr-1", None),
+        source.snapshots,
+        SourceChangeInventory(()),
+        snap,
+        (),
+        PotentialScopeSet(snap, content.roots, (), None),
+        True,
+    )
+    content.plans = FrozenSourcePlans(
+        preparation,
+        ScopeManifest(Direction.RU_TO_EN, snap, content.roots, (), (), 0, 0),
+        (document,),
+        (),
+        TranslationPlan(Direction.RU_TO_EN, (), ()),
+    )
     content.documents = (document,)
     candidate = WorkflowCandidate(pack({target_path.value: invalid}), None)
     plan = PublicationPlan((FileChange(target_path, None, invalid),), ())
 
-    with pytest.raises(yaml.YAMLError):
-        content.validate_plan(cast(ImmutableRunSnapshot, object()), candidate, plan)
+    content.validate_plan(cast(ImmutableRunSnapshot, object()), candidate, plan)
 
 
-def test_validate_plan_rejects_nonsymmetric_existing_target_link() -> None:
+def test_validate_plan_soft_publishes_nonsymmetric_existing_target_link() -> None:
+    """REQUIREMENTS §2: link-shape diagnostics must not block soft-publish."""
+    from ydbdoc_review_ng.continuation import SourceChangeInventory
+    from ydbdoc_review_ng.direction import Direction
+    from ydbdoc_review_ng.domain import Mode
+    from ydbdoc_review_ng.repository import BaseBranch, PullRequestState, ResolvedRepositorySnapshots
+    from ydbdoc_review_ng.runtime_github import GitHubBackend
+    from ydbdoc_review_ng.scope import PotentialScopeSet, ScopeManifest
+
     document = document_for(
         b"See [query hints](./dev/optimization/hints.md).\n",
         target=b"See [query hints](./dev/query-execution-optimization/query-hints.md).\n",
     )
     target_path = document.entry.pair.target_path
     localized = b"See [query hints](./dev/query-execution-optimization/query-hints.md).\n"
-    content = content_with(ScriptedModels([]))
+    snap = SnapshotRef(RepositoryId("ydb-platform/ydb"), GitSha("a" * 40))
+    source = RuntimeSource({}, cast(GitHubBackend, object()))
+    source.snapshots = ResolvedRepositorySnapshots(
+        PullRequestState.MERGED,
+        BaseBranch("main"),
+        snap,
+        snap,
+        snap,
+        snap,
+        snap,
+        snap,
+        snap,
+    )
+    content = RuntimeContent(source, cast(RecordedModels, ScriptedModels([])), {})
+    preparation = FrozenPreparation(
+        ImmutableRunSnapshot(Mode.DOC_TRANSLATE, snap.commit_sha, None, "translation/pr-1", None),
+        source.snapshots,
+        SourceChangeInventory(()),
+        snap,
+        (),
+        PotentialScopeSet(snap, content.roots, (), None),
+        True,
+    )
+    content.plans = FrozenSourcePlans(
+        preparation,
+        ScopeManifest(Direction.RU_TO_EN, snap, content.roots, (), (), 0, 0),
+        (document,),
+        (),
+        TranslationPlan(Direction.RU_TO_EN, (), ()),
+    )
     content.documents = (document,)
     candidate = WorkflowCandidate(pack({target_path.value: localized}), None)
     plan = PublicationPlan((FileChange(target_path, document.entry.target_content, localized),), ())
 
-    with pytest.raises(DocumentTranslationError, match="structure_mismatch"):
-        content.validate_plan(cast(ImmutableRunSnapshot, object()), candidate, plan)
+    content.validate_plan(cast(ImmutableRunSnapshot, object()), candidate, plan)
 
 
 def test_lost_placeholder_candidate_is_not_created() -> None:

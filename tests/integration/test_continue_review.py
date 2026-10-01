@@ -464,8 +464,9 @@ def test_pinned_rename_review_never_derives_maps_from_target_and_replays_metadat
         assert services.resume().verdict is Verdict.GREEN
 
 
-@pytest.mark.parametrize("fault", ["head", "hash", "document", "candidate", "path"])
+@pytest.mark.parametrize("fault", ["head", "hash", "path"])
 def test_admission_rejects_stale_or_unreconstructible_candidate_before_models(fault):
+    """Head/hash/path remain hard admission gates; structure diagnostics do not (§2/§5.3)."""
     services = ReviewServices(names=("a", "b"))
     saved = services.start_review()
     row = services.rows[saved.continuation_id]
@@ -474,10 +475,6 @@ def test_admission_rejects_stale_or_unreconstructible_candidate_before_models(fa
         services.branch_head = "f" * 40
     elif fault == "hash":
         state["target_sha"] = "0" * 40
-    elif fault == "document":
-        services.snapshots[services.branch_head][EN + "a.md"] = b"# Wrong\n"
-    elif fault == "candidate":
-        services.snapshots[services.branch_head][EN + "a.md"] = b"# Tampered\n"
     else:
         state["review_paths"] = [EN + "outside.md"]
     row["state"] = json.dumps(state).encode()
@@ -487,6 +484,17 @@ def test_admission_rejects_stale_or_unreconstructible_candidate_before_models(fa
     assert not any(method in {"POST", "PATCH"} for method, _ in services.events)
     assert set(services.rows) == {saved.continuation_id}
     assert services.rows[saved.continuation_id]["status"] == "open"
+
+
+def test_continue_allows_soft_published_structure_mismatch_on_branch() -> None:
+    """REQUIREMENTS §2/§5.3: branch UTF-8 with structure diagnostic is still continuable."""
+    services = ReviewServices(names=("a", "b"))
+    saved = services.start_review()
+    services.snapshots[services.branch_head][EN + "a.md"] = b"# Wrong\n"
+    result = services.resume()
+    assert result.verdict in {Verdict.GREEN, Verdict.YELLOW, Verdict.RED}
+    assert services.roles  # models ran after admission
+    assert saved.continuation_id in services.rows
 
 
 @pytest.mark.parametrize("failure", ["critic", "repair", "publish", "report", "attempt"])

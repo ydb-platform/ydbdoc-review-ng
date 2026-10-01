@@ -208,3 +208,136 @@ class _TableShapeMismatchModels:
             elif value.strip() == "1 | 2":
                 values[key] = "1 | 2 | 3"
         return ModelCallResult(json.dumps(values, ensure_ascii=False), None, ())
+
+
+def test_markdown_spacing_diagnostic_does_not_block_validate_plan() -> None:
+    """REQUIREMENTS §2: blank_after_heading must not gate assembled UTF-8 (#3)."""
+    from ydbdoc_review_ng.application import ImmutableRunSnapshot, WorkflowCandidate
+    from ydbdoc_review_ng.continuation import SourceChangeInventory
+    from ydbdoc_review_ng.direction import Direction
+    from ydbdoc_review_ng.domain import Mode
+    from ydbdoc_review_ng.publication import FileChange, PublicationPlan
+    from ydbdoc_review_ng.repository import BaseBranch, PullRequestState, ResolvedRepositorySnapshots
+    from ydbdoc_review_ng.runtime_content import FrozenPreparation, FrozenSourcePlans
+    from ydbdoc_review_ng.runtime_github import GitHubBackend
+    from ydbdoc_review_ng.scope import PotentialScopeSet, ScopeManifest
+    from ydbdoc_review_ng.translation_plan import TranslationPlan
+
+    spaced = b"# Corrected\nText\n"
+    document = document_for(b"# Source a\n", target=b"# Translated\n")
+    source = RuntimeSource({}, cast(GitHubBackend, object()))
+    source.snapshots = ResolvedRepositorySnapshots(
+        PullRequestState.MERGED,
+        BaseBranch("main"),
+        SNAPSHOT,
+        SNAPSHOT,
+        SNAPSHOT,
+        SNAPSHOT,
+        SNAPSHOT,
+        SNAPSHOT,
+        SNAPSHOT,
+    )
+    content = RuntimeContent(source, cast(RecordedModels, ScriptedModels([])), {})
+    preparation = FrozenPreparation(
+        ImmutableRunSnapshot(Mode.DOC_TRANSLATE, SNAPSHOT.commit_sha, None, "translation/pr-1", None),
+        source.snapshots,
+        SourceChangeInventory(()),
+        SNAPSHOT,
+        (),
+        PotentialScopeSet(SNAPSHOT, content.roots, (), None),
+        True,
+    )
+    content.plans = FrozenSourcePlans(
+        preparation,
+        ScopeManifest(Direction.RU_TO_EN, SNAPSHOT, content.roots, (), (), 0, 0),
+        (document,),
+        (),
+        TranslationPlan(Direction.RU_TO_EN, (), ()),
+    )
+    content.documents = (document,)
+    target = document.entry.pair.target_path
+    candidate = WorkflowCandidate(pack({target.value: spaced}), (document,))
+    plan = PublicationPlan((FileChange(target, None, spaced),), ())
+    content.validate_plan(
+        ImmutableRunSnapshot(Mode.DOC_TRANSLATE, SNAPSHOT.commit_sha, None, "translation/pr-1", None),
+        candidate,
+        plan,
+    )
+
+
+def test_malformed_yaml_frontmatter_does_not_block_validate_plan() -> None:
+    """REQUIREMENTS §2/§7: broken YAML frontmatter is diagnostic, not a gate (#5)."""
+    from ydbdoc_review_ng.application import ImmutableRunSnapshot, WorkflowCandidate
+    from ydbdoc_review_ng.continuation import SourceChangeInventory
+    from ydbdoc_review_ng.direction import Direction
+    from ydbdoc_review_ng.domain import Mode
+    from ydbdoc_review_ng.publication import FileChange, PublicationPlan
+    from ydbdoc_review_ng.repository import BaseBranch, PullRequestState, ResolvedRepositorySnapshots
+    from ydbdoc_review_ng.runtime_content import FrozenPreparation, FrozenSourcePlans
+    from ydbdoc_review_ng.runtime_github import GitHubBackend
+    from ydbdoc_review_ng.scope import PotentialScopeSet, ScopeManifest
+    from ydbdoc_review_ng.translation_plan import TranslationPlan
+
+    malformed = b"---\ntitle: [not closed\n---\nCorrected text\n"
+    document = document_for(b"Source paragraph.\n", target=b"# Translated\n")
+    source = RuntimeSource({}, cast(GitHubBackend, object()))
+    source.snapshots = ResolvedRepositorySnapshots(
+        PullRequestState.MERGED,
+        BaseBranch("main"),
+        SNAPSHOT,
+        SNAPSHOT,
+        SNAPSHOT,
+        SNAPSHOT,
+        SNAPSHOT,
+        SNAPSHOT,
+        SNAPSHOT,
+    )
+    content = RuntimeContent(source, cast(RecordedModels, ScriptedModels([])), {})
+    preparation = FrozenPreparation(
+        ImmutableRunSnapshot(Mode.DOC_TRANSLATE, SNAPSHOT.commit_sha, None, "translation/pr-1", None),
+        source.snapshots,
+        SourceChangeInventory(()),
+        SNAPSHOT,
+        (),
+        PotentialScopeSet(SNAPSHOT, content.roots, (), None),
+        True,
+    )
+    content.plans = FrozenSourcePlans(
+        preparation,
+        ScopeManifest(Direction.RU_TO_EN, SNAPSHOT, content.roots, (), (), 0, 0),
+        (document,),
+        (),
+        TranslationPlan(Direction.RU_TO_EN, (), ()),
+    )
+    content.documents = (document,)
+    target = document.entry.pair.target_path
+    candidate = WorkflowCandidate(pack({target.value: malformed}), (document,))
+    plan = PublicationPlan((FileChange(target, None, malformed),), ())
+    content.validate_plan(
+        ImmutableRunSnapshot(Mode.DOC_TRANSLATE, SNAPSHOT.commit_sha, None, "translation/pr-1", None),
+        candidate,
+        plan,
+    )
+
+
+def test_restore_accepted_allows_soft_published_table_shape_diagnostic() -> None:
+    """REQUIREMENTS §5.3: continue restores soft-published table diagnostics (#4)."""
+    from ydbdoc_review_ng.continuation import AcceptedDocument
+    from ydbdoc_review_ng.runtime_content import FrozenSourcePlans
+
+    source = b"| A | B |\n| --- | --- |\n| 1 | 2 |\n"
+    published = b"| A | B | C |\n| --- | --- | --- |\n| 1 | 2 | 3 |\n"
+    document = document_for(source)
+    plans = FrozenSourcePlans(
+        cast(object, object()),
+        None,
+        (document,),
+        (),
+        cast(object, object()),
+    )
+    restored = content_with(ScriptedModels([])).restore_accepted_documents(
+        plans,
+        (AcceptedDocument(document.entry.pair.target_path, published.decode()),),
+    )
+    assert len(restored) == 1
+    assert restored[0].target_path == document.entry.pair.target_path
