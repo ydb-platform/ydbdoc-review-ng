@@ -33,10 +33,14 @@ vs `REQUIREMENTS_RU.md`. Fix only contract violations; skip invented requirement
 | # | Finding | Status |
 |---|---|---|
 | 1 | GREEN vs unpublished critic bytes (`publication_plan` old base head) | **fixed** |
+| 2 | Production chunking lacks prepare_request on RecordedModels | **fixed** |
 | 3 | Provider failure one page aborts whole job | **fixed** |
+| 4 | Critic failure: one retry; files to arbiter as-is | **fixed** |
 | 6 | Markdown/YFM diagnostics block assembled UTF-8 publish | **fixed** |
+| 7 | Critic cannot rewrite TOC href/hierarchy or fill null TOC | **fixed** |
+| 15 | Zero text pairs auto-GREEN without critic/arbiter | **fixed** |
 | 22 | Raw Markdown fallback bypasses segment ID contract | **fixed** |
-| 2,4,5,7–21,23–25 | Remaining P1/P2 | in progress |
+| 5,8–14,16–21,23–25 | Remaining P1/P2 | in progress |
 
 ## Известные расхождения в коде
 

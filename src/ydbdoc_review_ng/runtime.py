@@ -117,6 +117,25 @@ class RecordedModels:
             None if self.cost is None or attempt.cost_rub is None else self.cost + attempt.cost_rub
         )
 
+    def prepare_request(self, request: ModelRequest, /):
+        """Expose wire budget so critic/arbiter packing can split whole pairs (§4)."""
+        client_type = (
+            YandexOpenAIClient
+            if "deepseek" in request.model.lower()
+            else NativeYandexClient
+        )
+        client = client_type(
+            YandexCredentials(
+                self.environment.get("YANDEX_API_KEY", ""),
+                self.environment.get("YANDEX_FOLDER_ID", ""),
+            ),
+            self.transport,
+            self.record,
+            pricing=_PRODUCTION_PRICING,
+            execution=ExecutionConfig(max_attempts=1 if request.role is ModelRole.DIRECTION else 2),
+        )
+        return client.prepare_request(request)
+
     def invoke(self, request: ModelRequest, /) -> ModelCallResult:
         if self.job_id is None:
             raise RuntimeBoundaryError("model_job_missing")

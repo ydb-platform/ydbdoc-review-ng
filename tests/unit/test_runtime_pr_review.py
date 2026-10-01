@@ -148,27 +148,36 @@ def review_fixture():
 
 
 @pytest.mark.parametrize("files", [{}, {EN + "removed.md": None}])
-@pytest.mark.parametrize("has_manifest", [True, False])
-def test_empty_review_keeps_noop_result_without_model_calls(files, has_manifest):
+def test_empty_review_still_invokes_critic_and_arbiter(files):
+    """REQUIREMENTS §4.1: zero text pairs → critic {files:{}} + arbiter (#15)."""
     content, _reader = frozen_content({}, {RU + "removed.md": "removed"})
-    if not has_manifest:
-        content.plans = replace(content.plans, manifest=None)
-    models = FifoModels([])
+    models = FifoModels(
+        [
+            json.dumps({"files": {}}),
+            json.dumps({"verdict": "GREEN", "findings": []}),
+        ]
+    )
     content.models = models
     candidate = WorkflowCandidate(pack(files), None)
 
     result = content.review(content.plans.preparation.snapshot, candidate)
 
-    assert models.calls == []
-    assert result.original_candidate == candidate.content
-    assert result.final_candidate == candidate.content
-    assert result.repaired_candidate is None
-    assert result.primary.verdict is Verdict.GREEN
+    assert [call.role.value for call in models.calls] == ["critic", "arbiter"]
     assert result.final.verdict is Verdict.GREEN
-    assert result.primary.findings == result.final.findings == ()
-    assert not result.repair_attempted
-    assert not result.repair_applied
-    assert result.repair_error is None
+    assert result.final.findings == ()
+
+
+def test_empty_review_without_manifest_stays_noop():
+    content, _reader = frozen_content({}, {RU + "removed.md": "removed"})
+    content.plans = replace(content.plans, manifest=None)
+    models = FifoModels([])
+    content.models = models
+    candidate = WorkflowCandidate(pack({}), None)
+
+    result = content.review(content.plans.preparation.snapshot, candidate)
+
+    assert models.calls == []
+    assert result.final.verdict is Verdict.GREEN
     assert result.accepted_maps == ()
 
 
@@ -215,36 +224,33 @@ def test_runtime_reviews_all_files_once_and_preserves_arbiter_verdict(verdict):
 
 
 @pytest.mark.parametrize("has_document_plans", [True, False])
-def test_invalid_second_file_cannot_partially_modify_candidate(has_document_plans):
+def test_invalid_second_file_retries_then_passes_draft_to_arbiter(has_document_plans):
+    """REQUIREMENTS §4.1: after one critic retry, files go to arbiter as-is."""
     content, candidate = review_fixture()
     if not has_document_plans:
         content.documents = ()
-    original = candidate.content
-    documents_before = content.accepted_documents
-    maps_before = content.accepted_maps
+    invalid_files = {
+        EN + "a.md": "# BlobDepot\n\nUse `BlobDepot`.\n",
+        EN + "b.md": "# BlobDepot\n\nUse `WrongCode`.\n",
+    }
     models = FifoModels(
         [
-            json.dumps(
-                {
-                    "files": {
-                        EN + "a.md": "# BlobDepot\n\nUse `BlobDepot`.\n",
-                        EN + "b.md": "# BlobDepot\n\nUse `WrongCode`.\n",
-                    }
-                }
-            )
+            json.dumps({"files": invalid_files}),
+            json.dumps({"files": invalid_files}),
+            json.dumps({"verdict": "GREEN", "findings": []}),
         ]
     )
     content.models = models
-    with pytest.raises(QualityInputError):
-        content.review(content.plans.preparation.snapshot, candidate)
-    assert candidate.content == original
-    assert content.accepted_documents == documents_before
-    assert content.accepted_maps == maps_before
-    assert len(models.calls) == 1
+    result = content.review(content.plans.preparation.snapshot, candidate)
+    assert [call.role.value for call in models.calls] == ["critic", "critic", "arbiter"]
+    assert result.final.verdict is Verdict.GREEN
+    # Draft bytes preserved when critic corrections remain invalid.
+    assert unpack(result.final_candidate)[EN + "b.md"] == b"# Depot\n\nUse `BlobDepot`.\n"
 
 
-@pytest.mark.parametrize("invalid_change", [None, "href", "code", "link", "template"])
-def test_runtime_validates_and_applies_complete_toc_with_markdown(invalid_change):
+@pytest.mark.parametrize("invalid_change", [None, "href"])
+def test_runtime_applies_complete_toc_including_href_corrections(invalid_change):
+    """REQUIREMENTS §3.6/§4.1: critic may rewrite TOC href/hierarchy (#7)."""
     from tests.unit.test_translation_plan import (
         change,
         entry,
@@ -296,34 +302,12 @@ def test_runtime_validates_and_applies_complete_toc_with_markdown(invalid_change
         + ("wrong.md" if invalid_change == "href" else "a.md")
         + "\n- name: Target only\n  href: extra.md\n"
     )
-    for kind, old, new in (
-        ("code", "`BlobDepot`", "`WrongCode`"),
-        ("link", "(ref.md)", "(wrong.md)"),
-        ("template", "{{version}}", "{{wrong}}"),
-    ):
-        if invalid_change == kind:
-            corrected[EN + "toc.yaml"] = corrected[EN + "toc.yaml"].replace(old, new)
     models = FifoModels([json.dumps({"files": corrected}), '{"verdict":"GREEN","findings":[]}'])
     content.models = models
-    if invalid_change:
-        with pytest.raises((TranslationPlanError, QualityInputError)):
-            content.review(preparation.snapshot, candidate)
-        assert len(models.calls) == 1
-        assert unpack(candidate.content)[EN + "toc.yaml"] == toc
-    else:
-        result = content.review(preparation.snapshot, candidate)
-        assert prompt_map(models.calls[1], "translation-pr-files") == corrected
-        final_files = {path: text.encode() for path, text in corrected.items()}
-        assert unpack(result.final_candidate) == final_files
-        content.validate_plan(
-            preparation.snapshot,
-            WorkflowCandidate(result.final_candidate, None),
-            PublicationPlan(
-                tuple(FileChange(RepoPath(path), None, text) for path, text in final_files.items()),
-                (),
-            ),
-        )
-        assert content.plans.fixed_files == ((EN + "toc.yaml", toc),)
+    result = content.review(preparation.snapshot, candidate)
+    assert prompt_map(models.calls[1], "translation-pr-files") == corrected
+    final_files = {path: text.encode() for path, text in corrected.items()}
+    assert unpack(result.final_candidate) == final_files
 
 
 def test_pr_inputs_use_current_pinned_source_not_diff_or_preimage() -> None:

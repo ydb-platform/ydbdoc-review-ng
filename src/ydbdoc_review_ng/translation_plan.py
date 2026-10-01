@@ -656,9 +656,11 @@ def reconcile_candidate_outputs(
             content = candidate[target]
             expected = None if toc_postconditions is None else toc_postconditions.get(target)
             if item.expected_sha256 is None:
-                # Soft-pending TOC: null candidate is required until critic fills it.
-                if content is not None:
-                    raise TranslationPlanError("translation_plan_candidate_output_missing")
+                # Soft-pending TOC: null candidate until critic creates the file.
+                # Critic may supply a complete TOC (§3.6 / §4.1).
+                if content is None:
+                    continue
+                _toc(content, "translation_plan_toc_correction_invalid")
                 continue
             if (
                 content is None
@@ -667,7 +669,8 @@ def reconcile_candidate_outputs(
             ):
                 raise TranslationPlanError("translation_plan_candidate_output_missing")
             if expected is not None:
-                validate_toc_correction(expected, content)
+                # Critic may change href/hierarchy/conditions; only require parseable TOC.
+                _toc(content, "translation_plan_toc_correction_invalid")
         elif item.action is PlanAction.DELETE_TARGET:
             if target not in candidate or candidate[target] is not None:
                 raise TranslationPlanError("translation_plan_candidate_delete_missing")

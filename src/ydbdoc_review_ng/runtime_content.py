@@ -122,7 +122,6 @@ from ydbdoc_review_ng.translation import (
     restore_document,
     validate_chunk_response,
     validate_translation_values,
-    verify_document_candidate,
 )
 from ydbdoc_review_ng.translation.document import verify_document_candidate_with_links
 from ydbdoc_review_ng.translation_plan import (
@@ -138,7 +137,6 @@ from ydbdoc_review_ng.translation_plan import (
     reconcile_candidate_outputs,
     reconcile_fixed_outputs,
     translation_plan_sha256,
-    validate_toc_correction,
 )
 
 if TYPE_CHECKING:
@@ -2078,19 +2076,15 @@ class RuntimeContent:
     def _validate_toc_correction(
         snapshot: SnapshotRef, path: RepoPath, expected: bytes, corrected: bytes
     ) -> None:
-        for before, after in validate_toc_correction(expected, corrected):
-            if before == after:
-                continue
-            source, target = before.encode("utf-8"), after.encode("utf-8")
-            try:
-                verify_document_candidate(
-                    source,
-                    build_markdown_plan(snapshot, path, source),
-                    target,
-                    build_markdown_plan(snapshot, path, target),
-                )
-            except (ValueError, TypeError) as error:
-                raise QualityInputError("invalid_corrected_toc_label") from error
+        # Critic may rewrite href/hierarchy/conditions/labels (§3.6 / §4.1).
+        # Only require a parseable TOC document; fingerprint equality is not required.
+        from ydbdoc_review_ng.translation_plan import TranslationPlanError, _toc
+
+        try:
+            _toc(corrected, "translation_plan_toc_correction_invalid")
+        except TranslationPlanError as error:
+            raise QualityInputError("invalid_corrected_toc") from error
+        _ = (snapshot, path, expected)
 
     def review(
         self,
@@ -2099,8 +2093,6 @@ class RuntimeContent:
         /,
     ) -> QualityReviewResult:
         files = unpack(candidate.content)
-        # Preserve the pre-existing no-review result when the frozen group has
-        # no translated Markdown/TOC pairs and no translator scope documents.
         empty = CriticResult(Verdict.GREEN, ())
         unchanged = QualityReviewResult(
             candidate.content, None, candidate.content, empty, empty,
@@ -2108,11 +2100,8 @@ class RuntimeContent:
         )
         if self.plans is None or self.plans.manifest is None:
             return unchanged
-        if not self.documents and not any(value is not None for value in files.values()):
-            return unchanged
+        # REQUIREMENTS §4.1: zero text pairs still invoke critic {"files":{}} + arbiter.
         source_files, translated_files, glossary_files = self._pr_review_inputs(candidate)
-        if not source_files:
-            return unchanged
         assert self.plans is not None and self.plans.manifest is not None
         source_snapshot = self.plans.preparation.snapshots.source_snapshot
         direction = self.plans.manifest.direction

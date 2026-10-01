@@ -186,26 +186,32 @@ def review_pr(
 
     for chunk_pairs in critic_chunks:
         critic = build_critic(chunk_pairs)
-        if before_model_call is not None:
-            before_model_call()
-        response = executor.invoke(critic)
         target_paths = tuple(target for _source, target in chunk_pairs)
-        if not response.success or response.text is None:
-            if len(critic_chunks) <= 1 and not unreviewed:
-                raise QualityExecutionError("critic")
-            unreviewed.update(target_paths)
-            continue
-        try:
-            chunk_corrected = parse_pr_critic_response(response.text, target_paths=target_paths)
-            validate_files(chunk_corrected)
-        except Exception:
-            if len(critic_chunks) <= 1 and not unreviewed:
-                raise
-            unreviewed.update(target_paths)
-            continue
-        corrected.update(chunk_corrected)
-        if on_successful_critic_chunk is not None:
-            on_successful_critic_chunk(chunk_corrected)
+        response = None
+        for attempt in (1, 2):
+            if before_model_call is not None:
+                before_model_call()
+            response = executor.invoke(critic)
+            if response.success and response.text is not None:
+                try:
+                    chunk_corrected = parse_pr_critic_response(
+                        response.text, target_paths=target_paths
+                    )
+                    validate_files(chunk_corrected)
+                except Exception:
+                    if attempt == 2:
+                        # After one retry, files go to arbiter as-is (§4.1).
+                        response = None
+                        break
+                    continue
+                corrected.update(chunk_corrected)
+                if on_successful_critic_chunk is not None:
+                    on_successful_critic_chunk(chunk_corrected)
+                break
+            if attempt == 2:
+                # Provider failure after retry: keep draft bytes for arbiter.
+                response = None
+        # Critic failure itself does not mark unreviewed / force RED.
 
     arbiter_targets: dict[str, bytes | None] = {
         path: corrected.get(path, translated_files.get(path)) for path in translated_files
