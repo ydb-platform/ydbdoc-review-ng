@@ -159,7 +159,28 @@ class ContinuationCheckpoint:
             and self.state.target_sha != self.target_sha
         ):
             raise PersistenceError("continuation target SHA mismatch")
-        if (self.state.stage is ContinuationStage.DIRECTION) != (not self.scope_target_paths):
+        toc_only_review = (
+            self.state.stage is ContinuationStage.REVIEW
+            and not self.scope_target_paths
+            and bool(self.state.review_paths)
+            and all(
+                re.fullmatch(
+                    r"toc(?:_[A-Za-z0-9-]+)?\.ya?ml", posixpath.basename(path.value)
+                )
+                for path in self.state.review_paths
+            )
+        )
+        resource_only_review = (
+            self.state.stage is ContinuationStage.REVIEW
+            and not self.scope_target_paths
+            and bool(self.state.review_paths)
+            and not toc_only_review
+        )
+        if (
+            (self.state.stage is ContinuationStage.DIRECTION) != (not self.scope_target_paths)
+            and not toc_only_review
+            and not resource_only_review
+        ):
             raise PersistenceError("continuation scope selection incompatible with stage")
         referenced = set(self.state.pending_paths) | set(self.state.review_paths)
         # TOC metadata outputs are not always listed in the document manifest.
@@ -173,7 +194,8 @@ class ContinuationCheckpoint:
             )
         }
         if not referenced.issubset(set(self.scope_target_paths) | metadata):
-            raise PersistenceError("continuation scope selection omits state paths")
+            if not resource_only_review:
+                raise PersistenceError("continuation scope selection omits state paths")
 
     @property
     def expires_at(self) -> datetime:

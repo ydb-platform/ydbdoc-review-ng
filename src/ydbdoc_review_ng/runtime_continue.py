@@ -142,14 +142,26 @@ def replay_continue(
     metadata_paths = (
         tuple(
             RepoPath(path)
-            for path, value in plans.fixed_files
-            if value is not None
-            and classify_path(content.roots, RepoPath(path)).kind is PathKind.TOC
+            for path, _value in plans.fixed_files
+            if classify_path(content.roots, RepoPath(path)).kind is PathKind.TOC
         )
         if state.stage is ContinuationStage.REVIEW
         else ()
     )
-    validate_restored_documents(state, restored, metadata_paths=metadata_paths)
+    asset_paths = (
+        tuple(
+            item.target_path
+            for item in plans.translation_plan.inputs
+            if item.target_path is not None
+            and item.kind
+            in {PathKind.ASSET, PathKind.REDIRECTS, PathKind.LOCALIZED_OTHER}
+        )
+        if state.stage is ContinuationStage.REVIEW
+        else ()
+    )
+    validate_restored_documents(
+        state, restored, metadata_paths=metadata_paths + asset_paths
+    )
     required = {
         document.entry.pair.target_path
         for document in plans.documents
@@ -157,7 +169,7 @@ def replay_continue(
     }
     reviewable = {document.entry.pair.target_path for document in plans.documents} | set(
         metadata_paths
-    )
+    ) | set(asset_paths)
     if state.stage is ContinuationStage.TRANSLATION:
         if not set(state.pending_paths).issubset(required) or not referenced <= reviewable:
             raise ContinuationStateError()
@@ -182,7 +194,11 @@ def replay_continue(
             accepted_documents = _load_accepted_from_branch(
                 content, plans, state.target_sha, reviewable
             )
-            if not required.issubset({item.target_path for item in accepted_documents}):
+            loaded = {item.target_path for item in accepted_documents}
+            # Soft-published null targets (new missing pages) stay absent on the
+            # branch and must remain continuable for critic as JSON null (§5.1/§5.3).
+            missing = required - loaded
+            if missing - set(state.review_paths):
                 raise ContinuationStateError()
     else:
         raise ContinuationStateError()

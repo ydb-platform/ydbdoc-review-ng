@@ -838,3 +838,90 @@ def test_replacement_preserves_exactly_one_logical_checkpoint_after_boundary_fai
     assert services.roles == paid_calls
     with pytest.raises(PersistenceError):
         services.checkpoint()
+
+
+def test_continue_review_allows_missing_soft_published_target() -> None:
+    """REQUIREMENTS §5.3: REVIEW continue keeps null soft-publish targets (#1)."""
+
+    class FailB(ContinueServices):
+        def model(self, request):
+            body = json.loads(request.body)
+            props = request_schema(body)["schema"]["properties"]
+            role = (
+                "direction"
+                if "translation_required" in props
+                else "critic"
+                if "files" in props
+                else "arbiter"
+                if "findings" in props
+                else "toc"
+                if "strings" in props
+                else "translate"
+            )
+            prompt = request_prompt(body)
+            if not self.continuing and (
+                role == "critic" or (role == "translate" and "Source b" in prompt)
+            ):
+                self.roles.append(role)
+                return HttpResponse(503, b"{}", None)
+            return super().model(request)
+
+    services = FailB(names=("a", "b"), stop="review")
+    for tree in [services.files, *services.snapshots.values()]:
+        tree.pop(EN + "b.md", None)
+
+    result = services.translate()
+    assert result.verdict is Verdict.RED
+    assert services.commits >= 1
+    assert any(row["status"] == "open" for row in services.rows.values())
+
+    services.continuing = True
+    services.stop = None
+    services.roles.clear()
+    resumed = services.resume()
+    assert resumed.verdict in {Verdict.GREEN, Verdict.YELLOW, Verdict.RED}
+    assert services.roles  # models ran; snapshot admission succeeded
+
+
+def test_zero_commit_null_toc_keeps_review_checkpoint() -> None:
+    """REQUIREMENTS §4.2: TOC=null RED still opens target_sha=null checkpoint (#6)."""
+
+    class NullToc(ContinueServices):
+        def model(self, request):
+            body = json.loads(request.body)
+            props = request_schema(body)["schema"]["properties"]
+            role = (
+                "direction"
+                if "translation_required" in props
+                else "critic"
+                if "files" in props
+                else "arbiter"
+                if "findings" in props
+                else "toc"
+                if "strings" in props
+                else "translate"
+            )
+            if role == "critic":
+                self.roles.append(role)
+                return HttpResponse(503, b"{}", None)
+            response = super().model(request)
+            if role == "toc":
+                return HttpResponse(
+                    200,
+                    replace_response_text(response.body, json.dumps({"strings": {}})),
+                    Decimal(".01"),
+                )
+            return response
+
+    services = NullToc(names=(), stop="rename_red")
+    services.changes = [{"status": "modified", "filename": RU + "toc.yaml"}]
+    services.snapshots[services.base][RU + "toc.yaml"] = b"title: Old\nitems: []\n"
+    services.snapshots[services.base][EN + "toc.yaml"] = b"title: Old EN\nitems: []\n"
+    services.snapshots[services.source][RU + "toc.yaml"] = b"title: New\nitems: []\n"
+
+    result = services.translate()
+    assert result.verdict is Verdict.RED
+    checkpoint = services.checkpoint()
+    assert checkpoint.state.stage is ContinuationStage.REVIEW
+    assert checkpoint.state.target_sha is None
+    assert any(path.value.endswith("toc.yaml") for path in checkpoint.state.review_paths)
