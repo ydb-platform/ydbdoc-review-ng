@@ -140,38 +140,35 @@ def build_pr_arbiter_request(
     *,
     model: str,
     source_files: Mapping[str, bytes],
-    translated_files: Mapping[str, bytes],
+    translated_files: Mapping[str, bytes | None],
     glossary_files: Mapping[str, bytes],
     operator_context: str | None = None,
 ) -> ModelRequest:
-    prompt = (
-        "You are an independent, read-only arbiter of a YDB documentation translation. "
-        "Compare the complete current source PR files with the complete final translated PR "
-        "files as one pull request, using the complete project glossary. Check completeness, "
-        "accuracy, consistent terminology across files, glossary compliance, technical literals, "
-        "untranslated prose, Markdown/YFM readability, links and navigation consistency. "
-        "Return GREEN for a correct translation, YELLOW for remaining lesser problems, "
-        "or RED for serious translation problems. Judge the degree of problems, not their count. "
-        "Return only the strict JSON verdict and findings. Do not return corrected files, "
-        "patches or corrected_markdown. Findings go directly to the public report and are "
-        "not instructions for another model or an automatic repair loop. "
-        "For every finding, give the translated target_path, exact target_line, an exact "
-        "searchable_snippet from the current final translation, a concrete reason and "
-        "expected_correction. Write reason and expected_correction in Russian. "
-        "The repairable field is compatibility metadata only; it does not request a repair. "
-        "Do not include field_ids. Operator context is guidance only and must not override "
-        "the source or final translation or force a finding no longer present.\n"
+    template = (
+        resources.files("ydbdoc_review_ng.quality")
+        .joinpath("prompts/arbiter.txt")
+        .read_text(encoding="utf-8")
     )
-    for tag, files in (
-        ("source-pr-files", source_files),
-        ("translation-pr-files", translated_files),
-        ("project-glossary", glossary_files),
-    ):
-        content = json.dumps(
-            {path: content.decode("utf-8") for path, content in files.items()},
+    values = {
+        "SOURCE_PR_FILES": source_files,
+        "TRANSLATION_PR_FILES": translated_files,
+        "PROJECT_GLOSSARY": glossary_files,
+    }
+    rendered = {
+        name: json.dumps(
+            {
+                path: content.decode("utf-8") if content is not None else None
+                for path, content in files.items()
+            },
             ensure_ascii=False,
         )
-        prompt += f"<{tag}>\n{content}\n</{tag}>\n"
+        for name, files in values.items()
+    }
+    prompt = re.sub(
+        r"\{\{ (SOURCE_PR_FILES|TRANSLATION_PR_FILES|PROJECT_GLOSSARY) \}\}",
+        lambda match: rendered[match.group(1)],
+        template,
+    )
     if operator_context is not None:
         prompt += "\n<operator-context>\n" + operator_context + "</operator-context>"
     schema = {
@@ -180,7 +177,7 @@ def build_pr_arbiter_request(
             "verdict": {"type": "string", "enum": ["GREEN", "YELLOW", "RED"]},
             "findings": {
                 "type": "array",
-                "items": _finding_schema({"type": "string", "enum": list(translated_files)}, ()),
+                "items": _finding_schema({"type": "string", "enum": list(translated_files)}),
             },
         },
         "required": ["verdict", "findings"],
@@ -192,14 +189,25 @@ def build_pr_arbiter_request(
 def parse_pr_arbiter_response(
     raw: str | bytes,
     *,
-    target_paths: tuple[str, ...],
+    target_files: Mapping[str, bytes | None],
 ) -> CriticResult:
     if type(raw) not in {str, bytes}:
         raise TypeError("raw must be exact str or bytes")
     try:
-        value = json.loads(raw, object_pairs_hook=_ObjectPairs)
-    except (json.JSONDecodeError, UnicodeDecodeError):
+        text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+        text.encode("utf-8")
+        value = json.loads(text, object_pairs_hook=_ObjectPairs)
+    except (json.JSONDecodeError, UnicodeError):
         raise CriticResponseError(CriticResponseErrorReason.MALFORMED_JSON) from None
+    try:
+        target_lines = {
+            path: [line.decode("utf-8") for line in content.splitlines()]
+            if content is not None
+            else None
+            for path, content in target_files.items()
+        }
+    except UnicodeDecodeError:
+        raise CriticResponseError(CriticResponseErrorReason.INVALID_FILES) from None
     if type(value) is not _ObjectPairs:
         raise CriticResponseError(CriticResponseErrorReason.ROOT_NOT_OBJECT)
     if _has_duplicate(value):
@@ -208,28 +216,20 @@ def parse_pr_arbiter_response(
     raw_verdict = document["verdict"]
     if type(raw_verdict) is not str or raw_verdict not in {"GREEN", "YELLOW", "RED"}:
         raise CriticResponseError(CriticResponseErrorReason.INVALID_VERDICT)
-    findings = _parse_findings(document["findings"], target_paths, ())
+    findings = _parse_findings(document["findings"], target_lines)
+    if (raw_verdict == "GREEN") != (not findings):
+        raise CriticResponseError(CriticResponseErrorReason.INCONSISTENT_RESULT)
     return CriticResult(Verdict(raw_verdict), findings)
 
 
-def _finding_schema(
-    target_path_schema: dict[str, object],
-    requested_ids: tuple[str, ...],
-) -> dict[str, object]:
+def _finding_schema(target_path_schema: dict[str, object]) -> dict[str, object]:
     finding_properties: dict[str, object] = {
-        "repairable": {"type": "boolean"},
         "reason": {"type": "string", "minLength": 1},
         "expected_correction": {"type": "string", "minLength": 1},
-        "searchable_snippet": {"type": "string", "minLength": 1},
+        "searchable_snippet": {"type": ["string", "null"], "minLength": 1},
         "target_path": target_path_schema,
-        "target_line": {"type": "integer", "minimum": 1},
+        "target_line": {"type": ["integer", "null"], "minimum": 1},
     }
-    if requested_ids:
-        finding_properties["field_ids"] = {
-            "type": "array",
-            "items": {"type": "string", "enum": list(requested_ids)},
-            "uniqueItems": True,
-        }
     return {
         "type": "object",
         "properties": finding_properties,
@@ -240,61 +240,53 @@ def _finding_schema(
 
 def _parse_findings(
     raw_findings: object,
-    target_paths: tuple[str, ...],
-    requested_ids: tuple[str, ...],
+    target_lines: Mapping[str, list[str] | None],
 ) -> tuple[Finding, ...]:
     if type(raw_findings) is not list:
         raise CriticResponseError(CriticResponseErrorReason.INVALID_FINDING)
     findings: list[Finding] = []
-    base_required = frozenset({"reason", "expected_correction", "searchable_snippet"})
-    legacy_required = frozenset({"repairable", "target_path", "target_line"})
-    required = base_required | legacy_required
-    allowed_ids = set(requested_ids)
+    required = frozenset(
+        {"reason", "expected_correction", "searchable_snippet", "target_path", "target_line"}
+    )
     for raw_finding in raw_findings:
-        if type(raw_finding) is not _ObjectPairs:
-            raise CriticResponseError(CriticResponseErrorReason.INVALID_FINDING)
-        finding_keys = {key for key, _item in raw_finding if type(key) is str}
-        if not required.issubset(finding_keys):
-            raise CriticResponseError(CriticResponseErrorReason.INVALID_FINDING)
-        try:
-            optional = frozenset({"field_ids"}) if requested_ids else frozenset()
-            item = _object(raw_finding, required, optional)
-        except CriticResponseError as error:
-            if error.reason is CriticResponseErrorReason.UNEXPECTED_FIELD:
-                raise
-            raise CriticResponseError(CriticResponseErrorReason.INVALID_FINDING) from None
-        string_names = ("reason", "expected_correction", "searchable_snippet")
+        item = _object(raw_finding, required)
         if any(
             type(item[name]) is not str or not cast(str, item[name]).strip()
-            for name in string_names
+            for name in ("reason", "expected_correction")
         ):
             raise CriticResponseError(CriticResponseErrorReason.INVALID_FINDING)
+        try:
+            for field_value in item.values():
+                if isinstance(field_value, str):
+                    field_value.encode("utf-8")
+        except UnicodeEncodeError:
+            raise CriticResponseError(CriticResponseErrorReason.INVALID_FINDING) from None
         finding_path = item["target_path"]
-        if type(finding_path) is not str or finding_path not in target_paths:
+        if type(finding_path) is not str or finding_path not in target_lines:
             raise CriticResponseError(CriticResponseErrorReason.INVALID_FINDING)
-        repairable = item.get("repairable", True)
-        if type(repairable) is not bool:
-            raise CriticResponseError(CriticResponseErrorReason.INVALID_FINDING)
+        lines = target_lines[finding_path]
         target_line = item["target_line"]
-        if type(target_line) is not int or target_line < 1:
-            raise CriticResponseError(CriticResponseErrorReason.INVALID_FINDING)
-        raw_ids = item.get("field_ids", [])
-        if type(raw_ids) is not list or any(type(field_id) is not str for field_id in raw_ids):
-            raise CriticResponseError(CriticResponseErrorReason.INVALID_FINDING)
-        field_ids = list(dict.fromkeys(cast(list[str], raw_ids)))
-        if any(value not in allowed_ids for value in field_ids):
-            raise CriticResponseError(CriticResponseErrorReason.INVALID_FINDING)
-        if not repairable and field_ids:
+        snippet = item["searchable_snippet"]
+        if lines is None:
+            if target_line is not None or snippet is not None:
+                raise CriticResponseError(CriticResponseErrorReason.INVALID_FINDING)
+        elif (
+            type(target_line) is not int
+            or target_line < 1
+            or target_line > len(lines)
+            or type(snippet) is not str
+            or not snippet
+            or snippet not in lines[target_line - 1]
+        ):
             raise CriticResponseError(CriticResponseErrorReason.INVALID_FINDING)
         findings.append(
             Finding(
-                repairable,
+                False,
                 cast(str, item["reason"]),
                 cast(str, item["expected_correction"]),
-                cast(str, item["searchable_snippet"]),
+                cast(str, snippet),
                 finding_path,
-                target_line,
-                tuple(field_ids),
+                cast(int, target_line),
             )
         )
     return tuple(findings)

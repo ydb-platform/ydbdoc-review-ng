@@ -1,16 +1,61 @@
 """Checkpoint field recovery retained after retiring per-document semantic repair."""
 
+import json
+
 import pytest
 
 from ydbdoc_review_ng.domain import GitSha, RepoPath, RepositoryId, SnapshotRef
+from ydbdoc_review_ng.models import ModelCallResult, ModelRequest
 from ydbdoc_review_ng.parser.markdown import build_markdown_plan
-from ydbdoc_review_ng.quality import QualityInputError
-from ydbdoc_review_ng.quality.repair import _derive_target_translations
+from ydbdoc_review_ng.quality import QualityInputError, Verdict
+from ydbdoc_review_ng.quality.repair import _derive_target_translations, review_pr
 from ydbdoc_review_ng.translation import assemble_candidate, build_translation_request
 
 SNAPSHOT = SnapshotRef(RepositoryId("ydb-platform/ydb"), GitSha("a" * 40))
 SOURCE_PATH = RepoPath("ydb/docs/en/example.md")
 TARGET_PATH = RepoPath("ydb/docs/ru/example.md")
+
+
+def test_review_pr_arbiter_validates_findings_against_corrected_final_bytes() -> None:
+    class Models:
+        def __init__(self) -> None:
+            self.responses = iter(
+                [
+                    '{"files":{"en/a.md":"# Corrected\\n"}}',
+                    json.dumps(
+                        {
+                            "verdict": "YELLOW",
+                            "findings": [
+                                {
+                                    "target_path": "en/a.md",
+                                    "target_line": 1,
+                                    "searchable_snippet": "Corrected",
+                                    "reason": "Неточно переведён заголовок.",
+                                    "expected_correction": "Уточните заголовок по исходному тексту.",
+                                }
+                            ],
+                        }
+                    ),
+                ]
+            )
+
+        def invoke(self, request: ModelRequest, /) -> ModelCallResult:
+            return ModelCallResult(next(self.responses), None, ())
+
+    corrected, final = review_pr(
+        Models(),
+        critic_model="critic",
+        arbiter_model="arbiter",
+        source_files={"ru/a.md": "# Исходный\n".encode()},
+        translated_files={"en/a.md": b"# Original\n"},
+        glossary_files={},
+        validate_files=lambda files: None,
+    )
+
+    assert corrected == {"en/a.md": b"# Corrected\n"}
+    assert final.verdict is Verdict.YELLOW
+    assert final.findings[0].searchable_snippet == "Corrected"
+    assert final.findings[0].target_line == 1
 
 
 def test_checkpoint_recovers_current_target_prose_and_protected_links() -> None:

@@ -80,7 +80,7 @@ def review_pr(
     response = executor.invoke(arbiter)
     if not response.success or response.text is None:
         raise QualityExecutionError("arbiter")
-    final = parse_pr_arbiter_response(response.text, target_paths=tuple(corrected))
+    final = parse_pr_arbiter_response(response.text, target_files=corrected)
     return corrected, final
 
 
