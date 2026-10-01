@@ -40,3 +40,27 @@ def test_long_russian_prefix_inside_partially_translated_line_is_echo() -> None:
 def test_russian_prose_is_valid_for_russian_target() -> None:
     chunk = DocumentChunk(PHRASE, 0, 1, ())
     validate_translated_prose(chunk, PHRASE, "en", "ru")
+
+
+def test_noncontinuous_russian_fragments_are_not_joined_as_echo() -> None:
+    """REQUIREMENTS §2.2: only continuous ≥32-letter runs count (#9)."""
+    source = "Достаточно длинный русский фрагмент остаётся нетронутым"
+    response = (
+        "Достаточно длинный translated русский фрагмент translated остаётся нетронутым"
+    )
+    validate_translated_prose(DocumentChunk(source, 0, 1, ()), response, "ru", "en")
+
+
+def test_source_echo_detector_is_sub_quadratic_on_long_clean_english() -> None:
+    """REQUIREMENTS §2.2: detector must stay usable on whole-file paragraphs (#9)."""
+    import time
+
+    source = ("Большая русская статья объясняет работу базы данных. " * 40)[:960]
+    started = time.perf_counter()
+    validate_translated_prose(
+        DocumentChunk(source, 0, 1, ()),
+        "The English translation has no Russian text at all.",
+        "ru",
+        "en",
+    )
+    assert time.perf_counter() - started < 0.25

@@ -14,25 +14,34 @@ def _cyrillic_count(text: str) -> int:
 
 
 def _has_echo_fragment(phrase: str, normalized: str) -> bool:
-    """§2.2: any continuous ≥32 Cyrillic-letter fragment of a source run counts."""
-    if phrase in normalized:
-        return True
-    letters = _CYRILLIC.findall(phrase)
-    if len(letters) < 32:
-        return False
-    # A long Cyrillic-letter window from the source run appears in the response.
-    response_letters = "".join(_CYRILLIC.findall(normalized))
-    cyr_only = "".join(letters)
-    for start in range(0, len(cyr_only) - 31):
-        if cyr_only[start : start + 32] in response_letters:
-            return True
-    # Spaced phrase prefixes/suffixes that still clear the letter threshold.
+    """§2.2: any continuous ≥32 Cyrillic-letter fragment of a source run counts.
+
+    Continuity is over the space-normalized source text itself. Cyrillic letters
+    separated by Latin must not be rejoined. Complexity is linear in phrase length
+    times response scan cost for candidate windows (not cubic over all substrings).
+    """
     compact = " ".join(phrase.split())
-    for length in range(len(compact), 31, -1):
-        for start in range(0, len(compact) - length + 1):
-            fragment = compact[start : start + length]
-            if _cyrillic_count(fragment) >= 32 and fragment in normalized:
-                return True
+    if _cyrillic_count(compact) < 32:
+        return False
+    if compact in normalized:
+        return True
+    n = len(compact)
+    prefix = [0] * (n + 1)
+    for index, char in enumerate(compact):
+        prefix[index + 1] = prefix[index] + (1 if _CYRILLIC.match(char) else 0)
+    # Minimal contiguous window from each start that reaches ≥32 Cyrillic letters.
+    end = 0
+    for start in range(n):
+        if prefix[n] - prefix[start] < 32:
+            break
+        if end < start:
+            end = start
+        while end <= n and prefix[end] - prefix[start] < 32:
+            end += 1
+        if end > n:
+            break
+        if compact[start:end] in normalized:
+            return True
     return False
 
 
