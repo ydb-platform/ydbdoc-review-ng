@@ -165,6 +165,8 @@ def review_pr(
         path: content for path, content in translated_files.items() if content is not None
     }
     unreviewed: set[str] = set()
+    # §4: empty Markdown inventory still reviews resources; NON_FINAL cannot invent GREEN.
+    resource_review_unresolved = False
 
     def build_critic(chunk_pairs: Sequence[tuple[str, str]]) -> ModelRequest:
         return build_pr_critic_request(
@@ -216,6 +218,8 @@ def review_pr(
                 # failure keeps draft bytes for arbiter and is not itself RED.
                 if response.failure is AttemptError.NON_FINAL:
                     unreviewed.update(target_paths)
+                    if not pairs:
+                        resource_review_unresolved = True
                 break
 
     arbiter_targets: dict[str, bytes | None] = {
@@ -242,7 +246,8 @@ def review_pr(
 
     results: list[CriticResult] = []
     if not pairs:
-        arbiter_chunks = ((),)
+        # Zero-text still calls arbiter once, unless critic already marked NON_FINAL.
+        arbiter_chunks = () if resource_review_unresolved else ((),)
 
     for chunk_pairs in arbiter_chunks:
         arbiter = build_arbiter(chunk_pairs)
@@ -254,22 +259,32 @@ def review_pr(
             # §4: NON_FINAL → unreviewed RED with report, never a bare abort.
             if response.failure is AttemptError.NON_FINAL:
                 unreviewed.update(target for _source, target in chunk_pairs)
+                if not chunk_pairs:
+                    resource_review_unresolved = True
                 continue
-            if len(arbiter_chunks) <= 1 and not unreviewed:
+            if len(arbiter_chunks) <= 1 and not unreviewed and not resource_review_unresolved:
                 raise QualityExecutionError("arbiter")
             unreviewed.update(target for _source, target in chunk_pairs)
+            if not chunk_pairs:
+                resource_review_unresolved = True
             continue
         try:
             results.append(parse_pr_arbiter_response(response.text, target_files=chunk_files))
         except Exception:
-            if len(arbiter_chunks) <= 1 and not unreviewed:
+            if len(arbiter_chunks) <= 1 and not unreviewed and not resource_review_unresolved:
                 raise
             unreviewed.update(target for _source, target in chunk_pairs)
+            if not chunk_pairs:
+                resource_review_unresolved = True
 
     findings = [finding for result in results for finding in result.findings]
     for path in sorted(unreviewed):
         findings.append(_unreviewed_finding(path))
-    if unreviewed:
+    if resource_review_unresolved and not findings:
+        # Resource-only / zero-text NON_FINAL still needs a publishable finding (§4/§7).
+        marker = next(iter(sorted(binary_manifest or ())), "resource-review")
+        findings.append(_unreviewed_finding(marker))
+    if unreviewed or resource_review_unresolved:
         verdict = Verdict.RED
     elif results:
         verdict = _worst_verdict(results)

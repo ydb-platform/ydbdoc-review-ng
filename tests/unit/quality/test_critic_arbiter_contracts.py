@@ -161,3 +161,52 @@ def test_arbiter_non_final_produces_unreviewed_red_report() -> None:
     assert final.verdict is Verdict.RED
     assert final.findings
     assert final.findings[0].target_path == "docs/en/a.md"
+
+
+def test_zero_text_arbiter_non_final_is_red_not_green() -> None:
+    """REQUIREMENTS §4: resource-only NON_FINAL must not invent GREEN (#2)."""
+    models = _Scripted(
+        [
+            json.dumps({"files": {}}),
+            ModelCallResult(None, AttemptError.NON_FINAL, ()),
+        ]
+    )
+
+    corrected, final = review_pr(
+        models,
+        critic_model="critic",
+        arbiter_model="arbiter",
+        source_files={},
+        translated_files={},
+        glossary_files={},
+        validate_files=lambda files: None,
+    )
+
+    assert [call.role for call in models.calls] == [ModelRole.CRITIC, ModelRole.ARBITER]
+    assert corrected == {}
+    assert final.verdict is Verdict.RED
+    assert final.findings
+
+
+def test_zero_text_critic_non_final_is_red_not_green() -> None:
+    """REQUIREMENTS §4: empty-pair critic NON_FINAL → RED, never arbiter GREEN."""
+    models = _Scripted(
+        [
+            ModelCallResult(None, AttemptError.NON_FINAL, ()),
+            ModelCallResult(None, AttemptError.NON_FINAL, ()),
+        ]
+    )
+
+    corrected, final = review_pr(
+        models,
+        critic_model="critic",
+        arbiter_model="arbiter",
+        source_files={},
+        translated_files={},
+        glossary_files={},
+        validate_files=lambda files: None,
+    )
+
+    assert [call.role for call in models.calls] == [ModelRole.CRITIC, ModelRole.CRITIC]
+    assert final.verdict is Verdict.RED
+    assert final.findings
