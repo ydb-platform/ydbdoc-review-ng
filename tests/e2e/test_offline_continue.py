@@ -27,6 +27,8 @@ def invoke(services, pr=42):
 def test_direction_continuation_retries_only_direction_and_preserves_expiry():
     services = ContinueServices(names=("a",), stop="direction")
     old = services.stop_and_continue()
+    # stop_and_continue clears stop; keep forcing undetermined for the first retry.
+    services.stop = "direction"
     services.rows[old.continuation_id]["created_at"] -= timedelta(days=5)
     old = services.checkpoint()
     assert invoke(services) == 1
@@ -34,6 +36,7 @@ def test_direction_continuation_retries_only_direction_and_preserves_expiry():
     assert services.roles == ["direction"]
     assert following.expires_at == old.expires_at
     assert CONTEXT in services.prompts[0][1]
+    services.stop = None
     services.direction_values = {"a.md": "complete_pair"}
     assert invoke(services) == 0
     assert services.roles == ["direction", "direction"]
@@ -99,13 +102,14 @@ def test_review_cli_reviews_all_files_without_retranslation_then_updates_one_ver
         )
     assert services.files[EN + "a.md"] == green
     assert services.files[EN + "b.md"] == b"# Repaired b\n\nTranslated\n"
+    # §4.1: critic chunk already committed/pushed; post-arbiter publish is a no-op
+    # when the final candidate matches that head (see integration continue review).
     assert services.timeline == [
         "critic",
         "commit",
         "push",
         "arbiter",
-        "commit",
-        "push",
+        "report",
         "report",
     ]
     assert services.rows[old.continuation_id]["status"] == "closed"
