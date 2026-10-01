@@ -450,7 +450,9 @@ class LinearWorkflows:
             )
             if review.final.verdict is Verdict.RED:
                 stage = WorkflowStage.CHECKPOINT
-                capture = self._content.review_checkpoint(snapshot, review, final_sha)
+                # §4.2 / §5.3: still-zero-commit RED keeps target_sha=null (same as translate).
+                checkpoint_sha = None if self._publisher.noop else final_sha
+                capture = self._content.review_checkpoint(snapshot, review, checkpoint_sha)
                 terminal_handoff = True
                 self._complete_semantic_handoff(
                     capture,
@@ -471,7 +473,7 @@ class LinearWorkflows:
                     JobStatus.SUCCEEDED,
                     error=None,
                     finished_at=finished_at,
-                    target_sha=final_sha.value,
+                    target_sha=None if final_sha is None else final_sha.value,
                 )
                 with suppress(Exception):
                     self._persistence.close_checkpoint(checkpoint.continuation_id)

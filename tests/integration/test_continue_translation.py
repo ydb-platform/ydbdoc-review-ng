@@ -1096,3 +1096,68 @@ def test_mixed_markdown_and_binary_continue_skips_asset_utf8_restore() -> None:
     assert resumed.verdict in {Verdict.GREEN, Verdict.YELLOW, Verdict.RED}
     assert services.files[EN + "chart.png"] == blob
     assert services.roles
+
+
+def test_continue_still_zero_commit_red_keeps_null_checkpoint_and_reports() -> None:
+    """REQUIREMENTS §4.2/§5.3/§7: continue from target_sha=null that stays zero-commit RED.
+
+    Must not crash on review_checkpoint_head_mismatch, must reopen null checkpoint,
+    and must publish a RED QA comment on the source PR.
+    """
+
+    class AlwaysFailTranslate(ContinueServices):
+        def model(self, request):
+            body = json.loads(request.body)
+            props = request_schema(body)["schema"]["properties"]
+            role = (
+                "direction"
+                if "translation_required" in props
+                else "critic"
+                if "files" in props
+                else "arbiter"
+                if "findings" in props
+                else "toc"
+                if "strings" in props
+                else "translate"
+            )
+            if role == "direction":
+                return super().model(request)
+            if role == "translate":
+                return HttpResponse(503, b"{}", None)
+            if role == "critic":
+                payload = {
+                    "model": "t",
+                    "choices": [
+                        {
+                            "finish_reason": "length",
+                            "message": {"role": "assistant", "content": '{"files":{}'},
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+                }
+                return HttpResponse(200, json.dumps(payload).encode(), Decimal(".01"))
+            return super().model(request)
+
+    services = AlwaysFailTranslate(names=("page",), stop="rename_red")
+    services.snapshots[services.source][RU + "page.md"] = b"# Source page\n\nBody text.\n"
+    services.snapshots[services.base][RU + "page.md"] = b"# Old\n"
+
+    assert services.translate().verdict is Verdict.RED
+    assert services.commits == 0
+    first = services.checkpoint()
+    assert first.state.target_sha is None
+    assert first.state.stage is ContinuationStage.REVIEW
+
+    services.continuing = True
+    services.stop = None
+    services.roles.clear()
+    resumed = services.resume()
+    assert resumed.verdict is Verdict.RED
+    assert services.commits == 0
+    following = services.checkpoint()
+    assert following.state.target_sha is None
+    assert following.state.stage is ContinuationStage.REVIEW
+    assert any(
+        "<!-- ydbdoc-current-qa -->" in comment["body"] and comment["body"].startswith("🔴 RED")
+        for comment in services.comments
+    )

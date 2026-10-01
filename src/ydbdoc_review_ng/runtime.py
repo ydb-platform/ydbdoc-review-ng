@@ -551,6 +551,28 @@ class RuntimeReporter:
             and self.source.continue_target_sha is None
             and head is None
         ):
+            # §4.2 / §7: still-zero-commit continue RED reports on the source PR.
+            if review.final.verdict is not Verdict.RED:
+                return
+            report_context = ReportContext(
+                self.source.snapshots.source_snapshot.commit_sha,
+                self.source.snapshots.source_snapshot.commit_sha,
+                self.models.cost,
+                source_pr_number=self.source.source_pr,
+            )
+            body = render_report(review, report_context) + "\n" + QA_MARKER
+            existing = next(
+                (
+                    comment
+                    for comment in self.source.github.list_comments(self.source.source_pr)
+                    if comment.authored_by_publisher and QA_MARKER in comment.body
+                ),
+                None,
+            )
+            if existing is None:
+                self.source.github.create_comment(self.source.source_pr, body)
+            else:
+                self.source.github.update_comment(self.source.source_pr, existing.id, body)
             return
         if head != commit_sha:
             raise RuntimeBoundaryError("report_head_changed")
