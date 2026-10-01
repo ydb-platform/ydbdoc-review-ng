@@ -346,8 +346,12 @@ code по-прежнему защищены. Семантическую неиз
 ## 5. Полная проверка PR критиком и независимым арбитром
 
 1. Берём полный immutable inventory исходного PR и полные актуальные текстовые
-   файлы из этого inventory, не только diff и не версии до изменения.
-2. Берём полные соответствующие текстовые файлы переводного PR. Если переводчик
+   source-файлы всей frozen-группы перевода: исходные файлы PR, рекурсивно
+   добавленные зависимости и все созданные или изменённые TOC. Файлы, для
+   которых уже найден существующий target-перевод и на которых рекурсия
+   остановилась, в review scope не входят.
+2. Берём полные соответствующие target-файлы всей frozen-группы из переводного
+   PR. Если переводчик
    не смог создать обязательный target-файл, critic получает полный source-файл
    и значение `null` по ожидаемому пути target в `translation-pr-files`. Обычные
    файлы заменяются или создаются только целиком; остальные файлы текущего
@@ -428,8 +432,11 @@ You are a technical editor reviewing a YDB documentation translation.
 
 You receive:
 
-1. The complete current source-language files from the source pull request.
-2. The complete corresponding translated files from the translation pull request.
+1. The complete current source-language files from the frozen translation group
+   derived from the source pull request, including recursively added dependencies
+   and every created or changed TOC file.
+2. The complete corresponding target-language files from the translation pull
+   request.
    A required target file is represented by JSON null at its expected target path
    when the translator failed to create it.
 3. Every complete paired YDB glossary section relevant to the supplied source
@@ -518,7 +525,8 @@ You are an independent final arbiter of a YDB documentation translation.
 
 You receive:
 
-1. Complete current source-language files.
+1. Complete current source-language files from the frozen translation group,
+   including recursively added dependencies and every created or changed TOC.
 2. Complete final target-language files from the translation branch.
    A required target file can be represented by JSON null if it is missing.
 3. Every complete paired YDB glossary section relevant to the supplied files.
