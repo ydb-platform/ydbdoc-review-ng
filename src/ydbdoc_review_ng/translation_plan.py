@@ -431,7 +431,7 @@ def build_translation_plan(
     manifest: ScopeManifest | None,
     /,
     *,
-    toc_postconditions: Mapping[RepoPath, bytes] | None = None,
+    toc_postconditions: Mapping[RepoPath, bytes | None] | None = None,
     toc_source_snapshots: Mapping[RepoPath, tuple[bytes | None, bytes]] | None = None,
     classification: InventoryClassification | None = None,
 ) -> TranslationPlan:
@@ -510,9 +510,10 @@ def build_translation_plan(
             if change.status not in _ORDINARY_STATUSES:
                 raise TranslationPlanError("translation_plan_toc_operation_unsupported")
             target = _paired(target_root, current.relative)
-            expected = None if toc_postconditions is None else toc_postconditions.get(target)
-            if expected is None:
+            # Key present with None = soft-pending TOC (string map failed or no file).
+            if toc_postconditions is None or target not in toc_postconditions:
                 raise TranslationPlanError("translation_plan_toc_postcondition_missing")
+            expected = toc_postconditions[target]
             snapshots = (
                 None if toc_source_snapshots is None else toc_source_snapshots.get(change.path)
             )
@@ -542,7 +543,7 @@ def build_translation_plan(
                 PlanAction.SYNC_TOC,
                 target,
                 (target,),
-                sha256(expected).hexdigest(),
+                None if expected is None else sha256(expected).hexdigest(),
                 None if before is None else sha256(before).hexdigest(),
                 sha256(after).hexdigest(),
             )
@@ -614,14 +615,14 @@ def reconcile_fixed_outputs(
     fixed = {RepoPath(path): content for path, content in fixed_files}
     for item in plan.inputs:
         if item.action is PlanAction.SYNC_TOC:
-            if item.target_path is None:
+            if item.target_path is None or item.target_path not in fixed:
                 raise TranslationPlanError("translation_plan_toc_uncovered")
-            content = fixed.get(item.target_path)
-            if (
-                content is None
-                or item.expected_sha256 is None
-                or sha256(content).hexdigest() != item.expected_sha256
-            ):
+            content = fixed[item.target_path]
+            if item.expected_sha256 is None:
+                # Soft-pending: null TOC is allowed; critic must create/fix.
+                if content is not None:
+                    raise TranslationPlanError("translation_plan_toc_uncovered")
+            elif content is None or sha256(content).hexdigest() != item.expected_sha256:
                 raise TranslationPlanError("translation_plan_toc_uncovered")
         elif item.action is PlanAction.DELETE_TARGET:
             if item.target_path not in fixed or fixed[item.target_path] is not None:
@@ -637,7 +638,7 @@ def reconcile_candidate_outputs(
     candidate_files: tuple[tuple[str, bytes | None], ...],
     /,
     *,
-    toc_postconditions: Mapping[RepoPath, bytes] | None = None,
+    toc_postconditions: Mapping[RepoPath, bytes | None] | None = None,
 ) -> None:
     """Require every inventory-owned mutation in the final candidate."""
     candidate = {RepoPath(path): content for path, content in candidate_files}
@@ -650,13 +651,17 @@ def reconcile_candidate_outputs(
             if target not in candidate:
                 raise TranslationPlanError("translation_plan_candidate_output_missing")
         elif item.action is PlanAction.SYNC_TOC:
-            if target is None:
+            if target is None or target not in candidate:
                 raise TranslationPlanError("translation_plan_candidate_output_missing")
-            content = candidate.get(target)
+            content = candidate[target]
             expected = None if toc_postconditions is None else toc_postconditions.get(target)
+            if item.expected_sha256 is None:
+                # Soft-pending TOC: null candidate is required until critic fills it.
+                if content is not None:
+                    raise TranslationPlanError("translation_plan_candidate_output_missing")
+                continue
             if (
                 content is None
-                or item.expected_sha256 is None
                 or sha256(content if expected is None else expected).hexdigest()
                 != item.expected_sha256
             ):

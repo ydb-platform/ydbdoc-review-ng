@@ -85,6 +85,10 @@ class ReviewServices(LifecycleServices):
             return super().model(request)
         body = json.loads(request.body)
         schema = request_schema(body)["schema"]
+        # Continue prepare may still translate TOC visible strings (§3) before
+        # critic/arbiter. Keep that on the shared translate fake.
+        if "strings" in schema["properties"]:
+            return super().model(request)
         prompt = request_prompt(body)
         role = "critic" if "files" in schema["properties"] else "arbiter"
         files = json.loads(raw_repair_context(prompt, "translation-pr-files"))
@@ -214,7 +218,9 @@ def test_continue_preserves_complete_corrected_toc_with_residual_finding(toc_nam
     services.repair_payload = None
     services.prompts.clear()
     assert services.resume().verdict is Verdict.GREEN
-    for _, prompt in services.prompts:
+    for role, prompt in services.prompts:
+        if role not in {"critic", "arbiter"}:
+            continue
         assert (
             json.loads(raw_repair_context(prompt, "translation-pr-files"))[EN + toc_name]
             == corrected
@@ -236,7 +242,9 @@ def test_review_metadata_replay_rejects_tampering_before_models(fault):
         snapshot[path] = snapshot.pop(EN + "toc.yaml")
     with pytest.raises(application.WorkflowError):
         services.resume()
-    assert services.roles == []
+    # Prepare may re-translate TOC visible strings (§3) before the published
+    # candidate mismatch is proven. Critic/arbiter must not run.
+    assert not any(role in {"critic", "arbiter"} for role in services.roles)
     assert not any(method in {"POST", "PATCH"} for method, _ in services.events)
     assert services.rows[saved.continuation_id]["status"] == "open"
 

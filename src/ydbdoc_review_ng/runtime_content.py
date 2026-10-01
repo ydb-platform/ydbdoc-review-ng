@@ -127,7 +127,14 @@ from ydbdoc_review_ng.translation_plan import (
     translation_plan_sha256,
     validate_toc_correction,
 )
-from ydbdoc_review_ng.toc_delta import TocDeltaError, apply_toc_delta
+from ydbdoc_review_ng.toc_delta import (
+    TocDeltaError,
+    TocStringChange,
+    TocStringTranslationError,
+    apply_toc_delta,
+    build_toc_string_request,
+    parse_toc_string_response,
+)
 
 if TYPE_CHECKING:
     from ydbdoc_review_ng.persistence import ContinuationCheckpoint
@@ -1032,7 +1039,7 @@ class RuntimeContent:
                 raise RuntimeBoundaryError("verification_metadata_mismatch")
             for entry in self.entries:
                 self._metadata(metadata_preparation, entry, files)
-        toc_postconditions: dict[RepoPath, bytes] = {}
+        toc_postconditions: dict[RepoPath, bytes | None] = {}
         toc_source_snapshots: dict[RepoPath, tuple[bytes | None, bytes]] = {}
         if selection.manifest is not None:
             source_locale = "ru" if selection.manifest.direction is Direction.RU_TO_EN else "en"
@@ -1061,14 +1068,41 @@ class RuntimeContent:
                 # not themselves in the source inventory.
                 current = self.source.github.read_bytes(base_snapshot, target_path)
                 try:
-                    applied = apply_toc_delta(
+                    draft = apply_toc_delta(
                         source_before, source_after, current, toc_path=raw.path
                     )
                 except TocDeltaError as error:
                     raise TranslationPlanError(str(error)) from None
-                files[target_path.value] = applied.content
-                if applied.content is not None:
-                    toc_postconditions[target_path] = applied.content
+                content = draft.content
+                if (
+                    translate
+                    and content is not None
+                    and draft.string_changes
+                ):
+                    try:
+                        translations = self._translate_toc_strings(
+                            draft.string_changes,
+                            target_path,
+                            source_locale=source_locale,
+                            target_locale=(
+                                "en"
+                                if selection.manifest.direction is Direction.RU_TO_EN
+                                else "ru"
+                            ),
+                        )
+                        content = apply_toc_delta(
+                            source_before,
+                            source_after,
+                            current,
+                            toc_path=raw.path,
+                            translations=translations,
+                        ).content
+                    except TocStringTranslationError:
+                        # One retry already spent in helper. Leave TOC pending
+                        # (null) and continue other files for critic.
+                        content = None
+                files[target_path.value] = content
+                toc_postconditions[target_path] = content
         if not translate:
             # Verify against delta-applied expectations (and other metadata).
             for metadata_path, expected in files.items():
@@ -1403,6 +1437,66 @@ class RuntimeContent:
         accepted, _document = self._translate_document(document, operator_context=operator_context)
         return accepted
 
+    def _translate_toc_strings(
+        self,
+        changes: tuple[TocStringChange, ...],
+        target_path: RepoPath,
+        /,
+        *,
+        source_locale: str,
+        target_locale: str,
+    ) -> dict[str, str]:
+        """Translate TOC visible strings via a closed JSON ID map (§3).
+
+        Exactly one retry on provider failure or malformed map. Callers treat a
+        raised TocStringTranslationError as pending TOC (null) and continue.
+        """
+        note: str | None = None
+        previous_response: str | None = None
+        for attempt in (1, 2):
+            base = build_toc_string_request(
+                changes,
+                source_locale=source_locale,
+                target_locale=target_locale,
+                model=self.model,
+                target_path=target_path,
+            )
+            prompt = base.prompt
+            if attempt == 2:
+                prompt += (
+                    "\n\nImportant correction: the previous response did not satisfy the "
+                    "required TOC string JSON ID map"
+                    + (" (" + note + ")" if note else "")
+                    + ". Return exactly the requested string IDs with non-empty values."
+                )
+                if previous_response is not None:
+                    prompt += (
+                        "\n<PREVIOUS_RESPONSE>\n" + previous_response + "\n</PREVIOUS_RESPONSE>"
+                    )
+            request = ModelRequest(
+                base.role,
+                base.model,
+                prompt,
+                None if base.schema is None else cast(FrozenJson, mutable_json(base.schema)),
+                base.target_path,
+            )
+            result = self.models.invoke(request)
+            if not result.success or result.text is None:
+                note = None if result.failure is None else result.failure.value
+                previous_response = result.text
+                if attempt == 1:
+                    continue
+                raise TocStringTranslationError()
+            try:
+                return parse_toc_string_response(result.text, changes)
+            except TocStringTranslationError:
+                note = "malformed_toc_string_map"
+                previous_response = result.text
+                if attempt == 1:
+                    continue
+                raise
+        raise TocStringTranslationError()
+
     def _translate_document(
         self, document: Document, /, *, operator_context: str | None = None
     ) -> tuple[AcceptedMap, AcceptedDocument]:
@@ -1664,6 +1758,12 @@ class RuntimeContent:
         if not plans.preparation.for_translation:
             raise RuntimeBoundaryError("verification_plans_not_translatable")
         allowed = {document.entry.pair.target_path for document in plans.documents}
+        metadata = {
+            RepoPath(path)
+            for path, value in plans.fixed_files
+            if value is not None
+            and classify_path(self.roots, RepoPath(path)).kind is PathKind.TOC
+        }
         required_maps = {
             document.entry.pair.target_path
             for document in plans.documents
@@ -1673,12 +1773,13 @@ class RuntimeContent:
         documents = {item.target_path: item for item in accepted_documents}
         document_paths = set(documents)
         fixed_paths = {path for path, _content in plans.fixed_files}
+        markdown_paths = document_paths - metadata
         if (
             len(maps) != len(accepted_maps)
             or not maps <= allowed
             or len(documents) != len(accepted_documents)
-            or not document_paths <= allowed
-            or document_paths != maps
+            or not document_paths <= (allowed | metadata)
+            or markdown_paths != maps
             or any(path not in allowed and path.value not in fixed_paths for path in document_paths)
         ):
             raise ContinuationStateError()

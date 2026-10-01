@@ -9,15 +9,18 @@ the source after-text is the provisional value for changed fields.
 
 from __future__ import annotations
 
+import json
 import posixpath
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import yaml  # type: ignore[import-untyped]
 
-from ydbdoc_review_ng.domain import RepoPath
+from ydbdoc_review_ng.domain import ModelRole, RepoPath
 from ydbdoc_review_ng.errors import SafeDiagnosticError
+from ydbdoc_review_ng.models import ModelRequest
+from ydbdoc_review_ng.models.types import FrozenJson
 
 _VISIBLE = ("name", "title", "label")
 
@@ -26,6 +29,13 @@ class TocDeltaError(SafeDiagnosticError):
     """Source TOC delta cannot be represented by the structural applicator."""
 
     def __init__(self, code: str = "toc_delta_unsupported", /) -> None:
+        super().__init__(code)
+
+
+class TocStringTranslationError(SafeDiagnosticError):
+    """TOC visible-string JSON map could not be extracted after retries."""
+
+    def __init__(self, code: str = "toc_string_translation_failed", /) -> None:
         super().__init__(code)
 
 
@@ -575,3 +585,85 @@ def planned_toc_markdown_additions(
     # Apply against an empty target solely to validate the delta and collect adds.
     result = apply_toc_delta(before, after, b"items: []\n", toc_path=toc_path)
     return result.added_markdown
+
+
+_TOC_STRING_PROMPT = """You translate only the listed YDB documentation TOC visible strings.
+
+Return exactly one JSON object with a "strings" map. Keys must be the provided
+string IDs. Values must be non-empty translations into the target locale.
+Do not invent IDs. Do not translate hrefs, includes, or structural keys.
+"""
+
+
+def build_toc_string_request(
+    changes: tuple[TocStringChange, ...],
+    /,
+    *,
+    source_locale: str,
+    target_locale: str,
+    model: str,
+    target_path: RepoPath,
+) -> ModelRequest:
+    if not changes:
+        raise TocStringTranslationError("toc_string_translation_empty")
+    payload = {
+        "source_locale": source_locale,
+        "target_locale": target_locale,
+        "strings": [
+            {"id": item.string_id, "field": item.field, "text": item.text} for item in changes
+        ],
+    }
+    properties = {
+        item.string_id: {"type": "string", "minLength": 1} for item in changes
+    }
+    return ModelRequest(
+        ModelRole.TRANSLATE,
+        model,
+        _TOC_STRING_PROMPT + "\nInput:\n" + json.dumps(payload, ensure_ascii=False),
+        cast(
+            FrozenJson,
+            {
+                "type": "object",
+                "properties": {
+                    "strings": {
+                        "type": "object",
+                        "properties": properties,
+                        "required": list(properties),
+                        "additionalProperties": False,
+                    }
+                },
+                "required": ["strings"],
+                "additionalProperties": False,
+            },
+        ),
+        target_path,
+    )
+
+
+def parse_toc_string_response(
+    raw: str, changes: tuple[TocStringChange, ...], /
+) -> dict[str, str]:
+    expected = {item.string_id for item in changes}
+
+    def object_pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        result = dict(pairs)
+        if len(result) != len(pairs):
+            raise ValueError
+        return result
+
+    try:
+        value = json.loads(raw, object_pairs_hook=object_pairs)
+        if type(value) is not dict or set(value) != {"strings"}:
+            raise ValueError
+        strings = value["strings"]
+        if type(strings) is not dict or set(strings) != expected:
+            raise ValueError
+        parsed: dict[str, str] = {}
+        for key in expected:
+            text = strings[key]
+            if type(text) is not str or not text.strip():
+                raise ValueError
+            parsed[key] = text
+        return parsed
+    except (ValueError, TypeError, KeyError, RecursionError, json.JSONDecodeError):
+        raise TocStringTranslationError() from None

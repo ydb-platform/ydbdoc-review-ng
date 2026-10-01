@@ -45,6 +45,30 @@ def request_schema(body):
     return {"schema": response_format["json_schema"]["schema"]}
 
 
+def toc_string_translations(prompt, schema):
+    """Closed JSON ID-map for TOC visible strings (§3 DeepSeek path)."""
+    string_ids = list(schema["properties"]["strings"]["properties"])
+    by_id = {}
+    if "\nInput:\n" in prompt:
+        raw = prompt.split("\nInput:\n", 1)[1]
+        raw = raw.split("\n\nImportant", 1)[0].split("\n<PREVIOUS_RESPONSE>", 1)[0]
+        try:
+            payload = json.loads(raw)
+            by_id = {
+                item["id"]: item["text"]
+                for item in payload.get("strings", ())
+                if type(item) is dict and type(item.get("id")) is str
+            }
+        except (TypeError, ValueError, json.JSONDecodeError):
+            by_id = {}
+    return {
+        "strings": {
+            key: ("EN " + by_id[key]) if key in by_id else f"Translated {key}"
+            for key in string_ids
+        }
+    }
+
+
 def classification_response(prompt, *, direction="ru_to_en", decisions=None):
     """Direction-only model payload. Python mirrors Git ops separately."""
     inventory = json.loads(prompt.split("\nInventory: ", 1)[1].split("\n\n", 1)[0])
@@ -311,6 +335,8 @@ class RuntimeServices:
             prompt = request_prompt(body)
             if "translation_required" in properties:
                 values = classification_response(prompt)
+            elif "strings" in properties and type(properties["strings"]) is dict:
+                values = toc_string_translations(prompt, schema["schema"])
             elif properties and all(key.startswith("segment_") for key in properties):
                 values = translation_segments(prompt)
             elif set(properties) in ({"files"}, {"verdict", "findings"}):

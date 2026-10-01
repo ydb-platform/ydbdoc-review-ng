@@ -640,7 +640,50 @@ def test_reconciliation_requires_changed_toc_result_not_unrelated_output() -> No
         )
     reconcile_fixed_outputs(
         plan,
-        (("ydb/docs/en/core/manual/toc_i.yaml", expected_toc),),
+        (
+            (document.pair.target_path.value, b"translated"),
+            ("ydb/docs/en/core/manual/toc_i.yaml", expected_toc),
+        ),
+    )
+
+
+def test_pending_toc_allows_null_postcondition_for_critic() -> None:
+    document = entry("manual/page.md")
+    plan = build_translation_plan(
+        inventory(
+            change(document.pair.source_path.value),
+            change("ydb/docs/ru/core/manual/toc_i.yaml"),
+        ),
+        ROOTS,
+        manifest(document),
+        toc_postconditions={RepoPath("ydb/docs/en/core/manual/toc_i.yaml"): None},
+        toc_source_snapshots=toc_source_snapshots(
+            "manual/toc_i.yaml", ("Page", "page.md")
+        ),
+    )
+    toc = next(item for item in plan.inputs if item.action is PlanAction.SYNC_TOC)
+    assert toc.expected_sha256 is None
+    reconcile_fixed_outputs(
+        plan,
+        (
+            (document.pair.target_path.value, b"translated"),
+            ("ydb/docs/en/core/manual/toc_i.yaml", None),
+        ),
+    )
+    with pytest.raises(TranslationPlanError, match="translation_plan_toc_uncovered"):
+        reconcile_fixed_outputs(
+            plan,
+            (
+                (document.pair.target_path.value, b"translated"),
+                ("ydb/docs/en/core/manual/toc_i.yaml", b"items:\n"),
+            ),
+        )
+    reconcile_candidate_outputs(
+        plan,
+        (
+            (document.pair.target_path.value, b"translated"),
+            ("ydb/docs/en/core/manual/toc_i.yaml", None),
+        ),
     )
 
 

@@ -18,6 +18,7 @@ from _runtime_services import (
     request_schema,
     rewrite_markdown,
     seed_inventory_preimages,
+    toc_string_translations,
     translated_markdown,
     translation_segments,
 )
@@ -211,6 +212,10 @@ class CaptureServices(RuntimeServices):
             role = "direction"
             values = classification_response(
                 prompt, direction=None if self.stop == "direction" else "ru_to_en")
+        elif "strings" in schema["properties"]:
+            role = "translate"
+            self.translations += 1
+            values = toc_string_translations(prompt, schema)
         elif "files" in schema["properties"]:
             role = "critic"
             self.critics += 1

@@ -99,8 +99,10 @@ class ContinueServices(CaptureServices):
             and self.roles[-1] == "translate"
             and "<TRANSLATION_DRAFT_" not in prompt
         ):
-            source = raw_translation_source(prompt)
             schema_wrapper = request_schema(body)
+            if schema_wrapper is not None and "strings" in schema_wrapper["schema"]["properties"]:
+                return response
+            source = raw_translation_source(prompt)
             if schema_wrapper is not None and all(
                 key.startswith("segment_") for key in schema_wrapper["schema"]["properties"]
             ):
