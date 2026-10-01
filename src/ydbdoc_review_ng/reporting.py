@@ -13,7 +13,7 @@ QA_MARKER = "<!-- ydbdoc-current-qa -->"
 TRANSLATION_LINK_MARKER = "<!-- ydbdoc-translation-pr -->"
 SCOPE_FAILURE_MARKER = "<!-- ydbdoc-scope-failure -->"
 CLASSIFICATION_MARKER = "<!-- ydbdoc-source-classification -->"
-_MAX_REPORTED_FILES = 10
+_MAX_REPORTED_FINDINGS = 25
 _STATUS_ICONS = {"GREEN": "🟢", "YELLOW": "🟡", "RED": "🔴"}
 
 _SCOPE_FAILURE_MESSAGES = {
@@ -117,20 +117,28 @@ def _finding_lines(review: QualityReviewResult) -> list[str]:
     by_path: dict[str, list[Finding]] = {}
     for finding in findings:
         by_path.setdefault(_line(finding.target_path)[:240], []).append(finding)
-    shown_paths = tuple(by_path)[:_MAX_REPORTED_FILES]
-    for path in shown_paths:
-        grouped = by_path[path]
-        lines.append(f"**`{path}`**")
+    shown = 0
+    omitted = 0
+    for path, grouped in by_path.items():
+        visible: list[Finding] = []
         for finding in grouped:
+            if shown < _MAX_REPORTED_FINDINGS:
+                visible.append(finding)
+                shown += 1
+            else:
+                omitted += 1
+        if not visible:
+            continue
+        lines.append(f"**`{path}`**")
+        for finding in visible:
             lines.append(
                 f"- строка {finding.target_line}, `"
                 f"{_line(finding.searchable_snippet)[:80]}`: "
                 f"{_line(finding.reason)[:160]} Исправление: "
                 f"{_line(finding.expected_correction)[:160]}"
             )
-    omitted_files = len(by_path) - len(shown_paths)
-    if omitted_files:
-        lines.append(f"Ещё {omitted_files} затронутых файлов не показаны.")
+    if omitted:
+        lines.append(f"Ещё {omitted} замечаний не показаны.")
     if not findings:
         lines.append(f"- Проверка вернула {review.final.verdict.value} без конкретного замечания.")
     return lines

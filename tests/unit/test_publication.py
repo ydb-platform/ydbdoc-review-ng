@@ -600,11 +600,32 @@ def test_red_report_renders_every_finding_for_each_file() -> None:
     )
 
     assert report.count("- строка ") == 25
-    assert "ещё" not in report
+    assert "не показаны" not in report
     assert "problem 24" in report
     assert PATH.value in report
     assert other in report
     assert len(report) < 8_000
+
+
+def test_red_report_caps_public_findings_at_twenty_five() -> None:
+    findings = tuple(
+        Finding(
+            True,
+            f"problem {index}",
+            f"fix {index}",
+            f"snippet {index}",
+            PATH.value,
+            index + 1,
+        )
+        for index in range(27)
+    )
+    report = render_report(
+        review(Verdict.RED, findings),
+        ReportContext(SOURCE, TARGET, Decimal("0.40")),
+    )
+    assert report.count("- строка ") == 25
+    assert "Ещё 2 замечаний не показаны." in report
+    assert "problem 26" not in report
 
 
 def test_report_never_renders_unknown_cost_as_zero() -> None:
