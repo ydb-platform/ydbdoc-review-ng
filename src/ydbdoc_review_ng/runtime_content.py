@@ -667,7 +667,12 @@ class RuntimeContent:
             classified = classify_path(self.roots, RepoPath(path))
             if classified.kind is not PathKind.TOC or classified.relative is None:
                 continue
-            translated_files[path] = value if value is not None else candidate_files.get(path)
+            # Prefer the candidate/published TOC when present so continue replay
+            # does not overwrite critic-corrected wording with a fresh delta draft.
+            if path in candidate_files:
+                translated_files[path] = candidate_files[path]
+            else:
+                translated_files[path] = value if value is not None else None
             source_path = RepoPath(f"{source_root.value}/{classified.relative}")
             if source_path.value not in source_files:
                 source_bytes = self.source.github.read_bytes(source_snapshot, source_path)
@@ -1134,6 +1139,7 @@ class RuntimeContent:
                 content = draft.content
                 if (
                     translate
+                    and preparation.snapshot.mode is not Mode.DOC_CONTINUE
                     and content is not None
                     and draft.string_changes
                 ):

@@ -617,7 +617,11 @@ def translation_plan_sha256(plan: TranslationPlan, /) -> ContentHash:
                 "action": item.action.value,
                 "target_path": None if item.target_path is None else item.target_path.value,
                 "outputs": [path.value for path in item.outputs],
-                "expected_sha256": item.expected_sha256,
+                "expected_sha256": (
+                    None
+                    if item.action is PlanAction.SYNC_TOC
+                    else item.expected_sha256
+                ),
                 "source_before_sha256": item.source_before_sha256,
                 "source_after_sha256": item.source_after_sha256,
             }

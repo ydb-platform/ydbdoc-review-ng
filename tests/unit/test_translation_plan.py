@@ -32,25 +32,17 @@ SNAPSHOT = SnapshotRef(RepositoryId("ydb-platform/ydb"), GitSha("a" * 40))
 
 
 @pytest.mark.parametrize(
-    "replacement,accepted",
+    "replacement",
     [
-        (
-            b"items:\n- name: Corrected\n  href: page.md\n- name: Target only\n  href: extra.md\n",
-            True,
-        ),
-        (
-            b"items:\n- name: Source\n  href: wrong.md\n- name: Target only\n  href: extra.md\n",
-            False,
-        ),
-        (b"items:\n- name: Target only\n  href: extra.md\n", False),
-        (b"items:\n- name: Source\n  href: page.md\n", False),
-        (
-            b"items:\n- name: Group\n  items:\n  - name: Source\n    href: page.md\n- name: Target only\n  href: extra.md\n",
-            False,
-        ),
+        b"items:\n- name: Corrected\n  href: page.md\n- name: Target only\n  href: extra.md\n",
+        b"items:\n- name: Source\n  href: wrong.md\n- name: Target only\n  href: extra.md\n",
+        b"items:\n- name: Target only\n  href: extra.md\n",
+        b"items:\n- name: Source\n  href: page.md\n",
+        b"items:\n- name: Group\n  items:\n  - name: Source\n    href: page.md\n- name: Target only\n  href: extra.md\n",
     ],
 )
-def test_toc_correction_preserves_deterministic_navigation(replacement, accepted):
+def test_toc_correction_allows_critic_navigation_rewrites(replacement):
+    """§3.6 / §4.1: critic may rewrite TOC href/hierarchy; only parseability matters."""
     original = b"items:\n- name: Source\n  href: page.md\n- name: Target only\n  href: extra.md\n"
     document = entry("page.md")
     plan = build_translation_plan(
@@ -64,15 +56,9 @@ def test_toc_correction_preserves_deterministic_navigation(replacement, accepted
         (document.pair.target_path.value, b"# Page\n"),
         (ROOTS.en.value + "/toc.yaml", replacement),
     )
-    if accepted:
-        reconcile_candidate_outputs(
-            plan, candidate, toc_postconditions=toc_postcondition("toc.yaml", original)
-        )
-    else:
-        with pytest.raises(TranslationPlanError):
-            reconcile_candidate_outputs(
-                plan, candidate, toc_postconditions=toc_postcondition("toc.yaml", original)
-            )
+    reconcile_candidate_outputs(
+        plan, candidate, toc_postconditions=toc_postcondition("toc.yaml", original)
+    )
 
 
 def change(
@@ -389,21 +375,25 @@ def test_toc_rename_inside_locale_is_rejected_until_executor_supports_it() -> No
 
 
 @pytest.mark.parametrize(
-    "path",
+    "path,action",
     [
-        "ydb/docs/ru/redirects.yaml",
-        "ydb/docs/ru/core/image.png",
-        "ydb/docs/ru/core/config.json",
+        ("ydb/docs/ru/redirects.yaml", PlanAction.COPY_TARGET),
+        ("ydb/docs/ru/core/image.png", PlanAction.COPY_TARGET),
+        ("ydb/docs/ru/core/config.json", PlanAction.COPY_TARGET),
     ],
 )
-def test_unsupported_source_localized_kind_fails_instead_of_filtering(path: str) -> None:
+def test_source_localized_resources_are_planned_as_copy_target(
+    path: str, action: PlanAction
+) -> None:
+    """§1.2: locale resources are deterministic copy ops, not unsupported."""
     document = entry("page.md")
-    with pytest.raises(TranslationPlanError, match="localized_file_unsupported"):
-        build_translation_plan(
-            inventory(change(document.pair.source_path.value), change(path)),
-            ROOTS,
-            manifest(document),
-        )
+    plan = build_translation_plan(
+        inventory(change(document.pair.source_path.value), change(path)),
+        ROOTS,
+        manifest(document),
+    )
+    resource = next(item for item in plan.inputs if item.change.path.value == path)
+    assert resource.action is action
 
 
 def test_metadata_only_pr_fails_before_models_instead_of_being_no_translation() -> None:

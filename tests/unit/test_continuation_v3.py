@@ -84,17 +84,19 @@ def test_v3_direction_and_review_shapes() -> None:
     assert decode_state(encode_state(review)) == review
 
 
-def test_v3_review_requires_target_sha() -> None:
-    with pytest.raises(ContinuationStateError):
-        ContinuationState(
-            STATE_VERSION,
-            ContinuationStage.REVIEW,
-            Direction.EN_TO_RU,
-            ContentHash("d" * 64),
-            None,
-            (),
-            (REVIEW,),
-        )
+def test_v3_review_allows_null_target_sha_for_zero_commit_red() -> None:
+    """REQUIREMENTS §4.2: zero-commit RED keeps checkpoint with target_sha=null."""
+    state = ContinuationState(
+        STATE_VERSION,
+        ContinuationStage.REVIEW,
+        Direction.EN_TO_RU,
+        ContentHash("d" * 64),
+        None,
+        (),
+        (REVIEW,),
+    )
+    assert state.target_sha is None
+    assert decode_state(encode_state(state)) == state
 
 
 @pytest.mark.parametrize(

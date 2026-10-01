@@ -435,9 +435,9 @@ class LinearWorkflows:
             stage = WorkflowStage.REVIEW
             review = self._reviewer.review(snapshot, candidate)
             reviewed = WorkflowCandidate(review.final_candidate, candidate.review_context)
-            if reviewed.content != candidate.content:
-                stage = WorkflowStage.VALIDATE
-                self._content.validate_candidate(snapshot, reviewed)
+            stage = WorkflowStage.VALIDATE
+            # Critic immediate push may have consumed the prior validation receipt.
+            self._content.validate_candidate(snapshot, reviewed)
             stage = WorkflowStage.PUBLISH
             final_sha = self._publisher.publish(snapshot, reviewed)
             stage = WorkflowStage.REPORT
