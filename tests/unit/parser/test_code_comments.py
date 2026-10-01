@@ -59,12 +59,19 @@ def test_html_comment_is_extracted_but_quoted_marker_is_not() -> None:
 
 
 @pytest.mark.parametrize("language", [b"sql", b"yql"])
-def test_sql_comment_language_aliases_extract_real_comment_only(language: bytes) -> None:
+def test_unsupported_sql_yql_fence_is_fully_protected(language: bytes) -> None:
+    """REQUIREMENTS §2.1: SQL/YQL are not in the closed language table."""
     source = (
         b"```" + language + b"\nSELECT '-- hidden'; -- Translate this\n```\n"
     )
 
-    assert values(source) == [b"Translate this"]
+    assert values(source) == []
+
+
+def test_bash_parameter_expansion_hash_is_not_a_comment() -> None:
+    """REQUIREMENTS §2/§2.1: ${value#prefix} must stay opaque executable code."""
+    source = b"```bash\necho ${value#prefix}\n```\n"
+    assert values(source) == []
 
 
 def test_text_fence_exposes_description_after_syntax_separator() -> None:
