@@ -17,9 +17,11 @@
 
 **READY** vs `REQUIREMENTS_RU.md` на offline contract surface.
 
-Clean-slate review `78e0e58` Important 1–18 / Minor 19–22 закрыты на tip
-`947a556` (21 FIXED-NOW, 1 INCORRECT = #2 mixed-locale). См. `debt-map.md`.
+Clean-slate review `78e0e58` Important 1–18 / Minor 19–22 закрыты (21 FIXED-NOW,
+1 INCORRECT = #2 mixed-locale). См. `debt-map.md`.
 
-Offline suite: **14 failed / 2123 passed** (лучше tip baseline 22 failed; без
-новых регрессий относительно tip). Live `doc_translate` gate ещё не доказан
-end-to-end credentials/push.
+Offline suite: **0 failed / 2137 passed** (1 deselected). Residual 14 failures after
+clean-slate were stale expectations vs soft-publish / §4.1 zero-text critic /
+label DELETE — tests updated, no production regression found.
+
+Live `doc_translate` gate ещё не доказан end-to-end credentials/push.

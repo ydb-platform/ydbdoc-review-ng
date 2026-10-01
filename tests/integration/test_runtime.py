@@ -647,7 +647,8 @@ def test_runtime_preserves_list_formatting_drift_through_critic() -> None:
     )
 
     assert exit_code == 0
-    assert services.raw_calls == 1
+    # §2.2: one technical correction retry after untranslated_source_prose.
+    assert services.raw_calls == 2
     assert services.files["ydb/docs/en/core/page.md"] == (
         b"* Parent translated\n"
         b"* `enable_strict_user_management` "
@@ -755,16 +756,17 @@ def test_runtime_two_content_filters_fail_without_publication_or_checkpoint() ->
     translation_attempts = [
         row for row in services.audit if "attempt_id" in row and row["role"] == "translate"
     ]
-    assert exit_code == 1
+    # §5.1: translator content_filter soft-publishes null and continues to critic/arbiter.
+    assert exit_code == 0
     # Whole-file contract: identical request at most twice. No adaptive chunk split.
     assert len(services.raw_request_bodies) == 2
     assert services.raw_request_bodies[0] == services.raw_request_bodies[1]
     assert [row["status"] for row in translation_attempts] == ["failed", "failed"]
     assert [row["error"] for row in translation_attempts] == ["content_filter", "content_filter"]
     assert [row["cost_rub"] for row in translation_attempts] == [Decimal("0.01"), Decimal("0.01")]
-    assert not any(method in {"POST", "PATCH"} for method, _path in services.events)
-    assert all("continuation_id" not in row for row in services.audit)
-    assert services.audit[-1]["status"] == "failed"
+    assert ("MODEL", ("files",)) in services.events
+    assert ("MODEL", ("verdict", "findings")) in services.events
+    assert services.audit[-1]["status"] == "succeeded"
 
 
 def test_runtime_content_filter_does_not_split_document_into_child_requests() -> None:
@@ -792,16 +794,17 @@ def test_runtime_content_filter_does_not_split_document_into_child_requests() ->
     translation_attempts = [
         row for row in services.audit if "attempt_id" in row and row["role"] == "translate"
     ]
-    assert exit_code == 1
+    # §5.1: failed translator path stays null for critic; critic may assemble the target.
+    assert exit_code == 0
     assert len(services.raw_request_bodies) == 2
     assert len({body for body in services.raw_request_bodies}) == 1
     assert [row["error"] for row in translation_attempts] == ["content_filter", "content_filter"]
-    assert services.files["ydb/docs/en/core/page.md"] == b"# Old\n"
-    assert not any(method in {"POST", "PATCH"} for method, _path in services.events)
+    assert services.files["ydb/docs/en/core/page.md"] == b"# Translated\n"
+    assert ("MODEL", ("files",)) in services.events
 
 
 def test_t017_f04_pure_rename_rejects_changed_whole_fence_before_commit() -> None:
-    from ydbdoc_review_ng.application import TranslateWorkflowInput, WorkflowError
+    from ydbdoc_review_ng.application import TranslateWorkflowInput
     from ydbdoc_review_ng.domain import GitSha
     from ydbdoc_review_ng.runtime import create_runtime
 
@@ -842,13 +845,13 @@ def test_t017_f04_pure_rename_rejects_changed_whole_fence_before_commit() -> Non
         model_transport=services.model,
     )
 
-    with pytest.raises(WorkflowError):
-        runtime.doc_translate(TranslateWorkflowInput(42, GitSha(services.source), Decimal(10)))
-
-    # Fail-closed at candidate validation before soft-publish / critic (§8).
-    assert not any(method in {"POST", "PATCH"} for method, _ in services.events)
-    assert [row["role"] for row in services.audit if "attempt_id" in row] == ["direction"]
-    assert services.audit[-1]["status"] == "failed"
+    # §5.1 / soft structure diagnostics: opaque fence mismatch is not a hard gate;
+    # the candidate reaches critic/arbiter instead of aborting before publish.
+    result = runtime.doc_translate(TranslateWorkflowInput(42, GitSha(services.source), Decimal(10)))
+    assert result.final_commit_sha is not None
+    assert ("MODEL", ("files",)) in services.events
+    assert ("MODEL", ("verdict", "findings")) in services.events
+    assert services.audit[-1]["status"] == "succeeded"
 
 
 @pytest.mark.parametrize("mismatch", ["delete", "rename", "toc", "redirect"])
@@ -1015,6 +1018,11 @@ class _T017R07Services(RuntimeServices):
         self.operation = operation
         self.ref_files: dict[str, dict[str, bytes]] = {self.source: {}, self.translated: {}}
         if operation == "absent":
+            # §4.1 zero-text critic needs an empty files map, then arbiter.
+            self.semantic_responses = [
+                {"files": {}},
+                {"verdict": "GREEN", "findings": []},
+            ]
             if target_state == "restored":
                 self.ref_files[self.translated]["ydb/docs/en/core/page.md"] = b"# Restored\n"
             return
@@ -1155,14 +1163,22 @@ def test_t017_r07_target_absent_noop_checks_pinned_target(
         for method, path in services.events
         if method == "GET"
     )
-    assert ("MODEL", ("verdict", "findings")) not in services.events
+    # §4.1 / §5.2: zero-text verify still runs critic {"files":{}} + arbiter.
+    if expected_exit == 0:
+        assert ("MODEL", ("files",)) in services.events
+        assert ("MODEL", ("verdict", "findings")) in services.events
     if expected_exit:
         assert services.audit[-1]["error"] == "load_candidate_failed"
 
 
 @pytest.mark.parametrize(
     ("target_state", "expected_exit", "expects_critic"),
-    [("missing", 1, False), ("protected-changed", 1, False), ("correct", 0, True)],
+    [
+        # Soft structure diagnostics (§5.1): protected drift reaches critic instead of hard gate.
+        ("missing", 1, False),
+        ("protected-changed", 0, True),
+        ("correct", 0, True),
+    ],
 )
 def test_t017_r07_already_renamed_noop_checks_entire_pinned_target(
     target_state: str, expected_exit: int, expects_critic: bool
@@ -1341,11 +1357,11 @@ def test_t017_n01_real_verify_rejects_sentence_final_filename_change() -> None:
         dispatcher=runtime,
     )
 
-    assert result == 1
-    assert ("MODEL", ("verdict", "findings")) not in services.events
-    assert services.comments == []
-    assert services.audit[-1]["status"] == "failed"
-    assert services.audit[-1]["error"] == "validate_failed"
+    # Soft structure diagnostics: filename drift reaches critic/arbiter (§5.1/§5.2).
+    assert result == 0
+    assert ("MODEL", ("files",)) in services.events
+    assert ("MODEL", ("verdict", "findings")) in services.events
+    assert services.audit[-1]["status"] == "succeeded"
 
 
 def _assert_t017_q01_real_verify_rejects_literal_change(source: bytes) -> None:
@@ -1382,11 +1398,11 @@ def _assert_t017_q01_real_verify_rejects_literal_change(source: bytes) -> None:
         dispatcher=runtime,
     )
 
-    assert result == 1
-    assert ("MODEL", ("verdict", "findings")) not in services.events
-    assert services.comments == []
-    assert services.audit[-1]["status"] == "failed"
-    assert services.audit[-1]["error"] == "validate_failed"
+    # Soft structure diagnostics: protected literal drift reaches critic/arbiter.
+    assert result == 0
+    assert ("MODEL", ("files",)) in services.events
+    assert ("MODEL", ("verdict", "findings")) in services.events
+    assert services.audit[-1]["status"] == "succeeded"
 
 
 def test_t017_q01_real_verify_rejects_sequence_block_scalar_change() -> None:
@@ -2053,7 +2069,12 @@ def test_verify_replays_pinned_toc_plan_instead_of_translated_h1(toc_label) -> N
         ).encode(),
     }
     assert glossary_files == {}
-    assert all(method == "GET" for method, _ in services.events)
+    # §0: auth removes the accepted label (DELETE); candidate loading itself is GET-only.
+    assert all(method in {"GET", "DELETE"} for method, _ in services.events)
+    assert any(
+        method == "DELETE" and path.endswith("/labels/doc_verify")
+        for method, path in services.events
+    )
 
 
 @pytest.mark.parametrize("operation", ["added", "removed", "renamed"])
@@ -2084,8 +2105,21 @@ def test_runtime_canonical_file_operations_have_shipped_producer(operation):
         del services.files["ydb/docs/en/core/page.md"]
         services.files["ydb/docs/ru/core/toc.yaml"] = b"items:\n  - name: Page\n    href: page.md\n"
         services.files["ydb/docs/en/core/toc.yaml"] = b"items:\n"
+        services.semantic_responses = [
+            {
+                "files": {
+                    "ydb/docs/en/core/page.md": "# Translated\n",
+                    "ydb/docs/en/core/toc.yaml": "items:\n  - name: Page\n    href: page.md\n",
+                }
+            },
+            {"verdict": "GREEN", "findings": []},
+        ]
     elif operation == "removed":
         del services.files["ydb/docs/ru/core/page.md"]
+        services.semantic_responses = [
+            {"files": {}},
+            {"verdict": "GREEN", "findings": []},
+        ]
     else:
         services.files["ydb/docs/en/core/old.md"] = b"# Old\n"
         del services.files["ydb/docs/en/core/page.md"]
@@ -2104,7 +2138,8 @@ def test_runtime_canonical_file_operations_have_shipped_producer(operation):
     result = runtime.doc_translate(TranslateWorkflowInput(42, GitSha(services.source), Decimal(10)))
     assert result.final_commit_sha == GitSha(services.translated)
     model_calls = [event for event in services.events if event[0] == "MODEL"]
-    assert len(model_calls) == {"added": 3, "removed": 0, "renamed": 2}[operation]
+    # §4.1: remove-only still runs zero-text critic + arbiter (2 MODEL events).
+    assert len(model_calls) == {"added": 3, "removed": 2, "renamed": 2}[operation]
     assert len(services.comments) == 1
 
 
@@ -2313,8 +2348,11 @@ def test_runtime_never_reports_green_after_branch_moves_during_critic():
         )
         == 1
     )
-    assert not services.pr_exists
-    assert not services.comments
+    # Soft-publish may create the translation PR before critic; head move fails at report.
+    assert services.audit[-1]["status"] == "failed"
+    assert not any(
+        "GREEN" in (comment.get("body") or "") for comment in services.comments
+    )
 
 
 def test_broken_build_does_not_block_translation_publication(monkeypatch, tmp_path):

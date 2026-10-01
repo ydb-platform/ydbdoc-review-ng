@@ -21,8 +21,8 @@
 | 11 | Full suite + live PR | pending |
 
 > [!success] offline suite (2026-10-01)
-> Focused residual suite after five production continue/critic bugs: **164 passed**
-> (critic/continue/assets related). Live `doc_translate` gate still needs credentials / push.
+> Full non-live `tests/unit` + `tests/integration`: **2137 passed, 0 failed**
+> (1 deselected). Live `doc_translate` gate still needs credentials / push.
 
 ## Neural review triage (2026-10-01)
 
