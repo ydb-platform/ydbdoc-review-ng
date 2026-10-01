@@ -16,10 +16,9 @@
 ## Код
 
 Срезы 1–10 закрыты на `main`. Second-review residuals 1–12 и third-review
-residuals 1–9 закрыты против `REQUIREMENTS_RU.md`: soft-publish diagnostics
-(Markdown/YAML/structure) не gate, continue для missing/null targets и
-soft-published RED, zero-text NON_FINAL → RED, TOC same-name prune + empty-target
-ancestor string IDs, линейный source-echo detector. См. `debt-map.md`.
-Continue tests that still expected per-file `complete_pair` exclusion or
-translation-PR continue after branch-delete/`target_sha=null` were rewritten to
-§1.1/§1.2/§5.1 (stale expectations). Остаётся live `doc_translate` gate.
+residuals 1–9 закрыты против `REQUIREMENTS_RU.md`. Пять production bugs после
+`bbb7495` закрыты: critic malformed YAML soft-publish, continue после soft YAML,
+TOC-only/resource-only continue без Markdown scope, mixed MD+binary restore без
+UTF-8 decode ассетов. См. `debt-map.md`. Continue tests с устаревшими
+ожиданиями `complete_pair`/null-head переписаны на §1.1/§1.2/§5.1. Остаётся
+live `doc_translate` gate.

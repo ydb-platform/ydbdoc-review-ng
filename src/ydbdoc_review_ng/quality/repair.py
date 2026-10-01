@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from typing import Protocol
 
+import yaml
+
 from ydbdoc_review_ng.domain import RepoPath
 from ydbdoc_review_ng.models import AttemptError, ModelCallResult, ModelRequest
 from ydbdoc_review_ng.parser.markdown import build_markdown_plan
@@ -310,10 +312,12 @@ def _derive_target_translations(
 ) -> dict[str, str]:
     if translation_request != build_translation_request(source, source_plan):
         raise QualityInputError
-    target_plan = build_markdown_plan(source_plan.source_snapshot, target_path, target)
+    # REQUIREMENTS §2 / §4.1: YAML/Markdown plan diagnostics are soft. Critic UTF-8
+    # corrections must still publish; derive maps best-effort or empty.
     try:
+        target_plan = build_markdown_plan(source_plan.source_snapshot, target_path, target)
         verify_document_candidate(source, source_plan, target, target_plan)
-    except (ProtectedMismatch, TypeError, ValueError):
+    except (ProtectedMismatch, TypeError, ValueError, UnicodeError, yaml.YAMLError):
         raise QualityInputError from None
     target_fields = fields_of(target_plan)
     if len(target_fields) != len(translation_request.fields):

@@ -933,3 +933,166 @@ def test_zero_commit_null_toc_keeps_review_checkpoint() -> None:
     assert checkpoint.state.stage is ContinuationStage.REVIEW
     assert checkpoint.state.target_sha is None
     assert any(path.value.endswith("toc.yaml") for path in checkpoint.state.review_paths)
+
+
+def test_toc_only_null_checkpoint_is_continuable() -> None:
+    """REQUIREMENTS §5.3: TOC-only RED with empty Markdown scope continues (#3)."""
+
+    class NullToc(ContinueServices):
+        def model(self, request):
+            body = json.loads(request.body)
+            props = request_schema(body)["schema"]["properties"]
+            role = (
+                "direction"
+                if "translation_required" in props
+                else "critic"
+                if "files" in props
+                else "arbiter"
+                if "findings" in props
+                else "toc"
+                if "strings" in props
+                else "translate"
+            )
+            if role == "critic" and not self.continuing:
+                self.roles.append(role)
+                return HttpResponse(503, b"{}", None)
+            response = super().model(request)
+            if role == "toc":
+                return HttpResponse(
+                    200,
+                    replace_response_text(response.body, json.dumps({"strings": {}})),
+                    Decimal(".01"),
+                )
+            return response
+
+    services = NullToc(names=(), stop="rename_red")
+    services.changes = [{"status": "modified", "filename": RU + "toc.yaml"}]
+    services.snapshots[services.base][RU + "toc.yaml"] = b"title: Old\nitems: []\n"
+    services.snapshots[services.base][EN + "toc.yaml"] = b"title: Old EN\nitems: []\n"
+    services.snapshots[services.source][RU + "toc.yaml"] = b"title: New\nitems: []\n"
+
+    assert services.translate().verdict is Verdict.RED
+    checkpoint = services.checkpoint()
+    assert checkpoint.scope_target_paths == ()
+    assert checkpoint.state.target_sha is None
+
+    services.continuing = True
+    services.stop = None
+    services.roles.clear()
+    resumed = services.resume()
+    assert resumed.verdict in {Verdict.GREEN, Verdict.YELLOW, Verdict.RED}
+    assert services.roles  # models ran; empty-Markdown continue admitted
+
+
+def test_resource_only_red_checkpoint_is_continuable() -> None:
+    """REQUIREMENTS §5.3: resource-only RED with empty Markdown scope continues (#4)."""
+
+    class ResOnly(ContinueServices):
+        def model(self, request):
+            body = json.loads(request.body)
+            props = request_schema(body)["schema"]["properties"]
+            role = (
+                "direction"
+                if "translation_required" in props
+                else "critic"
+                if "files" in props
+                else "arbiter"
+                if "findings" in props
+                else "toc"
+                if "strings" in props
+                else "translate"
+            )
+            if role == "critic" and not self.continuing:
+                self.roles.append(role)
+                payload = {
+                    "model": "t",
+                    "choices": [
+                        {
+                            "finish_reason": "length",
+                            "message": {"role": "assistant", "content": '{"files":{}}'},
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+                }
+                return HttpResponse(200, json.dumps(payload).encode(), Decimal(".01"))
+            return super().model(request)
+
+    png = RU + "chart.png"
+    services = ResOnly(names=(), stop="rename_red")
+    blob = b"\x89PNG\x00\xff"
+    services.changes = [{"status": "added", "filename": png}]
+    for tree in [services.files, *services.snapshots.values()]:
+        tree[png] = blob
+
+    assert services.translate().verdict is Verdict.RED
+    checkpoint = services.checkpoint()
+    assert checkpoint.scope_target_paths == ()
+    assert any(path.value.endswith("chart.png") for path in checkpoint.state.review_paths)
+
+    services.continuing = True
+    services.stop = None
+    services.roles.clear()
+    resumed = services.resume()
+    assert resumed.verdict in {Verdict.GREEN, Verdict.YELLOW, Verdict.RED}
+    assert services.roles
+
+
+def test_mixed_markdown_and_binary_continue_skips_asset_utf8_restore() -> None:
+    """REQUIREMENTS §5.3: continue restores binaries by bytes, not Markdown plan (#5)."""
+
+    class Mix(ContinueServices):
+        def model(self, request):
+            body = json.loads(request.body)
+            props = request_schema(body)["schema"]["properties"]
+            role = (
+                "direction"
+                if "translation_required" in props
+                else "critic"
+                if "files" in props
+                else "arbiter"
+                if "findings" in props
+                else "toc"
+                if "strings" in props
+                else "translate"
+            )
+            response = super().model(request)
+            if role == "arbiter" and not self.continuing:
+                payload = {
+                    "verdict": "RED",
+                    "findings": [
+                        {
+                            "reason": "Needs review.",
+                            "expected_correction": "Fix translation.",
+                            "searchable_snippet": "Translated",
+                            "target_path": EN + "a.md",
+                            "target_line": 1,
+                        }
+                    ],
+                }
+                return HttpResponse(
+                    200,
+                    replace_response_text(response.body, json.dumps(payload)),
+                    Decimal(".01"),
+                )
+            return response
+
+    png = RU + "chart.png"
+    services = Mix(names=("a",), stop="rename_red")
+    blob = b"\x89PNG\x00\xff"
+    services.changes = [
+        {"status": "modified", "filename": RU + "a.md"},
+        {"status": "added", "filename": png},
+    ]
+    for tree in [services.files, *services.snapshots.values()]:
+        tree[RU + "a.md"] = b"# Source\n"
+        tree[png] = blob
+
+    assert services.translate().verdict is Verdict.RED
+    assert services.files[EN + "chart.png"] == blob
+    services.continuing = True
+    services.stop = None
+    services.roles.clear()
+    resumed = services.resume()
+    assert resumed.verdict in {Verdict.GREEN, Verdict.YELLOW, Verdict.RED}
+    assert services.files[EN + "chart.png"] == blob
+    assert services.roles

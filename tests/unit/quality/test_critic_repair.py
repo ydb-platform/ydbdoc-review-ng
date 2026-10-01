@@ -101,3 +101,56 @@ def test_checkpoint_rejects_changed_protected_content_or_structure(target: bytes
 
     with pytest.raises(QualityInputError):
         _derive_target_translations(source, plan, request, target, TARGET_PATH)
+
+
+def test_derive_malformed_yaml_frontmatter_is_quality_input_not_parser_error() -> None:
+    """REQUIREMENTS §2/§4.1: critic YAML diagnostics soft-fail as QualityInputError (#1)."""
+    source = b"---\ntitle: Good\n---\nBody text here.\n"
+    malformed = b"---\ntitle: [broken\n---\nCorrected body text.\n"
+    plan = build_markdown_plan(SNAPSHOT, SOURCE_PATH, source)
+    request = build_translation_request(source, plan)
+
+    with pytest.raises(QualityInputError):
+        _derive_target_translations(source, plan, request, malformed, TARGET_PATH)
+
+
+def test_review_pr_soft_publishes_malformed_yaml_critic_correction() -> None:
+    """REQUIREMENTS §4.1: valid critic UTF-8 with broken YAML still replaces the draft (#1)."""
+    source = b"---\ntitle: Good\n---\nBody text here.\n"
+    draft = b"---\ntitle: Draft\n---\nBody text here.\n"
+    malformed = b"---\ntitle: [broken\n---\nCorrected body text.\n"
+    plan = build_markdown_plan(SNAPSHOT, SOURCE_PATH, source)
+    request = build_translation_request(source, plan)
+    target = "ydb/docs/ru/example.md"
+
+    class Models:
+        def __init__(self) -> None:
+            self.responses = iter(
+                [
+                    json.dumps({"files": {target: malformed.decode("utf-8")}}),
+                    json.dumps({"verdict": "GREEN", "findings": []}),
+                ]
+            )
+
+        def invoke(self, request: ModelRequest, /) -> ModelCallResult:
+            return ModelCallResult(next(self.responses), None, ())
+
+    def validate(files: dict[str, bytes]) -> None:
+        for name, content in files.items():
+            try:
+                _derive_target_translations(source, plan, request, content, RepoPath(name))
+            except QualityInputError:
+                return
+
+    corrected, final = review_pr(
+        Models(),
+        critic_model="critic",
+        arbiter_model="arbiter",
+        source_files={"ydb/docs/en/example.md": source},
+        translated_files={target: draft},
+        glossary_files={},
+        validate_files=validate,
+    )
+
+    assert corrected[target] == malformed
+    assert final.verdict is Verdict.GREEN

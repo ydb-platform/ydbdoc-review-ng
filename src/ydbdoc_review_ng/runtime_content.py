@@ -1984,6 +1984,14 @@ class RuntimeContent:
         restored: list[AcceptedMap] = []
         try:
             for accepted in accepted_documents:
+                kind = classify_path(self.roots, accepted.target_path).kind
+                if kind in {
+                    PathKind.ASSET,
+                    PathKind.REDIRECTS,
+                    PathKind.LOCALIZED_OTHER,
+                }:
+                    # Binary/locale resources are restored from fixed_files bytes.
+                    continue
                 target = accepted.translated_markdown.encode("utf-8")
                 if accepted.target_path in metadata:
                     self._validate_toc_correction(
@@ -2045,14 +2053,26 @@ class RuntimeContent:
             if document.entry.operation is not FileOperation.RENAME_TARGET
         }
         maps = {item.target_path for item in accepted_maps}
-        documents = {item.target_path: item for item in accepted_documents}
+        documents = {
+            item.target_path: item
+            for item in accepted_documents
+            if classify_path(self.roots, item.target_path).kind
+            in {PathKind.MARKDOWN, PathKind.TOC}
+        }
         document_paths = set(documents)
         fixed_paths = {path for path, _content in plans.fixed_files}
         markdown_paths = document_paths - metadata
         if (
             len(maps) != len(accepted_maps)
             or not maps <= allowed
-            or len(documents) != len(accepted_documents)
+            or len(documents) != len(
+                {
+                    item.target_path
+                    for item in accepted_documents
+                    if classify_path(self.roots, item.target_path).kind
+                    in {PathKind.MARKDOWN, PathKind.TOC}
+                }
+            )
             or not document_paths <= (allowed | metadata)
             or markdown_paths != maps
             or any(path not in allowed and path.value not in fixed_paths for path in document_paths)

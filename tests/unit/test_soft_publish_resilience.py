@@ -341,3 +341,27 @@ def test_restore_accepted_allows_soft_published_table_shape_diagnostic() -> None
     )
     assert len(restored) == 1
     assert restored[0].target_path == document.entry.pair.target_path
+
+
+def test_restore_accepted_allows_soft_published_malformed_yaml_frontmatter() -> None:
+    """REQUIREMENTS §5.3: continue restores soft-published YAML diagnostics (#2)."""
+    from ydbdoc_review_ng.continuation import AcceptedDocument
+    from ydbdoc_review_ng.runtime_content import FrozenSourcePlans
+
+    source = b"---\ntitle: Good\n---\nBody text here.\n"
+    published = b"---\ntitle: [broken\n---\nCorrected body text.\n"
+    document = document_for(source)
+    plans = FrozenSourcePlans(
+        cast(object, object()),
+        None,
+        (document,),
+        (),
+        cast(object, object()),
+    )
+    restored = content_with(ScriptedModels([])).restore_accepted_documents(
+        plans,
+        (AcceptedDocument(document.entry.pair.target_path, published.decode()),),
+    )
+    assert len(restored) == 1
+    assert restored[0].target_path == document.entry.pair.target_path
+    assert restored[0].as_dict() == {}

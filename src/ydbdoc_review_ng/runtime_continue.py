@@ -77,6 +77,11 @@ class ContinueReplay:
     accepted_maps: tuple[AcceptedMap, ...]
 
 
+def _document_like_path(content: RuntimeContent, path: RepoPath, /) -> bool:
+    kind = classify_path(content.roots, path).kind
+    return kind in {PathKind.MARKDOWN, PathKind.TOC}
+
+
 def _load_accepted_from_branch(
     content: RuntimeContent,
     plans: FrozenSourcePlans,
@@ -86,6 +91,10 @@ def _load_accepted_from_branch(
     published = SnapshotRef(plans.preparation.snapshots.source_snapshot.repository, target_sha)
     accepted: list[AcceptedDocument] = []
     for path in sorted(paths, key=lambda item: item.value):
+        # Assets/binaries stay in plans.fixed_files by path/bytes. Only Markdown and
+        # TOC go through UTF-8 AcceptedDocument restore (§5.3).
+        if not _document_like_path(content, path):
+            continue
         raw = content.source.github.read_bytes(published, path)
         if raw is None:
             continue
@@ -106,11 +115,14 @@ def replay_continue(
     if state.stage is ContinuationStage.DIRECTION:
         return ContinueReplay(preparation, None, (), ())
     referenced = set(state.pending_paths) | set(state.review_paths)
-    potential = next(
-        (scope for scope in preparation.potential.scopes if scope.direction is state.direction),
-        None,
-    )
-    if potential is None:
+    matching_scopes = [
+        scope for scope in preparation.potential.scopes if scope.direction is state.direction
+    ]
+    # TOC-only / resource-only PRs freeze an empty Markdown scope; potential.scopes
+    # may be empty while direction is still selected (§1 / §5.3).
+    if matching_scopes:
+        pass
+    elif preparation.potential.scopes or state.direction is None:
         raise ContinuationStateError()
     # The inventory freezes semantic no-ops and TOC deltas as well as Git facts.
     assert state.direction is not None
@@ -197,7 +209,11 @@ def replay_continue(
             loaded = {item.target_path for item in accepted_documents}
             # Soft-published null targets (new missing pages) stay absent on the
             # branch and must remain continuable for critic as JSON null (§5.1/§5.3).
-            missing = required - loaded
+            # Assets are restored via fixed_files, not AcceptedDocument.
+            document_required = {
+                path for path in required if _document_like_path(content, path)
+            }
+            missing = document_required - loaded
             if missing - set(state.review_paths):
                 raise ContinuationStateError()
     else:

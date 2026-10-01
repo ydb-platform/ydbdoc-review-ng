@@ -20,9 +20,9 @@
 | 10 | Budget / reporting | done |
 | 11 | Full suite + live PR | pending |
 
-> [!success] Offline suite (2026-10-01)
-> Focused residual suite after third review: **233 passed**.
-> Live `doc_translate` gate still needs credentials / push.
+> [!success] offline suite (2026-10-01)
+> Focused residual suite after five production continue/critic bugs: **164 passed**
+> (critic/continue/assets related). Live `doc_translate` gate still needs credentials / push.
 
 ## Neural review triage (2026-10-01)
 
@@ -52,6 +52,19 @@ vs `REQUIREMENTS_RU.md`. Fix only contract violations; skip invented requirement
 | 7 | Same-name TOC group drops target-only child | **fixed** | Exact-identity delete prunes like localized |
 | 8 | Empty target TOC ancestor stays RU | **fixed** | `_collect_new_target_strings` on insert |
 | 9 | Echo detector cubic + false join | **fixed** | Prefix-sum windows; no Cyrillic rejoin |
+
+## Production continue/critic bugs (bbb7495 → tip, 2026-10-01)
+
+Confirmed vs `REQUIREMENTS_RU.md` after third-review residuals; independent of
+complete_pair/no_action/saved_head test rewrites.
+
+| # | Bug | Status | Notes |
+|---|---|---|---|
+| 1 | Critic malformed YAML silently dropped | **fixed** | `_derive_target_translations` soft→`QualityInputError`; UTF-8 kept for arbiter |
+| 2 | Continue after soft-published malformed YAML dies | **fixed** | Same soft derive; `restore_accepted` keeps empty maps |
+| 3 | TOC-only `target_sha=null` checkpoint not continuable | **fixed** | Empty Markdown `potential.scopes` allowed on continue |
+| 4 | Resource-only RED checkpoint not continuable | **fixed** | Same empty-scope continue admission |
+| 5 | Mixed MD+binary continue loads asset as Markdown | **fixed** | Assets skip UTF-8 `AcceptedDocument`; fixed_files bytes only |
 
 ## Известные расхождения в коде
 
