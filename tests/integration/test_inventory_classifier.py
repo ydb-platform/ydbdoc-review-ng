@@ -83,29 +83,12 @@ class ClassifierServices(RuntimeServices):
 
 
 def answer(rows, *, required=False, direction=None):
+    del rows
     return json.dumps(
         {
             "translation_required": required,
             "direction": direction,
             "reason": "Changes are already reflected in both locales.",
-            "files": [
-                {
-                    "path": row["filename"],
-                    "operation": {
-                        "added": "add",
-                        "removed": "delete",
-                        "modified": "modify",
-                        "renamed": "rename",
-                    }[row["status"]],
-                    "old_path": None
-                    if row["status"] == "added"
-                    else row.get("previous_filename", row["filename"]),
-                    "new_path": None if row["status"] == "removed" else row["filename"],
-                    "action": "page" if required else "none",
-                    "toc_delta": None,
-                }
-                for row in rows
-            ],
         }
     )
 
@@ -254,9 +237,7 @@ def test_missing_required_inventory_version_fails_before_classifier(version):
 
 def test_required_resource_is_classified_before_existing_executor_limit():
     rows = [{"filename": IMAGE, "status": "renamed", "previous_filename": OLD_IMAGE, "changes": 0}]
-    value = json.loads(answer(rows, required=True, direction="ru_to_en"))
-    value["files"][0]["action"] = "resource"
-    services = ClassifierServices(rows, [json.dumps(value)])
+    services = ClassifierServices(rows, [answer(rows, required=True, direction="ru_to_en")])
     with pytest.raises(WorkflowError, match="translation_plan_direction_missing"):
         runtime(services).doc_translate(
             TranslateWorkflowInput(42, GitSha(services.source), Decimal(10))

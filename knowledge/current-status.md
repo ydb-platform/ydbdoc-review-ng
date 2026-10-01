@@ -15,8 +15,6 @@
 
 ## Код
 
-Код **не** приведён к контракту. В runtime ещё chunk-translator, старые
-semantic-action пути, YELLOW≈RED в continuation и прочий долг ChatGPT-эпохи.
-
-Следующий шаг: буквально выровнять код под сжатые требования, TDD, commits в
-`main`, обновляя `knowledge/` при каждом зафиксированном решении.
+Срез 1 начат: direction call больше не возвращает per-file `files[]`/`action`.
+Python зеркалит Git через `mirror_classified_files`. Остаётся chunk-translator,
+continuation v2, YELLOW≈RED и прочий долг в `debt-map.md`.

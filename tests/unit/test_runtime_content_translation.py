@@ -255,16 +255,6 @@ def test_production_models_ignore_legacy_model_overrides(role) -> None:
                         "translation_required": True,
                         "direction": "ru_to_en",
                         "reason": "Translate the modified source page.",
-                        "files": [
-                            {
-                                "path": SOURCE_PATH.value,
-                                "operation": "modify",
-                                "old_path": SOURCE_PATH.value,
-                                "new_path": SOURCE_PATH.value,
-                                "action": "page",
-                                "toc_delta": None,
-                            }
-                        ],
                     }
                 )
             ]

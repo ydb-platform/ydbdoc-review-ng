@@ -36,7 +36,6 @@ from ydbdoc_review_ng.dependencies import (
 from ydbdoc_review_ng.direction import (
     DIRECTION_UNDETERMINED_ACTION,
     DIRECTION_UNDETERMINED_WARNING,
-    ClassifiedFile,
     Direction,
     DirectionPairDecision,
     DirectionPairVerdict,
@@ -120,6 +119,7 @@ from ydbdoc_review_ng.translation_plan import (
     TranslationPlanError,
     build_translation_plan,
     classify_path,
+    mirror_classified_files,
     preflight_inventory,
     reconcile_candidate_outputs,
     reconcile_fixed_outputs,
@@ -842,17 +842,8 @@ class RuntimeContent:
         preparation: FrozenPreparation,
         direction: Direction,
     ) -> InventoryClassification:
-        """Replay exact frozen decisions. Never infer semantics from file kinds."""
-        preparation.inventory.require_semantic_actions()
-        files = tuple(
-            ClassifiedFile(change, action.action, action.toc_delta)
-            for change, action in zip(
-                preparation.inventory.files, preparation.inventory.semantic_actions, strict=True
-            )
-        )
-        return InventoryClassification(
-            any(item.action != "none" for item in files), direction, "Frozen classification", files
-        )
+        """Replay frozen direction. File mirroring is derived in Python."""
+        return InventoryClassification(True, direction, "Frozen classification")
 
     def verification_classification(
         self,
@@ -860,41 +851,9 @@ class RuntimeContent:
         direction: Direction,
         target_paths: tuple[RepoPath, ...],
     ) -> InventoryClassification:
-        """Select verification scope from the exact translation PR inventory."""
-        source_locale = "ru" if direction is Direction.RU_TO_EN else "en"
-        target_root = self.roots.en if source_locale == "ru" else self.roots.ru
-        files = []
-        for change in preparation.inventory.files:
-            path = classify_path(self.roots, change.path)
-            action = "none"
-            if path.locale == source_locale and path.relative is not None:
-                target = RepoPath(target_root.value + "/" + path.relative)
-                previous_target = (
-                    (
-                        None
-                        if change.previous_path is None
-                        else paired_markdown_path(self.roots, change.previous_path)
-                    )
-                    if path.kind is PathKind.MARKDOWN
-                    else None
-                )
-                if path.kind is PathKind.MARKDOWN and (
-                    target in target_paths or previous_target in target_paths
-                ):
-                    action = "page"
-                elif path.kind is PathKind.TOC and target in target_paths:
-                    action = "toc_delta"
-            files.append(
-                ClassifiedFile(
-                    change, action, "Frozen TOC delta" if action == "toc_delta" else None
-                )
-            )
-        return InventoryClassification(
-            any(item.action != "none" for item in files),
-            direction,
-            "Frozen selection",
-            tuple(files),
-        )
+        """Select verification by frozen direction; Python mirrors the inventory."""
+        del preparation, target_paths
+        return InventoryClassification(True, direction, "Frozen selection")
 
     def select_source(
         self,
@@ -935,6 +894,16 @@ class RuntimeContent:
                     selected_direction,
                     self.source.verification_target_paths,
                 )
+            mirrored = mirror_classified_files(
+                preparation.inventory,
+                self.roots,
+                classification.direction,
+                only_targets=(
+                    None
+                    if translate
+                    else frozenset(self.source.verification_target_paths)
+                ),
+            )
             preparation = replace(
                 preparation,
                 inventory=replace(
@@ -943,7 +912,7 @@ class RuntimeContent:
                         SourceSemanticAction(
                             item.change.path, item.change.operation, item.action, item.toc_delta
                         )
-                        for item in classification.files
+                        for item in mirrored
                     ),
                 ),
             )
@@ -965,46 +934,6 @@ class RuntimeContent:
                 return self.plans
             selected_direction = classification.direction
             if selected_direction is not None:
-                if classification is not None:
-                    source_root = (
-                        self.roots.ru if selected_direction is Direction.RU_TO_EN else self.roots.en
-                    )
-                    selected_paths = {
-                        item.change.path
-                        for item in classification.files
-                        if item.action == "page"
-                        and item.change.path.value.startswith(source_root.value + "/")
-                    }
-                    inventories = tuple(
-                        pair
-                        for pair in preparation.inventories
-                        if any(
-                            (change.new_path or change.old_path) in selected_paths
-                            for change in pair.changes
-                        )
-                    )
-                    if inventories != preparation.inventories:
-                        redirects = RedirectCatalog(
-                            snapshots.scope_snapshot,
-                            self.roots,
-                            read_redirects(
-                                self.source.github, snapshots.scope_snapshot, "ydb/docs/ru"
-                            )
-                            + read_redirects(
-                                self.source.github, snapshots.scope_snapshot, "ydb/docs/en"
-                            ),
-                        )
-                        potential = build_potential_scopes(
-                            self.source.github,
-                            MarkdownDependencies(),
-                            Limits(self.environment),
-                            snapshots,
-                            inventories,
-                            redirects,
-                        )
-                        preparation = replace(
-                            preparation, inventories=inventories, potential=potential
-                        )
                 if not preparation.inventories:
                     raise TranslationPlanError("translation_plan_direction_missing")
                 direction = DirectionSelectionResult(

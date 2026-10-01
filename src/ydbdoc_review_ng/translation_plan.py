@@ -18,10 +18,10 @@ from typing import Any
 import yaml  # type: ignore[import-untyped]
 
 from ydbdoc_review_ng.continuation import SourceChange, SourceChangeInventory
-from ydbdoc_review_ng.direction import Direction, InventoryClassification
+from ydbdoc_review_ng.direction import ClassifiedFile, Direction, InventoryClassification
 from ydbdoc_review_ng.domain import ContentHash, RepoPath
 from ydbdoc_review_ng.errors import SafeDiagnosticError
-from ydbdoc_review_ng.locales import LocaleRoots, PairKey
+from ydbdoc_review_ng.locales import LocaleRoots, PairKey, paired_markdown_path
 from ydbdoc_review_ng.runtime_metadata import _toc
 from ydbdoc_review_ng.scope import (
     FileOperation,
@@ -434,6 +434,44 @@ def _markdown_input(
     return PlannedInput(change, current.kind, action, entry.pair.target_path, outputs)
 
 
+def mirror_classified_files(
+    inventory: SourceChangeInventory,
+    roots: LocaleRoots,
+    direction: Direction | None,
+    /,
+    *,
+    only_targets: frozenset[RepoPath] | None = None,
+) -> tuple[ClassifiedFile, ...]:
+    """Derive per-file mirror actions from Git facts. Models never choose these."""
+    if direction is None:
+        return tuple(ClassifiedFile(change, "none", None) for change in inventory.files)
+    source_locale, _source_root, target_root = _source_and_target_roots(roots, direction)
+    mirrored: list[ClassifiedFile] = []
+    for change in inventory.files:
+        current = classify_path(roots, change.path)
+        if current.locale != source_locale or current.relative is None:
+            mirrored.append(ClassifiedFile(change, "none", None))
+            continue
+        target = RepoPath(target_root.value + "/" + current.relative)
+        previous_target = None
+        if current.kind is PathKind.MARKDOWN and change.previous_path is not None:
+            previous_target = paired_markdown_path(roots, change.previous_path)
+        if only_targets is not None and target not in only_targets and previous_target not in only_targets:
+            mirrored.append(ClassifiedFile(change, "none", None))
+            continue
+        if current.kind is PathKind.MARKDOWN:
+            mirrored.append(ClassifiedFile(change, "page", None))
+        elif current.kind is PathKind.TOC:
+            mirrored.append(
+                ClassifiedFile(change, "toc_delta", "Apply navigation delta from source PR.")
+            )
+        elif current.kind in {PathKind.ASSET, PathKind.REDIRECTS, PathKind.LOCALIZED_OTHER}:
+            mirrored.append(ClassifiedFile(change, "resource", None))
+        else:
+            mirrored.append(ClassifiedFile(change, "none", None))
+    return tuple(mirrored)
+
+
 def build_translation_plan(
     inventory: SourceChangeInventory,
     roots: LocaleRoots,
@@ -445,12 +483,25 @@ def build_translation_plan(
     classification: InventoryClassification | None = None,
 ) -> TranslationPlan:
     """Build intent before metadata/model execution and cover every inventory row."""
+    if classification is not None and not classification.translation_required:
+        return TranslationPlan(
+            None,
+            tuple(
+                PlannedInput(
+                    change,
+                    classify_path(roots, change.path).kind,
+                    PlanAction.NO_ACTION,
+                    None,
+                    (),
+                )
+                for change in inventory.files
+            ),
+            (),
+        )
     complete = _complete_pairs(inventory, roots)
-    no_action = (
-        set()
-        if classification is None
-        else {item.change.path for item in classification.files if item.action == "none"}
-    )
+    no_action = {
+        item.path for item in inventory.semantic_actions if item.action == "none"
+    }
     direction = None if manifest is None else manifest.direction
     if direction is None:
         inputs: list[PlannedInput] = []

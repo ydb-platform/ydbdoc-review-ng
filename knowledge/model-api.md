@@ -9,8 +9,8 @@ arbiter. YandexGPT только в `doc_model_probe`.
 
 ## Контракты
 
-- Direction: `translation_required`, `direction`, `reason`. Git inventory —
-  только Python.
+- Direction: только `translation_required`, `direction`, `reason`. Per-file
+  mirror actions считает Python (`mirror_classified_files`), не модель.
 - Translator / TOC strings: полная JSON ID-map запрошенных сегментов.
 - Critic: `{"files": {"path": "complete UTF-8"}}`; пустой scope → `{"files": {}}`.
 - Arbiter: только `verdict` + `findings`. GREEN → пустые findings; YELLOW/RED →

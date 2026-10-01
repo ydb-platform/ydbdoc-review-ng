@@ -46,8 +46,10 @@ def request_schema(body):
 
 
 def classification_response(prompt, *, direction="ru_to_en", decisions=None):
+    """Direction-only model payload. Python mirrors Git ops separately."""
     inventory = json.loads(prompt.split("\nInventory: ", 1)[1].split("\n\n", 1)[0])
-    rows = []
+    actions = []
+    chosen = direction
     for item in inventory["files"]:
         key = item["path"].split("/core/", 1)[-1]
         verdict = None if decisions is None else decisions.get(key)
@@ -55,16 +57,17 @@ def classification_response(prompt, *, direction="ru_to_en", decisions=None):
         if verdict == "complete_pair":
             action = "none"
         elif verdict in {"ru_to_en", "en_to_ru"}:
-            direction = verdict
-        target_locale = "en" if direction in {"ru_to_en", None} else "ru"
+            chosen = verdict
+        target_locale = "en" if chosen in {"ru_to_en", None} else "ru"
         if item["path"].startswith(f"ydb/docs/{target_locale}/"):
             action = "none"
-        rows.append({
-            **{key: item[key] for key in ("path", "operation", "old_path", "new_path")},
-            "action": action, "toc_delta": "Apply added entries." if action == "toc_delta" else None,
-        })
-    return {"translation_required": any(row["action"] != "none" for row in rows),
-            "direction": direction, "reason": "Source PR classification.", "files": rows}
+        actions.append(action)
+    required = any(action != "none" for action in actions)
+    return {
+        "translation_required": required,
+        "direction": chosen if required else None,
+        "reason": "Source PR classification.",
+    }
 
 
 def seed_inventory_preimages(rows, before, after):

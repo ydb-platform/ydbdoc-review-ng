@@ -8,5 +8,6 @@
 - `testing.md` — TDD и witnesses
 - `delivery.md` — commits в `main`
 - `current-status.md` — что согласовано и где код
+- `debt-map.md` — срезы выравнивания кода под контракт
 
 Не хранить секреты, полные transcripts, черновики агентов.
