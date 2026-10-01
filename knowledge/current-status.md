@@ -15,8 +15,9 @@
 
 ## Код
 
-Срезы 1–10 закрыты на `main`. Second external review residuals 1–12 (ba0acf2)
-закрыты: NON_FINAL→RED, soft structure publish, null-checkpoint continue, resource
-locale pairing, binary dependency manifest, TOC group-delete/ancestor/uncovered,
-direction-continue TOC strings, GitHub 204, source-echo fragments, label mutation
-terminal. См. `debt-map.md`. Остаётся live `doc_translate` gate.
+Срезы 1–10 закрыты на `main`. Second-review residuals 1–12 и third-review
+residuals 1–9 закрыты против `REQUIREMENTS_RU.md`: soft-publish diagnostics
+(Markdown/YAML/structure) не gate, continue для missing/null targets и
+soft-published RED, zero-text NON_FINAL → RED, TOC same-name prune + empty-target
+ancestor string IDs, линейный source-echo detector. См. `debt-map.md`.
+Остаётся live `doc_translate` gate.
