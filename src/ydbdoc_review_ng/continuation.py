@@ -409,11 +409,11 @@ class ContinuationState:
             if (
                 self.direction is None
                 or self.scope_sha256 is None
-                or self.target_sha is None
                 or pending
                 or not review
             ):
                 raise _fail()
+            # target_sha may be null when RED with zero commits (§4.2).
         else:
             raise _fail()
 

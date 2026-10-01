@@ -36,11 +36,23 @@ vs `REQUIREMENTS_RU.md`. Fix only contract violations; skip invented requirement
 | 2 | Production chunking lacks prepare_request on RecordedModels | **fixed** |
 | 3 | Provider failure one page aborts whole job | **fixed** |
 | 4 | Critic failure: one retry; files to arbiter as-is | **fixed** |
+| 5 | First push must create translation PR | **fixed** |
 | 6 | Markdown/YFM diagnostics block assembled UTF-8 publish | **fixed** |
 | 7 | Critic cannot rewrite TOC href/hierarchy or fill null TOC | **fixed** |
+| 10 | Findings with target_line=null not publishable | **fixed** |
+| 11 | Zero commits + RED → source report + null checkpoint | **fixed** |
 | 15 | Zero text pairs auto-GREEN without critic/arbiter | **fixed** |
 | 22 | Raw Markdown fallback bypasses segment ID contract | **fixed** |
-| 5,8–14,16–21,23–25 | Remaining P1/P2 | in progress |
+| 8 | doc_verify missing target → verification_target_missing | deferred |
+| 9 | doc_verify only translation PR diff, not full frozen group | deferred |
+| 12 | Resource/TOC-only PRs rejected after direction | deferred |
+| 13 | Both-locale changes auto COMPLETE_PAIR | deferred |
+| 14 | Critic/arbiter missing TOC before/after + binary manifest | deferred |
+| 16–18 | TOC delta / continue scope_sha issues | deferred |
+| 19–20 | Verify close RED checkpoint; new translate deletes branch | deferred |
+| 21 | Source echo correction not wired | deferred |
+| 23 | Trigger label not removed after acceptance | deferred |
+| 24–25 | direction_undetermined / strip SHA from comments | deferred (P2) |
 
 ## Известные расхождения в коде
 

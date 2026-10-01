@@ -19,9 +19,9 @@ class Finding:
     repairable: bool
     reason: str
     expected_correction: str
-    searchable_snippet: str
+    searchable_snippet: str | None
     target_path: str
-    target_line: int
+    target_line: int | None
     field_ids: tuple[str, ...] = ()
 
 

@@ -189,8 +189,8 @@ def test_publish_only_validated_plan_then_update_same_branch_pr():
     adapter.validate_candidate(snapshot, candidate)
     assert adapter.publish(snapshot, candidate) == COMMIT
     assert len(validated) == 1
-    assert [e[0] for e in backend.events] == ["commit", "push"]
-    assert backend.prs == {}
+    assert [e[0] for e in backend.events] == ["commit", "push", "create_pr"]
+    assert backend.prs
     reporter(backend, adapter).update_current_pr(
         mode=Mode.DOC_TRANSLATE,
         pr_number=42,
@@ -198,7 +198,13 @@ def test_publish_only_validated_plan_then_update_same_branch_pr():
         commit_sha=COMMIT,
         review=review(),
     )
-    assert [e[0] for e in backend.events] == ["commit", "push", "create_pr", "create_comment"]
+    assert [e[0] for e in backend.events] == [
+        "commit",
+        "push",
+        "create_pr",
+        "update_pr",
+        "create_comment",
+    ]
     assert backend.events[0][2].files == (FileChange(PATH, b"Old", b"New"),)
     adapter.validate_candidate(snapshot, candidate)
     adapter.publish(snapshot, candidate)
@@ -803,7 +809,7 @@ def test_incomplete_finding_cannot_create_or_update_qa_comment(existing_comment)
     assert backend.comments == original_comments
 
 
-def test_invalid_final_report_cannot_create_pr_after_branch_push():
+def test_invalid_final_report_keeps_pr_created_on_first_push():
     backend, snapshot, candidate, publisher, _ = setup_publication()
     publisher.validate_candidate(snapshot, candidate)
     publisher.publish(snapshot, candidate)
@@ -815,8 +821,8 @@ def test_invalid_final_report_cannot_create_pr_after_branch_push():
             commit_sha=COMMIT,
             review=review(Verdict.RED, (Finding(True, "", "", "", "", 0),)),
         )
-    assert [e[0] for e in backend.events] == ["commit", "push"]
-    assert backend.prs == {}
+    assert [e[0] for e in backend.events] == ["commit", "push", "create_pr"]
+    assert backend.prs
     assert backend.comments == {}
 
 
@@ -841,7 +847,13 @@ def test_byte_identical_repair_does_not_skip_report_for_already_published_change
         commit_sha=COMMIT,
         review=review(),
     )
-    assert [e[0] for e in backend.events] == ["commit", "push", "create_pr", "create_comment"]
+    assert [e[0] for e in backend.events] == [
+        "commit",
+        "push",
+        "create_pr",
+        "update_pr",
+        "create_comment",
+    ]
 
 
 def test_semantic_green_contains_no_repository_check_status():

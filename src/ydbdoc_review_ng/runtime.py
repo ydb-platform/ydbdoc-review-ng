@@ -45,8 +45,8 @@ from ydbdoc_review_ng.publication import (
     GitPublicationAdapter,
     PublicationContext,
 )
-from ydbdoc_review_ng.quality import QualityReviewResult
-from ydbdoc_review_ng.reporting import ProbableDuplicate, QAReporter, ReportContext
+from ydbdoc_review_ng.quality import QualityReviewResult, Verdict
+from ydbdoc_review_ng.reporting import ProbableDuplicate, QAReporter, ReportContext, QA_MARKER, render_report
 from ydbdoc_review_ng.repository import BaseBranch, PullRequestState, ResolvedRepositorySnapshots
 from ydbdoc_review_ng.runtime_continue import CheckpointReader, ContinueAdmission, admit_continue
 from ydbdoc_review_ng.runtime_github import (
@@ -515,6 +515,28 @@ class RuntimeReporter:
         review: QualityReviewResult,
     ) -> None:
         if mode is Mode.DOC_TRANSLATE and self.publisher.noop:
+            # REQUIREMENTS §4.2: zero-commit RED still reports on the source PR.
+            if review.final.verdict is not Verdict.RED:
+                return
+            report_context = ReportContext(
+                self.source.snapshots.source_snapshot.commit_sha,
+                self.source.snapshots.source_snapshot.commit_sha,
+                self.models.cost,
+                source_pr_number=self.source.source_pr,
+            )
+            body = render_report(review, report_context) + "\n" + QA_MARKER
+            existing = next(
+                (
+                    comment
+                    for comment in self.source.github.list_comments(self.source.source_pr)
+                    if comment.authored_by_publisher and QA_MARKER in comment.body
+                ),
+                None,
+            )
+            if existing is None:
+                self.source.github.create_comment(self.source.source_pr, body)
+            else:
+                self.source.github.update_comment(self.source.source_pr, existing.id, body)
             return
         head = self.source.github.head(branch)
         if (

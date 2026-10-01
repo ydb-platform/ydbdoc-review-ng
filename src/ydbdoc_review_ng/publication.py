@@ -207,12 +207,15 @@ class GitPublicationAdapter:
                 expected_branch_head=sha,
             )
             self._published_snapshot = snapshot
+            # REQUIREMENTS §5.1.5 / §4.1: first real commit creates the translation PR.
+            if self.pr_number is None:
+                self.ensure_pr(sha)
             return sha
         except Exception:  # noqa: BLE001 - backend exceptions can contain credentials.
             raise PublicationError("publication_failed") from None
 
     def ensure_pr(self, sha: GitSha, /) -> int | None:
-        """Create/update the PR at the final reporting stage, after critic."""
+        """Create/update the translation PR once a real commit exists."""
         if self.noop:
             return None
         context = self.context

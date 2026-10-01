@@ -98,19 +98,22 @@ def _line(value: str) -> str:
 def _finding_lines(review: QualityReviewResult) -> list[str]:
     findings = review.final.findings
     for finding in findings:
-        if (
-            type(finding.target_line) is not int
-            or finding.target_line <= 0
-            or any(
-                type(value) is not str or not value.strip()
-                for value in (
-                    finding.target_path,
-                    finding.searchable_snippet,
-                    finding.reason,
-                    finding.expected_correction,
-                )
-            )
+        if type(finding.target_path) is not str or not finding.target_path.strip():
+            raise PublicationError("invalid_finding")
+        if type(finding.reason) is not str or not finding.reason.strip():
+            raise PublicationError("invalid_finding")
+        if type(finding.expected_correction) is not str or not finding.expected_correction.strip():
+            raise PublicationError("invalid_finding")
+        if finding.target_line is not None and (
+            type(finding.target_line) is not int or finding.target_line <= 0
         ):
+            raise PublicationError("invalid_finding")
+        if finding.searchable_snippet is not None and (
+            type(finding.searchable_snippet) is not str or not finding.searchable_snippet.strip()
+        ):
+            raise PublicationError("invalid_finding")
+        # Missing/unreviewed targets may legally omit line + snippet (§4.2 / §7).
+        if (finding.target_line is None) != (finding.searchable_snippet is None):
             raise PublicationError("invalid_finding")
 
     lines = ["### Что исправить"]
@@ -131,12 +134,18 @@ def _finding_lines(review: QualityReviewResult) -> list[str]:
             continue
         lines.append(f"**`{path}`**")
         for finding in visible:
-            lines.append(
-                f"- строка {finding.target_line}, `"
-                f"{_line(finding.searchable_snippet)[:80]}`: "
-                f"{_line(finding.reason)[:160]} Исправление: "
-                f"{_line(finding.expected_correction)[:160]}"
-            )
+            if finding.target_line is None:
+                lines.append(
+                    f"- файл целиком: {_line(finding.reason)[:160]} Исправление: "
+                    f"{_line(finding.expected_correction)[:160]}"
+                )
+            else:
+                lines.append(
+                    f"- строка {finding.target_line}, `"
+                    f"{_line(finding.searchable_snippet)[:80]}`: "
+                    f"{_line(finding.reason)[:160]} Исправление: "
+                    f"{_line(finding.expected_correction)[:160]}"
+                )
     if omitted:
         lines.append(f"Ещё {omitted} замечаний не показаны.")
     if not findings:
@@ -306,6 +315,30 @@ class QAReporter:
         review: QualityReviewResult,
     ) -> None:
         if mode is Mode.DOC_TRANSLATE and self._publisher.noop:
+            # REQUIREMENTS §4.2: zero commits + RED → source PR report, no empty PR.
+            if review.final.verdict is not Verdict.RED:
+                return
+            report_context = self._report_context()
+            body = render_report(review, report_context)
+            body += "\n" + QA_MARKER
+            source_pr = report_context.source_pr_number
+            if source_pr is None:
+                raise PublicationError("report_context_mismatch")
+            try:
+                existing = next(
+                    (
+                        comment
+                        for comment in self._backend.list_comments(source_pr)
+                        if comment.authored_by_publisher and QA_MARKER in comment.body
+                    ),
+                    None,
+                )
+                if existing is None:
+                    self._backend.create_comment(source_pr, body)
+                else:
+                    self._backend.update_comment(source_pr, existing.id, body)
+            except Exception:  # noqa: BLE001 - backend exceptions can contain credentials.
+                raise PublicationError("report_failed") from None
             return
         context = self._publisher.context or self._verification_context
         if (

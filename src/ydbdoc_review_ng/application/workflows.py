@@ -308,7 +308,11 @@ class ContentWorkflowPort(Protocol):
     ) -> None: ...
 
     def review_checkpoint(
-        self, snapshot: ImmutableRunSnapshot, review: QualityReviewResult, target_sha: GitSha, /
+        self,
+        snapshot: ImmutableRunSnapshot,
+        review: QualityReviewResult,
+        target_sha: GitSha | None,
+        /,
     ) -> CheckpointCapture: ...
 
 
@@ -532,7 +536,8 @@ class LinearWorkflows:
             )
             if review.final.verdict is Verdict.RED and review.accepted_maps is not None:
                 stage = WorkflowStage.CHECKPOINT
-                capture = self._content.review_checkpoint(snapshot, review, final_sha)
+                checkpoint_sha = None if self._publisher.noop else final_sha
+                capture = self._content.review_checkpoint(snapshot, review, checkpoint_sha)
                 self._complete_semantic_handoff(
                     capture, job_id, request.pr_number, mode, audit_started_at
                 )

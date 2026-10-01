@@ -15,7 +15,10 @@
 
 ## Код
 
-Срезы 1–10 закрыты на local `main`. Offline non-live suite: **2222 passed**,
-3 deselected (`live`). Continue_review / soft-publish / critic-push expectations
-выровнены. Live `doc_translate` gate ещё не пройден (push 403 / credentials).
-См. `debt-map.md` срез 11.
+Срезы 1–10 закрыты на local `main`. Offline non-live suite ранее: **2222 passed**.
+
+Neural review triage (2026-10-01): P0 + часть P1 закрыты на `main`
+(`55a95cb`, `865a63e`, `f35522b`, + publication/reporting). См. `debt-map.md`
+таблицу findings 1–25. Live `doc_translate` gate и оставшиеся P1 (modes/TOC/
+continue/echo) ещё открыты.
+

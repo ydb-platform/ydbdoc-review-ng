@@ -151,7 +151,8 @@ class ContinuationCheckpoint:
         except (TypeError, ValueError):
             raise PersistenceError("invalid continuation state") from None
         if self.state.stage is ContinuationStage.REVIEW and self.target_sha is None:
-            raise PersistenceError("review checkpoint requires target SHA")
+            # Allowed for zero-commit RED (§4.2).
+            pass
         if (
             self.state.target_sha is not None
             and self.target_sha is not None

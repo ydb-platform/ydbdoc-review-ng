@@ -2246,7 +2246,10 @@ class RuntimeContent:
             preparation.snapshot.source_sha,
             preparation.snapshots.translation_base_snapshot.commit_sha,
             preparation.snapshot.branch,
-            target_sha if target_sha is not None else current_head,
+            # REVIEW may intentionally keep target_sha=null for zero-commit RED (§4.2).
+            state.target_sha
+            if state.stage is ContinuationStage.REVIEW
+            else (target_sha if target_sha is not None else current_head),
             preparation.inventory,
             ()
             if plans is None or plans.manifest is None
@@ -2256,19 +2259,27 @@ class RuntimeContent:
         )
 
     def review_checkpoint(
-        self, snapshot: ImmutableRunSnapshot, review: QualityReviewResult, target_sha: GitSha, /
+        self, snapshot: ImmutableRunSnapshot, review: QualityReviewResult, target_sha: GitSha | None, /
     ) -> CheckpointCapture:
         plans = self.plans
-        if snapshot.mode is Mode.DOC_TRANSLATE and self.publisher.noop:
+        # REQUIREMENTS §4.2: zero commits + RED keeps checkpoint with target_sha=null.
+        if (
+            snapshot.mode is Mode.DOC_TRANSLATE
+            and self.publisher.noop
+            and review.final.verdict is not Verdict.RED
+        ):
             raise RuntimeBoundaryError("review_checkpoint_unreported")
         if plans is None or plans.manifest is None or review.accepted_maps is None:
             raise RuntimeBoundaryError("review_checkpoint_missing_scope")
-        if self.source.github.head(snapshot.branch) != target_sha:
+        if target_sha is not None and self.source.github.head(snapshot.branch) != target_sha:
             raise RuntimeBoundaryError("review_checkpoint_head_mismatch")
-        published = SnapshotRef(plans.preparation.snapshots.source_snapshot.repository, target_sha)
-        for path, content in unpack(review.final_candidate).items():
-            if self.source.github.read_bytes(published, RepoPath(path)) != content:
-                raise RuntimeBoundaryError("review_checkpoint_candidate_mismatch")
+        if target_sha is not None:
+            published = SnapshotRef(
+                plans.preparation.snapshots.source_snapshot.repository, target_sha
+            )
+            for path, content in unpack(review.final_candidate).items():
+                if self.source.github.read_bytes(published, RepoPath(path)) != content:
+                    raise RuntimeBoundaryError("review_checkpoint_candidate_mismatch")
         unresolved = {RepoPath(item.target_path) for item in review.final.findings}
         previous = tuple(path for path in self.review_paths or () if path in unresolved)
         review_paths = previous + tuple(
