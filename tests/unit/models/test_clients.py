@@ -119,7 +119,6 @@ def openai_response(
 def request(model: str = "yandexgpt-5.1/latest") -> ModelRequest:
     return ModelRequest(
         ModelRole.TRANSLATE, model, "translate secret-free prompt", SCHEMA,
-        expected_response={"field-1": "Hello"},
     )
 
 
@@ -219,7 +218,6 @@ def test_native_raw_text_request_omits_json_schema_and_returns_message_text() ->
         "yandexgpt-5.1/latest",
         "translate complete Markdown",
         None,
-        expected_response="# Complete Markdown\n",
     )
 
     result = native_client(transport, []).invoke(raw)
@@ -237,7 +235,6 @@ def test_openai_raw_text_request_omits_response_format_and_returns_message_conte
         "deepseek-v4-flash/latest",
         "translate complete Markdown",
         None,
-        expected_response="# Complete Markdown\n",
     )
 
     result = openai_client(transport, []).invoke(raw)

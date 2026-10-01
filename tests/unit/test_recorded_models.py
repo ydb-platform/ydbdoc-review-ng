@@ -85,7 +85,6 @@ def test_content_filter_retry_is_identical_bounded_and_audited(second_status) ->
     models.bind_job("job")
     result = models.invoke(ModelRequest(
         ModelRole.TRANSLATE, "deepseek-v4-flash", "translate", None,
-        expected_response={"field-1": "Hello"},
         target_path=RepoPath("ydb/docs/en/core/page.md"),
     ))
 

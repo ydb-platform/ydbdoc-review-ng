@@ -318,7 +318,6 @@ class _BaseYandexClient:
         model_uri = normalize_model_uri(request.model, self.credentials.folder_id)
         return calculate_context_budget(
             lambda max_tokens: serialize_json(self._payload(request, model_uri, max_tokens)),
-            request.expected_response,
         )
 
     def invoke(self, request: ModelRequest, /) -> ModelCallResult:

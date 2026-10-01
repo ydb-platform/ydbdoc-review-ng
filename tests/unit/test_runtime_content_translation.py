@@ -29,7 +29,6 @@ from ydbdoc_review_ng.models import (
     YandexCredentials,
     YandexOpenAIClient,
 )
-from ydbdoc_review_ng.models.types import mutable_json
 from ydbdoc_review_ng.parser.markdown import build_markdown_plan
 from ydbdoc_review_ng.publication import FileChange, PublicationPlan
 from ydbdoc_review_ng.quality import review_pr
@@ -269,7 +268,6 @@ def test_production_models_ignore_legacy_model_overrides(role) -> None:
         )
         calls = [call for call in review_models.calls if call.role.value == role]
     assert [call.model for call in calls] == ["deepseek-v4-flash"]
-    assert all(isinstance(mutable_json(call.expected_response), dict) for call in calls)
     provider = YandexOpenAIClient(
         YandexCredentials("secret", "folder"), lambda wire: None, lambda attempt: None
     )
@@ -857,11 +855,6 @@ def test_large_document_uses_minimum_response_safe_raw_chunks(
     assert all(len(chunk) <= 16_000 for chunk in raw_chunks)
     assert all(len(left + right) > 16_000 for left, right in pairwise(raw_chunks))
     assert all(call.schema is not None for call in models.calls)
-    assert all(
-        mutable_json(call.expected_response)
-        == json.loads(call.prompt.split("\nSegments: ", 1)[1].split("\n\n", 1)[0])
-        for call in models.calls
-    )
     assert sum(map(len, raw_chunks)) >= len(source.decode()) - 2 * len(raw_chunks)
     assert (
         assemble_candidate(document.source, document.plan, document.request, accepted.as_dict())

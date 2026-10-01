@@ -14,19 +14,23 @@ from ydbdoc_review_ng.models import (
     YandexCredentials,
     YandexOpenAIClient,
 )
+from ydbdoc_review_ng.models.context import calculate_context_budget
 from ydbdoc_review_ng.quality.critic import build_pr_arbiter_request, build_pr_critic_request
 
 
 class RecordingTransport:
-    def __init__(self) -> None:
+    def __init__(self, response_text: str = "{}") -> None:
         self.requests: list[HttpRequest] = []
+        self.response_text = response_text
 
     def __call__(self, request: HttpRequest) -> HttpResponse:
         self.requests.append(request)
         return HttpResponse(
             200,
-            b'{"choices":[{"finish_reason":"stop",'
-            b'"message":{"role":"assistant","content":"{}"}}]}',
+            json.dumps({"choices": [{
+                "finish_reason": "stop",
+                "message": {"role": "assistant", "content": self.response_text},
+            }]}).encode(),
         )
 
 
@@ -68,30 +72,64 @@ def test_production_review_roles_use_complete_wire_budget(builder) -> None:
     assert "Термин" in payload["messages"][0]["content"]
     assert "Уточните термин" in payload["messages"][0]["content"]
     assert "response_format" in payload
-    if request.role is ModelRole.CRITIC:
-        budget = model.prepare_request(request)
-        assert budget.expected_output_tokens == len(
-            b'{"files":{"en.md":"' + b"Translation" * 2000 + b'"}}'
+
+
+def test_packing_budget_exposes_only_complete_wire_input_requirement() -> None:
+    transport = RecordingTransport()
+    model = client(transport)
+    request = ModelRequest(ModelRole.CRITIC, "deepseek-v4-flash", "Review full files", None)
+    budget = model.prepare_request(request)
+    assert budget.input_tokens == len(budget.body)
+    assert budget.max_tokens == 1_048_576 - budget.input_tokens
+    assert not hasattr(budget, "expected_output_tokens")
+    model.invoke(request)
+    assert transport.requests[0].body == budget.body
+
+
+def test_context_helper_requires_only_the_wire_serializer() -> None:
+    budget = calculate_context_budget(
+        lambda max_tokens: json.dumps({"max_tokens": max_tokens}).encode()
+    )
+    assert json.loads(budget.body)["max_tokens"] == 1_048_576 - len(budget.body)
+
+
+def test_model_request_rejects_removed_expected_response_argument() -> None:
+    with pytest.raises(TypeError, match="expected_response"):
+        ModelRequest(
+            ModelRole.CRITIC, "deepseek-v4-flash", "Review", None,
+            expected_response={"files": {}},
         )
 
 
-def test_packing_budget_exposes_full_input_and_expected_json_response_separately() -> None:
-    transport = RecordingTransport()
+def test_critic_calls_model_when_input_fits_without_reserving_a_synthetic_reply() -> None:
+    transport = RecordingTransport('{"files":{"en.md":"Corrected"}}')
     model = client(transport)
-    expected = {"files": {"en.md": "я🙂\n\"\\" * 2000}}
-    request = ModelRequest(
-        ModelRole.CRITIC, "deepseek-v4-flash", "Review full files", None,
-        expected_response=expected,
+    request = build_pr_critic_request(
+        model="deepseek-v4-flash",
+        source_files={"ru.md": b"Source"},
+        translated_files={"en.md": b"x" * 600_000},
+        glossary_files={},
     )
-    budget = model.prepare_request(request)
-    expected_bytes = json.dumps(expected, ensure_ascii=False, separators=(",", ":")).encode()
-    assert budget.expected_output_tokens == len(expected_bytes)
-    assert budget.expected_output_tokens > 8000
-    assert budget.input_tokens == len(budget.body)
-    assert budget.max_tokens == 1_048_576 - budget.input_tokens
-    assert budget.expected_output_tokens < budget.max_tokens
-    model.invoke(request)
-    assert transport.requests[0].body == budget.body
+    result = model.invoke(request)
+    body = transport.requests[0].body
+    assert result.success
+    assert json.loads(body)["max_tokens"] == 1_048_576 - len(body)
+    assert 0 < json.loads(body)["max_tokens"] < 600_000
+
+
+def test_response_content_and_size_do_not_change_wire_budget() -> None:
+    request = ModelRequest(ModelRole.CRITIC, "deepseek-v4-flash", "Review full files", None)
+    short = RecordingTransport('{"files":{"en.md":"Brief"}}')
+    long = RecordingTransport(json.dumps({"files": {"en.md": "я🙂\n\"\\" * 4000}}))
+    assert len(long.response_text.encode()) > 8000
+    for transport in (short, long):
+        result = client(transport).invoke(request)
+        assert result.success
+        assert result.text == transport.response_text
+    assert short.requests[0].body == long.requests[0].body
+    body = long.requests[0].body
+    assert json.loads(body)["max_tokens"] == 1_048_576 - len(body)
+    assert json.loads(body)["max_tokens"] > len(long.response_text.encode())
 
 
 @pytest.mark.parametrize("native", [False, True])
@@ -113,16 +151,14 @@ def test_schema_and_normalized_model_uri_consume_wire_budget(native: bool) -> No
         assert b"gpt://folder/deepseek-v4-flash" in item.body
 
 
-@pytest.mark.parametrize("overflow", ["input", "response"])
-def test_impossible_request_is_rejected_before_transport(overflow: str) -> None:
+def test_impossible_input_is_rejected_before_transport() -> None:
     transport = RecordingTransport()
     model = client(transport)
     request = ModelRequest(
         ModelRole.TRANSLATE,
         "deepseek-v4-flash",
-        "x" * (1_048_576 if overflow == "input" else 1),
+        "x" * 1_048_576,
         None,
-        expected_response={"segment_0001": "x" * (1_048_576 if overflow == "response" else 1)},
     )
     with pytest.raises(ValueError, match="context"):
         model.invoke(request)
@@ -146,15 +182,16 @@ def test_decimal_digit_boundary_has_an_exact_deterministic_wire_budget() -> None
     assert model.prepare_request(boundary) == budget
 
 
-def test_complete_json_output_fits_exactly_but_one_more_byte_is_rejected() -> None:
+def test_one_remaining_token_is_available_without_any_response_preflight() -> None:
     transport = RecordingTransport()
     model = client(transport)
     request = ModelRequest(ModelRole.CRITIC, "deepseek-v4-flash", "Review", None)
-    remaining = model.prepare_request(request).max_tokens
-    # Count both JSON quotes in addition to the expected response text.
-    exact = replace(request, expected_response="x" * (remaining - 2))
-    budget = model.prepare_request(exact)
-    assert budget.expected_output_tokens == budget.max_tokens
-    with pytest.raises(ValueError, match="context"):
-        model.invoke(replace(request, expected_response="x" * (remaining - 1)))
-    assert transport.requests == []
+    baseline = model.prepare_request(request)
+    # Replacing a seven-digit max_tokens with one digit releases six bytes.
+    prompt_size = len(request.prompt) + baseline.max_tokens + 6 - 1
+    boundary = replace(request, prompt="x" * prompt_size)
+    budget = model.prepare_request(boundary)
+    assert budget.max_tokens == 1
+    assert budget.input_tokens == 1_048_575
+    model.invoke(boundary)
+    assert transport.requests[0].body == budget.body

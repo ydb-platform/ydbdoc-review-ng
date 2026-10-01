@@ -58,7 +58,6 @@ class ModelRequest:
     model: str
     prompt: str = field(repr=False)
     schema: FrozenJson | None = field(repr=False)
-    expected_response: FrozenJson = field(default=None, repr=False)
     target_path: RepoPath | None = None
 
     def __post_init__(self) -> None:
@@ -72,9 +71,6 @@ class ModelRequest:
             raise TypeError("target_path must be RepoPath or None")
         if self.schema is not None:
             object.__setattr__(self, "schema", freeze_json(self.schema))
-        object.__setattr__(
-            self, "expected_response", freeze_json(mutable_json(self.expected_response))
-        )
 
 
 @dataclass(frozen=True, slots=True)

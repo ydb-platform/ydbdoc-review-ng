@@ -105,12 +105,7 @@ def build_pr_critic_request(
         "required": ["files"],
         "additionalProperties": False,
     }
-    return ModelRequest(
-        ModelRole.CRITIC, model, prompt, cast(FrozenJson, schema),
-        expected_response={
-            "files": {path: content.decode("utf-8") for path, content in translated_files.items()}
-        },
-    )
+    return ModelRequest(ModelRole.CRITIC, model, prompt, cast(FrozenJson, schema))
 
 
 def parse_pr_critic_response(
@@ -191,10 +186,7 @@ def build_pr_arbiter_request(
         "required": ["verdict", "findings"],
         "additionalProperties": False,
     }
-    return ModelRequest(
-        ModelRole.ARBITER, model, prompt, cast(FrozenJson, schema),
-        expected_response=cast(FrozenJson, {"verdict": "YELLOW", "findings": []}),
-    )
+    return ModelRequest(ModelRole.ARBITER, model, prompt, cast(FrozenJson, schema))
 
 
 def parse_pr_arbiter_response(
