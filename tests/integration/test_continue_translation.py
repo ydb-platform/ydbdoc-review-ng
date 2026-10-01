@@ -8,6 +8,7 @@ from decimal import Decimal
 
 import pytest
 from _runtime_services import (
+    classification_response,
     raw_translation_source,
     replace_response_text,
     request_prompt,
@@ -92,7 +93,7 @@ class ContinueServices(CaptureServices):
         self.prompts.append((self.roles[-1], prompt))
         values = None
         if self.continuing and self.roles[-1] == "direction" and self.direction_values is not None:
-            values = self.direction_values
+            values = classification_response(prompt, decisions=self.direction_values)
         if (
             self.continuing
             and self.roles[-1] == "translate"
@@ -347,6 +348,7 @@ def test_noop_with_existing_branch_cannot_close_checkpoint_after_branch_disappea
 def test_direction_retry_alone_hands_off_new_job_without_extending_expiry():
     services = ContinueServices(stop="direction")
     saved = services.stop_and_continue()
+    services.stop = "direction"
     services.rows[saved.continuation_id]["created_at"] -= timedelta(days=5)
     saved = services.checkpoint()
     with pytest.raises(application.WorkflowError):
@@ -380,6 +382,102 @@ def test_direction_selection_excludes_complete_pair_before_translation():
         for role, prompt in services.prompts
         if role not in {"critic", "arbiter"}
     )
+
+
+def test_selected_no_action_survives_translation_checkpoint_without_reclassification():
+    services = ContinueServices(names=("a", "b"), stop="direction")
+    services.stop_and_continue()
+    services.direction_values = {"a.md": "complete_pair", "b.md": "ru_to_en"}
+    services.invalid_pending = "Source b"
+    with pytest.raises(application.WorkflowError):
+        services.resume()
+    assert services.checkpoint().state.stage is ContinuationStage.TRANSLATION
+    services.invalid_pending = None
+    services.roles.clear()
+    services.resume()
+    assert services.roles == ["translate", "critic", "arbiter"]
+    assert services.files[EN + "a.md"] == b"# Old a\n"
+    assert services.files[EN + "b.md"] == b"# Resumed b\n"
+
+
+def test_toc_no_action_replays_exact_saved_decision_without_classifier():
+    class Services(ContinueServices):
+        def model(self, request):
+            response = super().model(request)
+            if self.roles[-1] == "direction":
+                values = classification_response(
+                    request_prompt(json.loads(request.body)),
+                    decisions={"toc.yaml": "complete_pair"},
+                )
+                return HttpResponse(
+                    200, replace_response_text(response.body, json.dumps(values)), Decimal("0.01")
+                )
+            return response
+
+    services = Services(names=("a", "b"), stop="translation")
+    services.changes.append({"status": "modified", "filename": RU + "toc.yaml"})
+    for tree in [services.files, *services.snapshots.values()]:
+        tree[RU + "toc.yaml"] = b"items: []\n"
+        tree[EN + "toc.yaml"] = b"items: []\n"
+    saved = services.stop_and_continue()
+    wire = json.loads(services.rows[saved.continuation_id]["source_inventory"])
+    assert wire["semantic_actions"][-1] == {
+        "path": RU + "toc.yaml",
+        "operation": "modify",
+        "action": "none",
+        "toc_delta": None,
+    }
+    assert services.resume().verdict is Verdict.GREEN
+    assert services.roles == ["translate", "critic", "arbiter"]
+    assert services.files[EN + "toc.yaml"] == b"items: []\n"
+
+
+@pytest.mark.parametrize(
+    "corruption", ["legacy", "missing_actions", "unknown_path", "duplicate", "operation"]
+)
+def test_corrupt_frozen_inventory_fails_before_continuation_models(corruption):
+    services = ContinueServices(names=("a", "b"), stop="translation")
+    saved = services.stop_and_continue()
+    row = services.rows[saved.continuation_id]
+    wire = json.loads(row["source_inventory"])
+    if corruption == "legacy":
+        wire = wire["files"]
+    elif corruption == "missing_actions":
+        wire.pop("semantic_actions")
+    elif corruption == "unknown_path":
+        wire["semantic_actions"][0]["path"] = RU + "invented.md"
+    elif corruption == "duplicate":
+        wire["semantic_actions"][1] = wire["semantic_actions"][0]
+    else:
+        wire["semantic_actions"][0]["operation"] = "add"
+    row["source_inventory"] = json.dumps(wire).encode()
+    with pytest.raises(application.WorkflowError):
+        services.resume()
+    assert services.roles == [] and services.commits == 0
+    assert not any(method in {"POST", "PATCH", "DELETE"} for method, _ in services.events)
+
+
+@pytest.mark.parametrize("merged", [False, True])
+def test_direction_continuation_keeps_original_diff_snapshots_after_pr_moves(merged):
+    class Services(ContinueServices):
+        def github(self, method, path, payload):
+            result = super().github(method, path, payload)
+            if self.continuing and path.endswith("/pulls/42"):
+                result["base"]["sha"] = "d" * 40
+                result["head"]["sha"] = "f" * 40
+                result["merged"] = merged
+                result["merge_commit_sha"] = "e" * 40
+            return result
+
+    services = Services(names=("a",), stop="direction")
+    services.stop_and_continue()
+    services.direction_values = {"a.md": "complete_pair"}
+    services.resume()
+    prompt = services.prompts[0][1]
+    data = json.loads(prompt.split("\nInventory: ", 1)[1].split("\n\n", 1)[0])
+    assert data["before_sha"] == "b" * 40
+    assert data["after_sha"] == "a" * 40
+    assert services.roles == ["direction"]
 
 
 def test_all_complete_direction_finishes_noop_without_pr_or_other_models():

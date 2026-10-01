@@ -10,7 +10,13 @@ from decimal import Decimal
 from urllib.parse import parse_qs, unquote, urlsplit
 
 import pytest
-from _runtime_services import RuntimeServices, request_schema
+from _runtime_services import (
+    RuntimeServices,
+    classification_response,
+    request_prompt,
+    request_schema,
+    seed_inventory_preimages,
+)
 
 from ydbdoc_review_ng.application import TranslateWorkflowInput
 from ydbdoc_review_ng.continuation import (
@@ -20,6 +26,7 @@ from ydbdoc_review_ng.continuation import (
     ContinuationStage,
     ContinuationState,
     ContinuationStateError,
+    SourceSemanticAction,
     scope_sha256,
 )
 from ydbdoc_review_ng.domain import ContentHash, GitSha, Mode, RepoPath
@@ -65,7 +72,9 @@ class ReplayServices(RuntimeServices):
         }
         if merged:
             self.trees[self.base] = dict(self.trees[self.source])
-            self.trees[self.source] = {RU + "page.md": b"# Old merged PR version\n"}
+            self.trees[self.source] = {
+                RU + "page.md": b"# Old merged PR version\n", RU + "pending.md": b"# Old pending\n",
+            }
         self.current_source = self.source
         self.current_base = self.base
         self.reads = []
@@ -150,23 +159,24 @@ class ReplayServices(RuntimeServices):
         body = json.loads(request.body)
         properties = request_schema(body)["schema"]["properties"]
         self.events.append(("MODEL", tuple(properties)))
-        if "enum" in next(iter(properties.values())):
-            values = {key: self.direction_values[key] for key in properties}
+        if "translation_required" in properties:
+            direction = "en_to_ru" if all(item["filename"].startswith(EN)
+                                           for item in self.inventory) else "ru_to_en"
+            values = classification_response(request_prompt(body), direction=direction,
+                                             decisions=self.direction_values)
         else:
             raise AssertionError("replay preparation must not translate")
         return HttpResponse(
             200,
             json.dumps(
                 {
-                    "result": {
-                        "alternatives": [
+                    "choices": [
                             {
-                                "status": "ALTERNATIVE_STATUS_FINAL",
-                                "message": {"role": "assistant", "text": json.dumps(values)},
+                                "finish_reason": "stop",
+                                "message": {"role": "assistant", "content": json.dumps(values)},
                             }
                         ],
-                        "usage": {"inputTextTokens": "10", "completionTokens": "5"},
-                    }
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5},
                 }
             ).encode(),
             Decimal("0.01"),
@@ -182,6 +192,7 @@ def runtime(services):
 
 
 def frozen(services):
+    seed_inventory_preimages(services.inventory, services.trees[services.base], services.trees[services.source])
     source, content, store = runtime(services)
     sha = services.base if services.merged else services.source
     authorization = source.authorize_translate(TranslateWorkflowInput(42, GitSha(sha), Decimal(10)))
@@ -232,7 +243,7 @@ def checkpoint(source, plans):
         base_sha=source.snapshots.translation_base_snapshot.commit_sha,
         translation_branch="translation/pr-42",
         target_sha=None,
-        source_inventory=source.inventory,
+        source_inventory=plans.preparation.inventory,
         scope_target_paths=tuple(entry.pair.target_path for entry in plans.manifest.entries),
         state=ContinuationState(
             STATE_VERSION,
@@ -240,7 +251,7 @@ def checkpoint(source, plans):
             plans.manifest.direction,
             checkpoint_scope_sha256(
                 plans.manifest,
-                source.inventory,
+                plans.preparation.inventory,
                 translation_plan_sha256(plans.translation_plan),
             ),
             (accepted(page),),
@@ -378,7 +389,8 @@ def test_replay_rejects_tampered_state_before_model_or_mutation(corruption):
         saved = replace(
             saved,
             source_inventory=replace(
-                saved.source_inventory, files=saved.source_inventory.files[:-1]
+                saved.source_inventory, files=saved.source_inventory.files[:-1],
+                semantic_actions=saved.source_inventory.semantic_actions[:-1],
             ),
         )
     elif corruption == "status":
@@ -390,6 +402,8 @@ def test_replay_rejects_tampered_state_before_model_or_mutation(corruption):
                     replace(saved.source_inventory.files[0], status="added"),
                     *saved.source_inventory.files[1:],
                 ),
+                semantic_actions=(replace(saved.source_inventory.semantic_actions[0], operation="add"),
+                                  *saved.source_inventory.semantic_actions[1:]),
             ),
         )
     elif corruption == "toc_seed":
@@ -403,6 +417,8 @@ def test_replay_rejects_tampered_state_before_model_or_mutation(corruption):
                     *saved.source_inventory.files,
                     SourceChange(RepoPath(RU + "toc.yaml"), "modified", None, None),
                 ),
+                semantic_actions=(*saved.source_inventory.semantic_actions,
+                    SourceSemanticAction(RepoPath(RU + "toc.yaml"), "modify", "toc_delta", "Extra entry.")),
             ),
         )
     elif corruption == "document":

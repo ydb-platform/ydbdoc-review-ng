@@ -418,15 +418,18 @@ def test_metadata_only_pr_fails_before_models_instead_of_being_no_translation() 
     [
         change("ydb/docs/ru/core/image.png"),
         change("ydb/docs/ru/redirects.yaml"),
-        change("ydb/docs/ru/core/page.md", "copied"),
         change("ydb/docs/ru/core/toc_i.yaml", "removed"),
     ],
 )
-def test_inventory_preflight_rejects_unsupported_rows_before_direction_model(
+def test_inventory_preflight_defers_file_semantics_to_classifier(
     changed: SourceChange,
 ) -> None:
+    preflight_inventory(inventory(changed), ROOTS)
+
+
+def test_inventory_preflight_rejects_non_pr_operation_facts() -> None:
     with pytest.raises(TranslationPlanError):
-        preflight_inventory(inventory(changed), ROOTS)
+        preflight_inventory(inventory(change("ydb/docs/ru/core/page.md", "copied")), ROOTS)
 
 
 def test_inventory_preflight_accepts_pr50839_shape() -> None:

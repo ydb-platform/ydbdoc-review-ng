@@ -305,6 +305,7 @@ class YdbPersistence:
             if (
                 previous.state.stage is not ContinuationStage.DIRECTION
                 and previous.scope_target_paths != checkpoint.scope_target_paths
+                or not self._same_inventory(previous, checkpoint)
             ):
                 raise PersistenceError("continuation lineage mismatch")
             for name in (
@@ -313,7 +314,6 @@ class YdbPersistence:
                 "source_sha",
                 "base_sha",
                 "translation_branch",
-                "source_inventory",
             ):
                 if getattr(previous, name) != getattr(checkpoint, name):
                     raise PersistenceError("continuation lineage mismatch")
@@ -485,23 +485,41 @@ class YdbPersistence:
         return row
 
     @staticmethod
-    def _same_lineage(previous: ContinuationCheckpoint, following: ContinuationCheckpoint) -> bool:
-        return all(
-            getattr(previous, name) == getattr(following, name)
-            for name in (
-                "source_pr",
-                "source_sha",
-                "base_sha",
-                "translation_branch",
-                "source_inventory",
-                "created_at",
+    def _same_inventory(
+        previous: ContinuationCheckpoint, following: ContinuationCheckpoint
+    ) -> bool:
+        before, after = previous.source_inventory, following.source_inventory
+        return (
+            before.files == after.files
+            and before.source_base_sha == after.source_base_sha
+            and before.source_head_sha == after.source_head_sha
+            and (
+                previous.state.stage is ContinuationStage.DIRECTION
+                or before.semantic_actions == after.semantic_actions
             )
-        ) and (
-            previous.state.stage is ContinuationStage.DIRECTION
-            or (
-                previous.scope_target_paths == following.scope_target_paths
-                and previous.state.direction == following.state.direction
-                and previous.state.scope_sha256 == following.state.scope_sha256
+        )
+
+    @staticmethod
+    def _same_lineage(previous: ContinuationCheckpoint, following: ContinuationCheckpoint) -> bool:
+        return (
+            all(
+                getattr(previous, name) == getattr(following, name)
+                for name in (
+                    "source_pr",
+                    "source_sha",
+                    "base_sha",
+                    "translation_branch",
+                    "created_at",
+                )
+            )
+            and YdbPersistence._same_inventory(previous, following)
+            and (
+                previous.state.stage is ContinuationStage.DIRECTION
+                or (
+                    previous.scope_target_paths == following.scope_target_paths
+                    and previous.state.direction == following.state.direction
+                    and previous.state.scope_sha256 == following.state.scope_sha256
+                )
             )
         )
 

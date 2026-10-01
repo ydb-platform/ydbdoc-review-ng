@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import re
 from collections.abc import Callable, Mapping
+from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import cast
@@ -23,9 +24,12 @@ from ydbdoc_review_ng.application import (
     WorkflowResult,
 )
 from ydbdoc_review_ng.continuation import SourceChangeInventory, normalize_source_inventory
-from ydbdoc_review_ng.domain import GitSha, Mode, RepositoryId, SnapshotRef
+from ydbdoc_review_ng.direction import Direction, InventoryFile
+from ydbdoc_review_ng.domain import GitSha, Mode, ModelRole, RepoPath, RepositoryId, SnapshotRef
+from ydbdoc_review_ng.locales import LocaleRoots
 from ydbdoc_review_ng.models import (
     AttemptResult,
+    ExecutionConfig,
     HttpTransport,
     ModelCallResult,
     ModelRequest,
@@ -129,6 +133,7 @@ class RecordedModels:
             self.transport,
             self.record,
             pricing=_PRODUCTION_PRICING,
+            execution=ExecutionConfig(max_attempts=1 if request.role is ModelRole.DIRECTION else 2),
         )
         details: dict[str, object] = {
             "model_role": request.role.value,
@@ -163,6 +168,46 @@ class RuntimeSource:
         self.source_pr = 0
         self.continue_target_sha: GitSha | None = None
         self.probable_duplicates: tuple[ProbableDuplicate, ...] = ()
+        self.verification_direction: Direction | None = None
+        self.verification_target_paths: tuple[RepoPath, ...] = ()
+
+    def classifier_files(self, roots: LocaleRoots) -> tuple[InventoryFile, ...]:
+        """Read full PR versions from its fixed base/head, including every resource."""
+        ru_root, en_root = (root.value.removesuffix("/core") for root in (roots.ru, roots.en))
+        files = []
+        for change in self.inventory.files:
+            before = (
+                None
+                if change.old_path is None
+                else self.github.read_bytes(self.source_base_snapshot, change.old_path)
+            )
+            after = (
+                None
+                if change.new_path is None
+                else self.github.read_bytes(self.source_change_snapshot, change.new_path)
+            )
+            if (
+                change.old_path is not None
+                and before is None
+                or change.new_path is not None
+                and after is None
+            ):
+                raise RuntimeBoundaryError("source_inventory_version_missing")
+            ru_to_en = en_to_ru = None
+            if change.path.value.startswith(ru_root + "/"):
+                ru_to_en = RepoPath(en_root + change.path.value[len(ru_root) :])
+            elif change.path.value.startswith(en_root + "/"):
+                en_to_ru = RepoPath(ru_root + change.path.value[len(en_root) :])
+            files.append(
+                InventoryFile(
+                    change,
+                    before,
+                    after,
+                    ru_to_en,
+                    en_to_ru,
+                )
+            )
+        return tuple(files)
 
     def _authorize(self) -> None:
         actor = self.environment.get("GITHUB_TRIGGERING_ACTOR") or self.environment.get(
@@ -171,6 +216,20 @@ class RuntimeSource:
         allowed = re.split(r"[,\s]+", self.environment.get("YDBDOC_ALLOWED_ACTORS", "").strip())
         if not actor or actor not in allowed:
             raise RuntimeBoundaryError("actor_not_authorized")
+
+    def _pr_files(self, number: int, expected: int) -> list[dict[str, object]]:
+        files: list[dict[str, object]] = []
+        page = 1
+        while not files or len(files) < expected:
+            suffix = "" if page == 1 else f"&page={page}"
+            batch = self.github.request("GET", f"/pulls/{number}/files?per_page=100{suffix}")
+            if not batch:
+                break
+            files.extend(batch)
+            page += 1
+        if len(files) != expected:
+            raise RuntimeBoundaryError("source_change_list_incomplete")
+        return files
 
     def authorize_translate(self, request: TranslateWorkflowInput, /) -> AuthorizedRun:
         self._authorize()
@@ -238,6 +297,7 @@ class RuntimeSource:
         original = SnapshotRef(
             repository, GitSha(pr["merge_commit_sha"] if merged else pr["head"]["sha"])
         )
+        change_snapshot = SnapshotRef(repository, GitSha(pr["head"]["sha"]))
         source = SnapshotRef(repository, expected_source) if merged else original
         # Verify keeps the previously pinned authoritative source even if base advances.
         if authorization.mode is Mode.DOC_VERIFY:
@@ -257,10 +317,12 @@ class RuntimeSource:
             source if merged else None,
             original if merged else None,
         )
-        changes = self.github.request("GET", f"/pulls/{source_pr}/files?per_page=100")
-        if len(changes) != pr["changed_files"]:
-            raise RuntimeBoundaryError("source_change_list_incomplete")
-        self.inventory = normalize_source_inventory(changes)
+        changes = self._pr_files(source_pr, pr["changed_files"])
+        self.inventory = replace(
+            normalize_source_inventory(changes),
+            source_base_sha=source_base_snapshot.commit_sha,
+            source_head_sha=change_snapshot.commit_sha,
+        )
         # Reject source movement while resolving the diff inventory.
         fresh = self.github.request("GET", f"/pulls/{source_pr}")
         if (
@@ -292,7 +354,7 @@ class RuntimeSource:
         )
         self.metadata_snapshot = SnapshotRef(repository, self.context.current_head)
         self.source_base_snapshot = source_base_snapshot
-        self.source_change_snapshot = original if merged else source
+        self.source_change_snapshot = change_snapshot
         self.source_pr = source_pr
         self.github.source_pr = source_pr
         self.github.source_sha = source.commit_sha
@@ -311,14 +373,37 @@ class RuntimeSource:
 
     def snapshot_verify(self, authorization: AuthorizedRun, /) -> ImmutableRunSnapshot:
         request, source_pr, base = cast(tuple[VerifyWorkflowInput, int, str], authorization.context)
-        return self._snapshot(authorization, source_pr, request.source_sha, base)
+        snapshot = self._snapshot(authorization, source_pr, request.source_sha, base)
+        pr = self.github.request("GET", f"/pulls/{request.pr_number}")
+        files = self._pr_files(request.pr_number, pr["changed_files"])
+        target_inventory = normalize_source_inventory(files)
+        fresh = self.github.request("GET", f"/pulls/{request.pr_number}")
+        if (
+            pr["head"]["sha"] != request.target_sha.value
+            or fresh["head"]["sha"] != request.target_sha.value
+            or fresh["base"]["ref"] != base
+            or len(files) != pr["changed_files"]
+        ):
+            raise RuntimeBoundaryError("verification_head_mismatch")
+        target_locales = {
+            locale
+            for item in files
+            for locale in ("ru", "en")
+            if item["filename"].startswith(f"ydb/docs/{locale}/")
+        }
+        if len(target_locales) != 1:
+            raise RuntimeBoundaryError("verification_direction_missing")
+        self.verification_direction = (
+            Direction.RU_TO_EN if target_locales == {"en"} else Direction.EN_TO_RU
+        )
+        self.verification_target_paths = tuple(item.path for item in target_inventory.files)
+        return snapshot
 
     def snapshot_continue(self, checkpoint: ContinuationCheckpoint, /) -> ImmutableRunSnapshot:
         """Restore scope inputs from saved refs/inventory, never today's PR file list.
 
-        The authoritative document content stays pinned by the checkpoint. The
-        original PR head (or its merge commit) is used only as the after-side of
-        the source change delta needed to reconstruct the saved plan.
+        The authoritative document content and the PR diff base/head are pinned
+        by the checkpoint. Current PR metadata supplies identity only.
         """
         pr = self.github.read_pull_request_identity(checkpoint.source_pr)
         if pr.base_repository != self.github.repository or pr.provenance is not None:
@@ -330,27 +415,11 @@ class RuntimeSource:
         repository = RepositoryId(self.github.repository)
         source = SnapshotRef(repository, checkpoint.source_sha)
         base = SnapshotRef(repository, checkpoint.base_sha)
-        raw = self.github.request("GET", f"/pulls/{checkpoint.source_pr}")
-        try:
-            merged = bool(raw["merged"])
-            self.source_base_snapshot = SnapshotRef(
-                repository, GitSha(raw["base"]["sha"])
-            )
-            # A checkpoint created while the PR was open owns its pinned head,
-            # even if that PR later moved or merged. For a run first created
-            # after merge, source_sha is the authoritative base-branch head and
-            # the PR merge commit is the exact after-side of the original diff.
-            change_sha = (
-                raw["merge_commit_sha"]
-                if merged and raw["head"]["sha"] != checkpoint.source_sha.value
-                else checkpoint.source_sha.value
-            )
-            pr_snapshot = SnapshotRef(
-                repository,
-                GitSha(change_sha),
-            )
-        except (KeyError, TypeError, ValueError):
-            raise RuntimeBoundaryError("source_base_missing") from None
+        inventory = checkpoint.source_inventory
+        if inventory.source_base_sha is None or inventory.source_head_sha is None:
+            raise RuntimeBoundaryError("source_inventory_provenance_missing")
+        self.source_base_snapshot = SnapshotRef(repository, inventory.source_base_sha)
+        pr_snapshot = SnapshotRef(repository, inventory.source_head_sha)
         self.snapshots = ResolvedRepositorySnapshots(
             PullRequestState.OPEN,
             BaseBranch(pr.base_branch),

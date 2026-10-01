@@ -45,7 +45,6 @@ def test_semantic_modes_publish_without_build_or_ci(monkeypatch, mode, verdict, 
         "YANDEX_FOLDER_ID": "offline",
     }
     finding = {
-        "repairable": False,
         "reason": "Residual meaning issue.",
         "expected_correction": "Restore the intended meaning.",
         "searchable_snippet": "Corrected",
@@ -172,7 +171,6 @@ class WholePRServices(InstalledContinueServices):
                 if verdict == "GREEN"
                 else [
                     {
-                        "repairable": False,
                         "reason": "Residual alpha detail.",
                         "expected_correction": "Clarify alpha detail.",
                         "searchable_snippet": "Correct alpha.",
@@ -180,7 +178,6 @@ class WholePRServices(InstalledContinueServices):
                         "target_line": 3,
                     },
                     {
-                        "repairable": False,
                         "reason": "Residual relationship detail.",
                         "expected_correction": "Clarify relationship detail.",
                         "searchable_snippet": "Correct alpha relationship.",
@@ -361,6 +358,9 @@ def test_merged_source_uses_workflow_pinned_base_after_branch_advances() -> None
     )
     assert source.context.current_head == pinned_base.commit_sha
     assert source.context.expected_branch_head == previous_translation_head
+    assert source.inventory.source_base_sha == GitSha(services.base)
+    assert source.inventory.source_head_sha == GitSha(services.source)
+    assert source.source_change_snapshot.commit_sha == GitSha(services.source)
     merge_base_with = source.snapshots.merge_base_with
     assert merge_base_with is not None
     assert GitSha(services.base) not in {
@@ -863,6 +863,9 @@ def test_t017_f04_pure_rename_rejects_changed_whole_fence_before_commit() -> Non
 
     class RenameServices(RuntimeServices):
         def github(self, method, path, payload):
+            if path.endswith("/contents/ydb/docs/ru/core/old.md?ref=" + self.base):
+                return {"type": "file", "encoding": "base64",
+                        "content": base64.b64encode(b"```sql\nSELECT 1;\n```\n").decode()}
             if path.endswith("/pulls/42/files?per_page=100"):
                 return [
                     {
@@ -899,7 +902,7 @@ def test_t017_f04_pure_rename_rejects_changed_whole_fence_before_commit() -> Non
         runtime.doc_translate(TranslateWorkflowInput(42, GitSha(services.source), Decimal(10)))
 
     assert not any(method in {"POST", "PATCH"} for method, _ in services.events)
-    assert [row["role"] for row in services.audit if "attempt_id" in row] == ["critic"]
+    assert [row["role"] for row in services.audit if "attempt_id" in row] == ["direction", "critic"]
     assert services.audit[-1]["status"] == "failed"
 
 
@@ -1482,6 +1485,8 @@ class _T017N04Services(RuntimeServices):
             )
         schema = schema_wrapper["schema"]
         properties = tuple(schema["properties"])
+        if "translation_required" in properties:
+            return super().model(request)
         self.events.append(("MODEL", properties))
         if properties == ("page.md",):
             values = {"page.md": "ru_to_en"}
@@ -1662,7 +1667,9 @@ def test_t017_n05_truncated_http_response_is_audited_once_with_unknown_cost() ->
     assert all(attempt["cost_rub"] is None for attempt in attempts)
     assert services.audit[-1]["status"] == "failed"
     assert services.audit[-1]["error"] == "prepare_failed"
-    assert not any(method in {"POST", "PATCH"} for method, _path in services.events)
+    assert len(services.source_comments) == 1
+    assert not any(method in {"POST", "PATCH"} and "/git/" in path
+                   for method, path in services.events)
 
 
 def test_t017_q02_truncated_http_error_body_is_audited_once_with_unknown_cost() -> None:
@@ -1731,7 +1738,9 @@ def test_t017_q02_truncated_http_error_body_is_audited_once_with_unknown_cost() 
     assert all(attempt["cost_rub"] is None for attempt in attempts)
     assert services.audit[-1]["status"] == "failed"
     assert services.audit[-1]["error"] == "prepare_failed"
-    assert not any(method in {"POST", "PATCH"} for method, _path in services.events)
+    assert len(services.source_comments) == 1
+    assert not any(method in {"POST", "PATCH"} and "/git/" in path
+                   for method, path in services.events)
 
 
 def test_github_backend_commits_exact_bytes_and_rejects_changed_head() -> None:
@@ -2026,6 +2035,7 @@ def test_verify_replays_pinned_toc_plan_instead_of_translated_h1(toc_label) -> N
                     ).encode(),
                 },
             }
+            self.files = dict(self.ref_files[self.translated])
 
         def github(self, method, path, payload):
             if path.endswith("/pulls/42"):
@@ -2101,6 +2111,10 @@ def test_runtime_canonical_file_operations_have_shipped_producer(operation):
 
     class Services(RuntimeServices):
         def github(self, method, path, payload):
+            before_name = "old.md" if operation == "renamed" else "page.md"
+            if path.endswith("/contents/ydb/docs/ru/core/" + before_name + "?ref=" + self.base):
+                return {"type": "file", "encoding": "base64",
+                        "content": base64.b64encode(b"# Source preimage\n").decode()}
             if path.endswith("/pulls/42/files?per_page=100"):
                 return [
                     {
@@ -2303,7 +2317,7 @@ def test_critic_edit_is_validated_then_published_once_before_pr():
         or (method == "POST" and path.endswith(("/git/commits", "/pulls")))
     ]
     assert significant == ["MODEL", "CRITIC", "MODEL", "commits", "pulls"]
-    assert "Стоимость запуска: 0.04 RUB" in services.comments[0]["body"]
+    assert "Стоимость запуска: 0.05 RUB" in services.comments[0]["body"]
 
 
 def test_runtime_never_reports_green_after_branch_moves_during_critic():

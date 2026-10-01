@@ -18,7 +18,7 @@ from typing import Any
 import yaml  # type: ignore[import-untyped]
 
 from ydbdoc_review_ng.continuation import SourceChange, SourceChangeInventory
-from ydbdoc_review_ng.direction import Direction
+from ydbdoc_review_ng.direction import Direction, InventoryClassification
 from ydbdoc_review_ng.domain import ContentHash, RepoPath
 from ydbdoc_review_ng.errors import SafeDiagnosticError
 from ydbdoc_review_ng.locales import LocaleRoots, PairKey
@@ -51,6 +51,7 @@ class PathKind(str, Enum):
 
 
 class PlanAction(str, Enum):
+    NO_ACTION = "no_action"
     TRANSLATE_DOCUMENT = "translate_document"
     DELETE_TARGET = "delete_target"
     RENAME_TARGET = "rename_target"
@@ -373,32 +374,10 @@ def _validate_rename_shape(
 
 
 def preflight_inventory(inventory: SourceChangeInventory, roots: LocaleRoots, /) -> None:
-    """Reject inventory shapes unsupported in every direction before any model call."""
-    complete = _complete_pairs(inventory, roots)
-    localized_unpaired = 0
-    localized_markdown = 0
+    """Validate Git facts without deciding whether a file needs translation."""
     for change in inventory.files:
-        current = classify_path(roots, change.path)
-        _validate_rename_shape(change, current, roots)
-        if current.kind is PathKind.OUTSIDE_LOCALES:
-            continue
-        if current.relative is not None and (current.kind, current.relative) in complete:
-            continue
-        localized_unpaired += 1
-        if current.kind is PathKind.MARKDOWN:
-            localized_markdown += 1
-            if change.status not in _STATUS_OPERATIONS:
-                raise TranslationPlanError("translation_plan_status_operation_mismatch")
-            continue
-        if current.kind is PathKind.TOC:
-            if change.status not in _ORDINARY_STATUSES:
-                raise TranslationPlanError("translation_plan_toc_operation_unsupported")
-            continue
-        raise TranslationPlanError("translation_plan_localized_file_unsupported")
-    if localized_unpaired and not localized_markdown:
-        # The legacy direction/scope selector is Markdown-based. Until metadata
-        # gets its own executor, never misreport a metadata-only PR as a no-op.
-        raise TranslationPlanError("translation_plan_direction_missing")
+        if change.status not in {"added", "modified", "removed", "renamed"}:
+            raise TranslationPlanError("translation_plan_status_operation_mismatch")
 
 
 def _markdown_input(
@@ -463,14 +442,23 @@ def build_translation_plan(
     *,
     toc_postconditions: Mapping[RepoPath, bytes] | None = None,
     toc_source_snapshots: Mapping[RepoPath, tuple[bytes | None, bytes]] | None = None,
+    classification: InventoryClassification | None = None,
 ) -> TranslationPlan:
     """Build intent before metadata/model execution and cover every inventory row."""
     complete = _complete_pairs(inventory, roots)
+    no_action = (
+        set()
+        if classification is None
+        else {item.change.path for item in classification.files if item.action == "none"}
+    )
     direction = None if manifest is None else manifest.direction
     if direction is None:
         inputs: list[PlannedInput] = []
         for change in inventory.files:
             current = classify_path(roots, change.path)
+            if change.path in no_action:
+                inputs.append(PlannedInput(change, current.kind, PlanAction.NO_ACTION, None, ()))
+                continue
             _validate_rename_shape(change, current, roots)
             if current.kind is PathKind.OUTSIDE_LOCALES:
                 inputs.append(
@@ -495,6 +483,9 @@ def build_translation_plan(
 
     for change in inventory.files:
         current = classify_path(roots, change.path)
+        if change.path in no_action:
+            planned.append(PlannedInput(change, current.kind, PlanAction.NO_ACTION, None, ()))
+            continue
         _validate_rename_shape(change, current, roots)
         if current.kind is PathKind.OUTSIDE_LOCALES:
             planned.append(

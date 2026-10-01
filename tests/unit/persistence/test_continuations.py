@@ -14,6 +14,7 @@ from ydbdoc_review_ng.continuation import (
     ContinuationStage,
     ContinuationState,
     SourceChangeInventory,
+    SourceSemanticAction,
     normalize_source_inventory,
 )
 from ydbdoc_review_ng.direction import Direction
@@ -81,7 +82,7 @@ def checkpoint():
         base_sha=GitSha("b" * 40),
         translation_branch="translation/pr-42",
         target_sha=None,
-        source_inventory=SourceChangeInventory(()),
+        source_inventory=SourceChangeInventory((), GitSha("b" * 40), GitSha("a" * 40)),
         scope_target_paths=(),
         state=ContinuationState(
             STATE_VERSION, ContinuationStage.DIRECTION, None, None, (), (), (), None
@@ -607,7 +608,7 @@ def test_checkpoint_inventory_is_required_and_cannot_change_within_lineage() -> 
     store = YdbPersistence(executor)
     original = replace(
         checkpoint(),
-        source_inventory=normalize_source_inventory(
+        source_inventory=classified_inventory(
             [
                 {"filename": "ru/page.md", "status": "modified"},
             ]
@@ -619,7 +620,7 @@ def test_checkpoint_inventory_is_required_and_cannot_change_within_lineage() -> 
     assert store.load_checkpoint(42, now=NOW).source_inventory == original.source_inventory
     changed = replace(
         original,
-        source_inventory=normalize_source_inventory(
+        source_inventory=classified_inventory(
             [
                 {"filename": "ru/page.md", "status": "added"},
             ]
@@ -651,6 +652,55 @@ def selected_checkpoint(stage=ContinuationStage.TRANSLATION):
         scope_target_paths=(path,),
         target_sha=GitSha("c" * 40) if review else None,
     )
+
+
+def classified_inventory(rows, action="page"):
+    inventory = normalize_source_inventory(rows)
+    return replace(
+        inventory,
+        source_base_sha=GitSha("b" * 40),
+        source_head_sha=GitSha("a" * 40),
+        semantic_actions=tuple(
+            SourceSemanticAction(item.path, item.operation, action, None)
+            for item in inventory.files
+        ),
+    )
+
+
+@pytest.mark.parametrize("stage", [ContinuationStage.DIRECTION, ContinuationStage.TRANSLATION])
+def test_semantic_actions_only_change_while_resolving_direction(stage):
+    store = YdbPersistence(CheckpointExecutor())
+    rows = [{"filename": "ru/a.md", "status": "modified"}]
+    original = replace(
+        checkpoint() if stage is ContinuationStage.DIRECTION else selected_checkpoint(),
+        source_inventory=classified_inventory(rows, "none"),
+    )
+    save_semantic(store, original, now=NOW)
+    changed = replace(selected_checkpoint(), source_inventory=classified_inventory(rows, "page"))
+    if stage is ContinuationStage.DIRECTION:
+        assert store._same_lineage(original, changed)
+        save_semantic(store, changed, now=NOW)
+        assert store.load_checkpoint(42, now=NOW).source_inventory == changed.source_inventory
+    else:
+        assert not store._same_lineage(original, changed)
+        with pytest.raises(ydb.PersistenceError, match="lineage mismatch"):
+            store.save_checkpoint(changed, now=NOW)
+
+
+@pytest.mark.parametrize("field", ["files", "source_base_sha", "source_head_sha"])
+def test_direction_resolution_never_changes_frozen_git_facts(field):
+    store = YdbPersistence(CheckpointExecutor())
+    inventory = classified_inventory([{"filename": "ru/a.md", "status": "modified"}])
+    original = replace(checkpoint(), source_inventory=inventory)
+    save_semantic(store, original, now=NOW)
+    if field == "files":
+        changed_inventory = classified_inventory([{"filename": "ru/a.md", "status": "added"}])
+    else:
+        changed_inventory = replace(inventory, **{field: GitSha("f" * 40)})
+    changed = replace(selected_checkpoint(), source_inventory=changed_inventory)
+    assert not store._same_lineage(original, changed)
+    with pytest.raises(ydb.PersistenceError, match="lineage mismatch"):
+        store.save_checkpoint(changed, now=NOW)
 
 
 @pytest.mark.parametrize("stage", [ContinuationStage.TRANSLATION, ContinuationStage.REVIEW])

@@ -9,13 +9,12 @@ import yaml
 
 from ydbdoc_review_ng import dependencies, runtime_content
 from ydbdoc_review_ng.application import ImmutableRunSnapshot, WorkflowCandidate
-from ydbdoc_review_ng.continuation import AcceptedDocument
-from ydbdoc_review_ng.direction import DirectionModelPair, DirectionModelRequest
+from ydbdoc_review_ng.continuation import AcceptedDocument, SourceChange, SourceChangeInventory
+from ydbdoc_review_ng.direction import InventoryFile, inventory_request
 from ydbdoc_review_ng.domain import (
     FilePair,
     GitSha,
     Locale,
-    ModelRole,
     RepoPath,
     RepositoryId,
     SnapshotRef,
@@ -243,25 +242,57 @@ def test_production_models_ignore_legacy_model_overrides(role) -> None:
         explicit.translate_document(document_for(b"# Complete document.\n"))
         calls = models.calls
     elif role == "classifier":
-        direction_models = ScriptedModels(['{"page.md":"ru_to_en"}'])
-        DirectionClient(direction_models, explicit.model).invoke(DirectionModelRequest(
-            ModelRole.DIRECTION,
-            (DirectionModelPair(PairKey(RepoPath("page.md")), SNAPSHOT,
-                                SOURCE_PATH, b"Source", TARGET_PATH, b"Target"),),
-            None,
-        ))
+        before = SnapshotRef(SNAPSHOT.repository, GitSha("b" * 40))
+        inventory = SourceChangeInventory(
+            (SourceChange(SOURCE_PATH, "modified", None, None),),
+            before.commit_sha,
+            SNAPSHOT.commit_sha,
+        )
+        direction_models = ScriptedModels(
+            [
+                json.dumps(
+                    {
+                        "translation_required": True,
+                        "direction": "ru_to_en",
+                        "reason": "Translate the modified source page.",
+                        "files": [
+                            {
+                                "path": SOURCE_PATH.value,
+                                "operation": "modify",
+                                "old_path": SOURCE_PATH.value,
+                                "new_path": SOURCE_PATH.value,
+                                "action": "page",
+                                "toc_delta": None,
+                            }
+                        ],
+                    }
+                )
+            ]
+        )
+        request = inventory_request(
+            (InventoryFile(inventory.files[0], b"Before", b"Source", TARGET_PATH, None),),
+            before,
+            SNAPSHOT,
+            (),
+            explicit.model,
+        )
+        DirectionClient(direction_models, explicit.model).invoke(request, inventory)
         calls = direction_models.calls
     else:
-        review_models = ScriptedModels([
-            json.dumps({"files": {TARGET_PATH.value: "# Target\n"}}),
-            '{"verdict":"GREEN","findings":[]}',
-        ])
+        review_models = ScriptedModels(
+            [
+                json.dumps({"files": {TARGET_PATH.value: "# Target\n"}}),
+                '{"verdict":"GREEN","findings":[]}',
+            ]
+        )
         review_pr(
-            review_models, critic_model=explicit.critic_model,
+            review_models,
+            critic_model=explicit.critic_model,
             arbiter_model=explicit.arbiter_model,
             source_files={SOURCE_PATH.value: b"# Source\n"},
             translated_files={TARGET_PATH.value: b"# Target\n"},
-            glossary_files={}, validate_files=lambda files: None,
+            glossary_files={},
+            validate_files=lambda files: None,
         )
         calls = [call for call in review_models.calls if call.role.value == role]
     assert [call.model for call in calls] == ["deepseek-v4-flash"]

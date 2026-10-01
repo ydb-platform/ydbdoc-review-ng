@@ -120,7 +120,6 @@ class ReviewServices(LifecycleServices):
                         "reason": "Missing meaning in the heading.",
                         "expected_correction": "Restore the full meaning.",
                         "searchable_snippet": current.splitlines()[0],
-                        "repairable": False,
                         "target_path": path,
                         "target_line": 1,
                     }
@@ -672,7 +671,7 @@ def test_initial_translate_without_target_still_creates_branch():
     result = services.translate()
     assert result.verdict is Verdict.GREEN
     assert services.branch_head == result.final_commit_sha.value
-    assert services.roles == ["translate", "translate", "critic", "arbiter"]
+    assert services.roles == ["direction", "translate", "translate", "critic", "arbiter"]
     assert (
         sum(method == "POST" and path.endswith("/git/refs") for method, path in services.events)
         == 1

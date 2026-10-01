@@ -10,7 +10,7 @@ from hashlib import sha256
 from typing import cast
 
 from ydbdoc_review_ng.direction import Direction
-from ydbdoc_review_ng.domain import ContentHash, RepoPath
+from ydbdoc_review_ng.domain import ContentHash, GitSha, RepoPath
 from ydbdoc_review_ng.plan import SourcePlan, validate_source_plan
 from ydbdoc_review_ng.scope import ScopeManifest
 
@@ -24,6 +24,7 @@ __all__ = [
     "RestoredPlan",
     "SourceChange",
     "SourceChangeInventory",
+    "SourceSemanticAction",
     "candidate_sha256",
     "checkpoint_scope_sha256",
     "decode_scope_target_paths",
@@ -83,6 +84,20 @@ class SourceChange:
     previous_path: RepoPath | None
     rename_changed: bool | None
 
+    @property
+    def operation(self) -> str:
+        return {"added": "add", "modified": "modify", "removed": "delete", "renamed": "rename"}[
+            self.status
+        ]
+
+    @property
+    def old_path(self) -> RepoPath | None:
+        return None if self.status == "added" else self.previous_path or self.path
+
+    @property
+    def new_path(self) -> RepoPath | None:
+        return None if self.status == "removed" else self.path
+
     def __post_init__(self) -> None:
         _exact(self.path, RepoPath)
         _exact(self.status, str)
@@ -113,24 +128,65 @@ class SourceChange:
 
 
 @dataclass(frozen=True, slots=True)
+class SourceSemanticAction:
+    """Exact classifier decision for one immutable Git operation."""
+
+    path: RepoPath
+    operation: str
+    action: str
+    toc_delta: str | None
+
+    def __post_init__(self) -> None:
+        _exact(self.path, RepoPath)
+        _exact(self.operation, str)
+        _exact(self.action, str)
+        if self.operation not in {"add", "modify", "delete", "rename"}:
+            raise _fail()
+        if self.action not in {"page", "toc_delta", "resource", "none"}:
+            raise _fail()
+        if self.action == "toc_delta":
+            if type(self.toc_delta) is not str or not self.toc_delta.strip():
+                raise _fail()
+        elif self.toc_delta is not None:
+            raise _fail()
+
+
+@dataclass(frozen=True, slots=True)
 class SourceChangeInventory:
-    """Bounded immutable inventory outside the closed eight-key continuation state."""
+    """Complete Git inventory and diff provenance outside the eight-key state."""
 
     files: tuple[SourceChange, ...]
+    source_base_sha: GitSha | None = None
+    source_head_sha: GitSha | None = None
+    semantic_actions: tuple[SourceSemanticAction, ...] = ()
 
     def __post_init__(self) -> None:
         _exact(self.files, tuple)
-        if len(self.files) > 100 or any(type(item) is not SourceChange for item in self.files):
+        if any(type(item) is not SourceChange for item in self.files):
             raise _fail()
+        if (self.source_base_sha is None) != (self.source_head_sha is None):
+            raise _fail()
+        if self.source_base_sha is not None:
+            _exact(self.source_base_sha, GitSha)
+            _exact(self.source_head_sha, GitSha)
         paths = tuple(item.path.value for item in self.files)
         if paths != tuple(sorted(set(paths))):
+            raise _fail()
+        _exact(self.semantic_actions, tuple)
+        if any(type(item) is not SourceSemanticAction for item in self.semantic_actions):
+            raise _fail()
+        if self.semantic_actions:
+            self.require_semantic_actions()
+
+    def require_semantic_actions(self) -> None:
+        if tuple((item.path, item.operation) for item in self.semantic_actions) != tuple(
+            (item.path, item.operation) for item in self.files
+        ):
             raise _fail()
 
 
 def normalize_source_inventory(files: Sequence[Mapping[str, object]], /) -> SourceChangeInventory:
     """Project the existing PR files response onto the exact inputs we consume."""
-    if len(files) > 100:
-        raise _fail()
     try:
         changes = tuple(
             SourceChange(
@@ -148,16 +204,34 @@ def normalize_source_inventory(files: Sequence[Mapping[str, object]], /) -> Sour
 
 def encode_source_inventory(inventory: SourceChangeInventory, /) -> str:
     _exact(inventory, SourceChangeInventory)
+    inventory.require_semantic_actions()
+    if inventory.source_base_sha is None or inventory.source_head_sha is None:
+        raise _fail()
     return json.dumps(
-        [
-            {
-                "path": item.path.value,
-                "status": item.status,
-                "previous_path": None if item.previous_path is None else item.previous_path.value,
-                "rename_changed": item.rename_changed,
-            }
-            for item in inventory.files
-        ],
+        {
+            "source_base_sha": inventory.source_base_sha.value,
+            "source_head_sha": inventory.source_head_sha.value,
+            "files": [
+                {
+                    "path": item.path.value,
+                    "status": item.status,
+                    "previous_path": None
+                    if item.previous_path is None
+                    else item.previous_path.value,
+                    "rename_changed": item.rename_changed,
+                }
+                for item in inventory.files
+            ],
+            "semantic_actions": [
+                {
+                    "path": item.path.value,
+                    "operation": item.operation,
+                    "action": item.action,
+                    "toc_delta": item.toc_delta,
+                }
+                for item in inventory.semantic_actions
+            ],
+        },
         ensure_ascii=False,
         separators=(",", ":"),
         sort_keys=True,
@@ -165,15 +239,17 @@ def encode_source_inventory(inventory: SourceChangeInventory, /) -> str:
 
 
 def decode_source_inventory(raw: str | bytes, /) -> SourceChangeInventory:
-    if type(raw) not in {str, bytes} or len(raw) > 4_000_000:
+    if type(raw) not in {str, bytes}:
         raise _fail()
     try:
         parsed = json.loads(raw, object_pairs_hook=_ObjectPairs)
-        _exact(parsed, list)
-        if len(parsed) > 100:
+        envelope = dict(_pairs(parsed))
+        if set(envelope) != {"files", "source_base_sha", "source_head_sha", "semantic_actions"}:
             raise _fail()
+        rows = envelope["files"]
+        _exact(rows, list)
         files = []
-        for value in parsed:
+        for value in rows:
             values = dict(_pairs(value))
             if set(values) != {"path", "status", "previous_path", "rename_changed"}:
                 raise _fail()
@@ -185,7 +261,29 @@ def decode_source_inventory(raw: str | bytes, /) -> SourceChangeInventory:
                     cast(bool | None, values["rename_changed"]),
                 )
             )
-        return SourceChangeInventory(tuple(files))
+        actions = envelope["semantic_actions"]
+        _exact(actions, list)
+        semantic_actions = []
+        for value in actions:
+            values = dict(_pairs(value))
+            if set(values) != {"path", "operation", "action", "toc_delta"}:
+                raise _fail()
+            semantic_actions.append(
+                SourceSemanticAction(
+                    _path(values["path"]),
+                    cast(str, values["operation"]),
+                    cast(str, values["action"]),
+                    cast(str | None, values["toc_delta"]),
+                )
+            )
+        inventory = SourceChangeInventory(
+            tuple(files),
+            GitSha(envelope["source_base_sha"]),
+            GitSha(envelope["source_head_sha"]),
+            tuple(semantic_actions),
+        )
+        inventory.require_semantic_actions()
+        return inventory
     except (KeyError, TypeError, ValueError):
         raise _fail() from None
 

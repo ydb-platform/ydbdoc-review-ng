@@ -45,6 +45,36 @@ def request_schema(body):
     return {"schema": response_format["json_schema"]["schema"]}
 
 
+def classification_response(prompt, *, direction="ru_to_en", decisions=None):
+    inventory = json.loads(prompt.split("\nInventory: ", 1)[1].split("\n\n", 1)[0])
+    rows = []
+    for item in inventory["files"]:
+        key = item["path"].split("/core/", 1)[-1]
+        verdict = None if decisions is None else decisions.get(key)
+        action = "toc_delta" if item["path"].endswith(".yaml") else "page"
+        if verdict == "complete_pair":
+            action = "none"
+        elif verdict in {"ru_to_en", "en_to_ru"}:
+            direction = verdict
+        target_locale = "en" if direction in {"ru_to_en", None} else "ru"
+        if item["path"].startswith(f"ydb/docs/{target_locale}/"):
+            action = "none"
+        rows.append({
+            **{key: item[key] for key in ("path", "operation", "old_path", "new_path")},
+            "action": action, "toc_delta": "Apply added entries." if action == "toc_delta" else None,
+        })
+    return {"translation_required": any(row["action"] != "none" for row in rows),
+            "direction": direction, "reason": "Source PR classification.", "files": rows}
+
+
+def seed_inventory_preimages(rows, before, after):
+    """Give legacy scenario fixtures explicit source versions for their PR diff."""
+    for row in rows:
+        if row["status"] != "added":
+            old_path = row.get("previous_filename", row["filename"])
+            before.setdefault(old_path, after.get(row["filename"], b"# Removed source preimage\n"))
+
+
 def replace_response_text(response_body, text):
     """Replace assistant text in either provider response envelope."""
     data = json.loads(response_body)
@@ -157,6 +187,7 @@ class RuntimeServices:
             }
         if path == "/pulls/43":
             return {
+                "changed_files": len([name for name in self.files if name.startswith("ydb/docs/en/")]),
                 "head": {
                     "sha": self.translated,
                     "ref": "translation/pr-42",
@@ -173,6 +204,9 @@ class RuntimeServices:
             }
         if path == "/pulls/42/files?per_page=100":
             return [{"status": "modified", "filename": "ydb/docs/ru/core/page.md"}]
+        if path == "/pulls/43/files?per_page=100":
+            return [{"status": "modified", "filename": name} for name in self.files
+                    if name.startswith("ydb/docs/en/")]
         if path == "/git/ref/heads/main":
             return {"object": {"sha": self.base}}
         if path.startswith("/git/ref/heads/translation"):
@@ -269,9 +303,12 @@ class RuntimeServices:
                 text = translated_markdown(prompt)
         else:
             properties = schema["schema"]["properties"]
-            self.events.append(("MODEL", tuple(properties)))
+            self.events.append(("CLASSIFIER" if "translation_required" in properties else "MODEL",
+                                tuple(properties)))
             prompt = request_prompt(body)
-            if properties and all(key.startswith("segment_") for key in properties):
+            if "translation_required" in properties:
+                values = classification_response(prompt)
+            elif properties and all(key.startswith("segment_") for key in properties):
                 values = translation_segments(prompt)
             elif set(properties) in ({"files"}, {"verdict", "findings"}):
                 assert self.semantic_responses, "unexpected extra semantic model call"
@@ -321,7 +358,6 @@ class InstalledContinueServices(RuntimeServices):
                 "verdict": "RED",
                 "findings": [
                     {
-                        "repairable": False,
                         "reason": "Meaning requires operator context.",
                         "expected_correction": "Confirm the intended source meaning.",
                         "searchable_snippet": "Translated",

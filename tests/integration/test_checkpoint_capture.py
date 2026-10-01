@@ -11,11 +11,13 @@ from decimal import Decimal
 import pytest
 from _runtime_services import (
     RuntimeServices,
+    classification_response,
     raw_repair_context,
     raw_translation_draft,
     request_prompt,
     request_schema,
     rewrite_markdown,
+    seed_inventory_preimages,
     translated_markdown,
     translation_segments,
 )
@@ -205,7 +207,11 @@ class CaptureServices(RuntimeServices):
                     text = "[[YDBDOC_PROTECTED_9999]]"
                 if self.stop == "translation_assembly" and self.translations >= 2:
                     text = "[[YDBDOC_PROTECTED_9999]]"
-        elif "files" in (schema := schema_wrapper["schema"])["properties"]:
+        elif "translation_required" in (schema := schema_wrapper["schema"])["properties"]:
+            role = "direction"
+            values = classification_response(
+                prompt, direction=None if self.stop == "direction" else "ru_to_en")
+        elif "files" in schema["properties"]:
             role = "critic"
             self.critics += 1
             files = json.loads(raw_repair_context(prompt, "translation-pr-files"))
@@ -233,7 +239,6 @@ class CaptureServices(RuntimeServices):
                         "reason": "The meaning is incomplete. Prior arbiter sentinel.",
                         "expected_correction": "Restore the missing meaning.",
                         "searchable_snippet": files[path].splitlines()[0],
-                        "repairable": False,
                         "target_path": path,
                         "target_line": 1,
                     }
@@ -303,10 +308,6 @@ class CaptureServices(RuntimeServices):
             values = translation_segments(prompt)
             if self.stop in {"translation", "translation_assembly"} and self.translations >= 2:
                 values.pop(next(iter(values)))
-        elif prompt.startswith("Compare"):
-            role = "direction"
-            schema = schema_wrapper["schema"]
-            values = dict.fromkeys(schema["properties"], "undetermined")
         else:
             raise AssertionError("unexpected structured model role")
         self.roles.append(role)
@@ -344,6 +345,7 @@ class CaptureServices(RuntimeServices):
         )
 
     def translate(self):
+        seed_inventory_preimages(self.changes, self.snapshots[self.base], self.snapshots[self.source])
         return self.runtime().doc_translate(
             TranslateWorkflowInput(42, GitSha(self.source), Decimal(10))
         )
@@ -387,10 +389,10 @@ def test_two_invalid_current_field_responses_preserve_first_map_and_pending_orde
     assert checkpoint.scope_target_paths == tuple(
         RepoPath(f"ydb/docs/en/core/{n}.md") for n in ("a", "b", "c", "z")
     )
-    assert services.roles == ["translate", "translate", "translate"]
+    assert services.roles == ["direction", "translate", "translate", "translate"]
     attempts = [row for row in services.audit if "attempt_id" in row]
-    assert len(attempts) == 3
-    assert sum(row["cost_rub"] for row in attempts) == Decimal("0.03")
+    assert len(attempts) == 4
+    assert sum(row["cost_rub"] for row in attempts) == Decimal("0.04")
     assert services.commits == 0 and services.audit[-1]["status"] == "failed"
 
 
@@ -405,7 +407,7 @@ def test_structured_translation_restores_known_placeholder_before_review() -> No
     result = services.translate()
 
     assert result.verdict is Verdict.GREEN
-    assert services.roles == ["translate", "critic", "arbiter"]
+    assert services.roles == ["direction", "translate", "critic", "arbiter"]
     assert services.critics == 1
     assert services.commits == 1
     assert services.files[target_path] == b"# Translated `CPUTime`\n"
@@ -450,6 +452,8 @@ def test_provider_non_final_translation_is_rejected_before_publication():
     class NonFinalServices(CaptureServices):
         def model(self, request):
             response = super().model(request)
+            if self.roles[-1] == "direction":
+                return response
             payload = json.loads(response.body)
             if "choices" in payload:
                 payload["choices"][0]["finish_reason"] = "length"
@@ -467,7 +471,8 @@ def test_provider_non_final_translation_is_rejected_before_publication():
     attempts = [row for row in services.audit if "attempt_id" in row]
     # Both the primary and the existing alternate translator are bounded to
     # two identical transport attempts before the workflow fails closed.
-    assert services.roles == ["translate"] * 4
+    assert [role for role in services.roles if role != "direction"] == ["translate"] * 4
+    attempts = [row for row in attempts if row["role"] == "translate"]
     assert len(attempts) == 4 and all(row["error"] == "non_final" for row in attempts)
     assert services.commits == 0 and services.blobs == {} and services.tree == []
 
@@ -492,7 +497,7 @@ def test_red_pure_rename_replays_whole_counterpart_as_a_complete_document():
     content = RuntimeContent(source, None, ENV)
     replay = replay_continue(content, checkpoint)
     assert replay.accepted_documents == checkpoint.state.accepted_documents
-    assert services.roles == ["critic", "arbiter"]
+    assert services.roles == ["direction", "critic", "arbiter"]
     with pytest.raises(PersistenceError, match="scope selection"):
         replay_continue(
             content,
@@ -663,7 +668,7 @@ def test_lost_terminal_ack_and_failed_close_cannot_be_resumed():
     services = LostTerminalAck(stop="translation")
     with pytest.raises((WorkflowError, PersistenceError)):
         services.translate()
-    assert services.roles == ["translate", "translate", "translate"]
+    assert services.roles == ["direction", "translate", "translate", "translate"]
     assert services.rows  # The real checkpoint write reached storage.
     with pytest.raises(PersistenceError):
         services.checkpoint()

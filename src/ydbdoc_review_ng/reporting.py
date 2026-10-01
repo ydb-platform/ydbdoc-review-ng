@@ -12,6 +12,7 @@ from ydbdoc_review_ng.quality import Finding, QualityReviewResult, Verdict
 QA_MARKER = "<!-- ydbdoc-current-qa -->"
 TRANSLATION_LINK_MARKER = "<!-- ydbdoc-translation-pr -->"
 SCOPE_FAILURE_MARKER = "<!-- ydbdoc-scope-failure -->"
+CLASSIFICATION_MARKER = "<!-- ydbdoc-source-classification -->"
 _MAX_REPORTED_FILES = 10
 _STATUS_ICONS = {"GREEN": "🟢", "YELLOW": "🟡", "RED": "🔴"}
 
@@ -192,6 +193,35 @@ class CommentBackend(Protocol):
     def list_comments(self, pr_number: int, /) -> tuple[Comment, ...]: ...
     def create_comment(self, pr_number: int, body: str, /) -> None: ...
     def update_comment(self, pr_number: int, comment_id: int, body: str, /) -> None: ...
+
+
+def report_classification(
+    backend: CommentBackend, source_pr: int, *, reason: str | None = None
+) -> None:
+    """Keep one publisher-owned source comment for no-op or technical failure."""
+    body = (
+        (
+            "Перевод не требуется.\n\nПричина: " + _line(reason)
+            if reason is not None
+            else "🔴 Перевод PR не запущен: классификация изменений не удалась.\n\n"
+            "После двух попыток сервис модели недоступен или ответ не соответствует "
+            "полному набору файлов PR. Повторно добавьте метку `doc_translate`."
+        )
+        + "\n"
+        + CLASSIFICATION_MARKER
+    )
+    existing = next(
+        (
+            comment
+            for comment in backend.list_comments(source_pr)
+            if comment.authored_by_publisher and CLASSIFICATION_MARKER in comment.body
+        ),
+        None,
+    )
+    if existing is None:
+        backend.create_comment(source_pr, body)
+    else:
+        backend.update_comment(source_pr, existing.id, body)
 
 
 class QAReporter:

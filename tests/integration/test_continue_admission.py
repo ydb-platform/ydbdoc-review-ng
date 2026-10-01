@@ -47,7 +47,10 @@ class AdmissionServices:
             "base_sha": BASE_SHA,
             "translation_branch": BRANCH,
             "target_sha": TARGET_SHA,
-            "source_inventory": b"[]",
+            "source_inventory": (
+                '{"files":[],"semantic_actions":[],"source_base_sha":"' + BASE_SHA
+                + '","source_head_sha":"' + SOURCE_SHA + '"}'
+            ).encode(),
             "scope_target_paths": b"[]",
             "stage": "direction",
             "status": "open",

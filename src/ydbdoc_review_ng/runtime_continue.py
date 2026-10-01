@@ -20,17 +20,10 @@ from ydbdoc_review_ng.continuation import (
     checkpoint_scope_sha256,
     validate_restored_documents,
 )
-from ydbdoc_review_ng.direction import (
-    Direction,
-    DirectionPairDecision,
-    DirectionPairVerdict,
-    DirectionSelectionResult,
-    DirectionSelectionState,
-)
 from ydbdoc_review_ng.domain import GitSha, RepoPath
 from ydbdoc_review_ng.persistence import ContinuationCheckpoint
 from ydbdoc_review_ng.runtime_github import GitHubBackend, RuntimeBoundaryError
-from ydbdoc_review_ng.scope import FileOperation, ScopeOrigin
+from ydbdoc_review_ng.scope import FileOperation
 from ydbdoc_review_ng.translation_plan import (
     PathKind,
     TranslationPlanError,
@@ -94,43 +87,20 @@ def replay_continue(
     state = checkpoint.state
     if state.stage is ContinuationStage.DIRECTION:
         return ContinueReplay(preparation, None, (), ())
-    referenced = {item.target_path for item in state.accepted_documents} | set(
-        state.pending_paths
-    )
+    referenced = {item.target_path for item in state.accepted_documents} | set(state.pending_paths)
     potential = next(
         (scope for scope in preparation.potential.scopes if scope.direction is state.direction),
         None,
     )
     if potential is None:
         raise ContinuationStateError()
-    # Accepted/pending maps omit no-op and whole-file operations. Only the saved
-    # selected manifest can distinguish a selected no-op from COMPLETE_PAIR.
-    selected_paths = set(checkpoint.scope_target_paths)
-    selected_keys = {
-        key
-        for entry in potential.entries
-        if entry.origin is ScopeOrigin.INITIAL and entry.pair.target_path in selected_paths
-        for key in entry.initial_keys
-    }
-    mixed = len({locale for pair in preparation.inventories for locale in pair.changed_locales}) > 1
-    decisions = tuple(
-        DirectionPairDecision(
-            pair,
-            DirectionPairVerdict.COMPLETE_PAIR
-            if mixed and pair.is_complete and pair.key not in selected_keys
-            else DirectionPairVerdict.RU_TO_EN
-            if state.direction is Direction.RU_TO_EN
-            else DirectionPairVerdict.EN_TO_RU,
-        )
-        for pair in preparation.inventories
-    )
-    direction = DirectionSelectionResult(
-        DirectionSelectionState.SELECTED, state.direction, decisions, None
-    )
+    # The inventory freezes semantic no-ops and TOC deltas as well as Git facts.
+    assert state.direction is not None
+    classification = content.restored_classification(preparation, state.direction)
     try:
         plans = content.select_source(
             preparation,
-            direction=direction,
+            classification=classification,
             review_documents=state.stage is ContinuationStage.REVIEW,
         )
     except TranslationPlanError:
