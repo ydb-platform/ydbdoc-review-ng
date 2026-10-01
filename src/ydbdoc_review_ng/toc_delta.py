@@ -672,7 +672,8 @@ def apply_toc_delta(
     root_changed = before_root_keys != after_root_keys
 
     if source_before is not None and before_root == after_root:
-        raise TocDeltaError()
+        # Comment/format-only source edit: no structural delta → keep target (§3.1).
+        return TocDeltaResult(target, (), ())
 
     before_index = _index(before_items) if before_items else {}
     after_index = _index(after_items)
@@ -698,7 +699,8 @@ def apply_toc_delta(
         and not body_changed
         and not root_changed
     ):
-        raise TocDeltaError()
+        # Visible-string-only / non-structural noise after parse → keep target.
+        return TocDeltaResult(target, (), ())
 
     strings: list[TocStringChange] = []
     mapping = {} if translations is None else dict(translations)

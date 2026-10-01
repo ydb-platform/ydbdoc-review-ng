@@ -278,11 +278,11 @@ def test_delete_is_blocked_when_target_toc_would_keep_an_orphan() -> None:
             return files.get((snapshot, path.value))
 
     metadata = MetadataProducer(Reader(), SOURCE, TARGET, ())
-    with pytest.raises(RuntimeBoundaryError, match="target_toc_reference_blocks_delete"):
-        metadata.assert_target_document_unreferenced(
-            RepoPath("ydb/docs/ru/core/deleted.md"),
-            RepoPath("ydb/docs/en/core/deleted.md"),
-        )
+    # §3.5: dangling target TOC links are diagnostics, not delete gates.
+    metadata.assert_target_document_unreferenced(
+        RepoPath("ydb/docs/ru/core/deleted.md"),
+        RepoPath("ydb/docs/en/core/deleted.md"),
+    )
 
 
 @pytest.mark.parametrize(

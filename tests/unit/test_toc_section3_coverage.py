@@ -174,8 +174,11 @@ def test_section3_delete_only_without_target_toc_creates_no_file() -> None:
     assert result.added_markdown == ()
 
 
-def test_section3_comment_only_rewrite_stays_fail_closed() -> None:
+def test_section3_comment_only_rewrite_preserves_target() -> None:
+    """§3.1: zero structural delta must not abort; keep the current target."""
     before = b"items: []\n"
     after = b"items: [] # changed comment\n"
-    with pytest.raises(TocDeltaError, match="toc_delta_unsupported"):
-        apply_toc_delta(before, after, b"items: []\n", toc_path=TOC)
+    target = b"items:\n- name: Keep\n  href: keep.md\n"
+    result = apply_toc_delta(before, after, target, toc_path=TOC)
+    assert result.content == target
+    assert result.string_changes == ()

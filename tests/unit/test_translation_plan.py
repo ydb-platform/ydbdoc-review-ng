@@ -518,17 +518,24 @@ def test_toc_delta_allows_link_to_existing_page_without_translate_entry() -> Non
         ),
     ],
 )
-def test_toc_comment_only_changes_fail_closed(before: bytes, after: bytes) -> None:
+def test_toc_comment_only_changes_preserve_target(before: bytes, after: bytes) -> None:
+    # §3.1: zero structural delta keeps the existing target TOC bytes.
     document = entry("manual/page.md")
     source_path = RepoPath("ydb/docs/ru/core/manual/toc_i.yaml")
-    with pytest.raises(TranslationPlanError, match="toc_delta_unsupported"):
-        build_translation_plan(
-            inventory(change(document.pair.source_path.value), change(source_path.value)),
-            ROOTS,
-            manifest(document),
-            toc_postconditions=toc_postcondition("manual/toc_i.yaml"),
-            toc_source_snapshots={source_path: (before, after)},
-        )
+    target = toc_postcondition("manual/toc_i.yaml")
+    plan = build_translation_plan(
+        inventory(change(document.pair.source_path.value), change(source_path.value)),
+        ROOTS,
+        manifest(document),
+        toc_postconditions=target,
+        toc_source_snapshots={source_path: (before, after)},
+    )
+    toc = next(item for item in plan.inputs if item.action is PlanAction.SYNC_TOC)
+    from hashlib import sha256
+
+    assert toc.expected_sha256 == sha256(next(iter(target.values()))).hexdigest()
+    assert toc.action is PlanAction.SYNC_TOC
+    assert toc.target_path == RepoPath("ydb/docs/en/core/manual/toc_i.yaml")
 
 
 @pytest.mark.parametrize(
