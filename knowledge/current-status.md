@@ -23,5 +23,7 @@ missing verify TOC soft-pending, critic TOC YAML soft-publish, delete-only
 `resource-review` continue/persistence, plan-level source TOC delete. См. `debt-map.md`.
 
 Focused regression: **291 passed** (tip-bug + plan/review/continue/persistence).
+Full non-live suite after tip residuals: **2226 passed / 0 failed** (1 deselected).
+One follow-up commit aligned stale e2e continue expectations (`54ce446`).
 
 Live `doc_translate` gate ещё не доказан end-to-end credentials/push.
