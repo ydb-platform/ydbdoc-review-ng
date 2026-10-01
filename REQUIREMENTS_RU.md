@@ -744,8 +744,10 @@ target `target_line` является положительным integer, а `se
 4. Заново прочитать authoritative source только по сохранённым immutable SHA и
    построить source plans. Проверить scope digest. HEAD и текст комментария не
    заменяют authoritative source.
-5. Для `direction_undetermined` повторить только direction call с operator
-   context. Для незавершённого перевода вызвать модель только для pending
+5. Для `direction_undetermined` повторить direction call с operator context. После
+   успешного определения `ru_to_en` или `en_to_ru` тот же запуск не завершается: runtime
+   сразу строит scope по зафиксированным source/base SHA, переходит к translation stage и
+   продолжает обычный pipeline. Для незавершённого перевода вызвать модель только для pending
    документов из `pending_paths`, не переводя заново уже опубликованные файлы.
    Все успешно полученные pending-файлы опубликовать следующим commit в той же
    translation branch. Для review использовать точный опубликованный translation
