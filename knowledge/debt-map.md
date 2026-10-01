@@ -38,32 +38,30 @@ vs `REQUIREMENTS_RU.md`. Fix only contract violations; skip invented requirement
 | 5 | First push must create translation PR | **fixed** |
 | 6 | Markdown/YFM diagnostics block assembled UTF-8 publish | **fixed** |
 | 7 | Critic cannot rewrite TOC href/hierarchy or fill null TOC | **fixed** |
-| 8 | doc_verify missing target → null to critic | **fixed** (`5e0c140`) |
+| 8 | doc_verify missing target → null to critic | **fixed** (`4d1b991`/`5e0c140`) |
 | 9 | doc_verify only translation PR diff, not full frozen group | **fixed** (`5e0c140`) |
 | 10 | Findings with target_line=null not publishable | **fixed** |
 | 11 | Zero commits + RED → source report + null checkpoint | **fixed** |
 | 12 | Resource/TOC-only PRs rejected after direction | **fixed** (`5e0c140`) |
 | 13 | Both-locale changes auto COMPLETE_PAIR | **fixed** (`5e0c140`) |
-| 14 | Critic/arbiter missing TOC before/after + binary manifest | deferred |
+| 14 | Critic/arbiter missing TOC before/after + binary manifest | **fixed** (`02b3402`) |
 | 15 | Zero text pairs auto-GREEN without critic/arbiter | **fixed** |
-| 16–18 | TOC delta / continue scope_sha issues | deferred |
+| 16–17 | TOC delta §3 gaps (prune/delete/conditions/nested labels) | **fixed** (`4184fba`) |
+| 18 | doc_continue TOC retranslation breaks scope_sha256 | **fixed** (`7cdf352`) |
 | 19 | Verify GREEN/YELLOW closes prior RED checkpoint | **fixed** (`4d1b991`) |
 | 20 | New translate deletes branch + closes checkpoints | **fixed** (`4d1b991`) |
-| 21 | Source echo correction not wired | deferred |
+| 21 | Source echo correction not wired | **fixed** (echo commit) |
 | 22 | Raw Markdown fallback bypasses segment ID contract | **fixed** |
 | 23 | Trigger label not removed after acceptance | **fixed** (`4d1b991`) |
-| 24 | direction_undetermined → `/ydbdoc continue` | **fixed** (P2) |
-| 25 | Strip SHA/internal codes from public comments | **fixed** (P2) |
+| 24 | direction_undetermined → `/ydbdoc continue` | **fixed** (`14d01dd`) |
+| 25 | Strip SHA/internal codes from public comments | **fixed** (`14d01dd`) |
 
 ## Известные расхождения в коде
 
-- Complete-pair Git heuristic removed from direction/mirror; both-locale edits
-  stay in translate scope when direction requires it.
-- Resource/TOC-only PRs can select direction with empty Markdown inventories and
-  plan `COPY_TARGET` / delete / rename for locale assets.
-- New `doc_translate` deletes `translation/pr-{n}` and closes open/pending
-  checkpoints before snapshot; trigger labels removed after authorize.
-- `doc_verify` GREEN/YELLOW closes prior RED checkpoint for the translation.
-- Remaining deferred: critic TOC/binary review context (#14), TOC delta §3
-  edges (#16–17), continue TOC scope_sha (#18), source-echo correction (#21).
+- Complete-pair Git heuristic removed; both-locale edits stay in translate scope.
+- Resource/TOC-only PRs select with empty Markdown inventories and `COPY_TARGET`.
+- New `doc_translate` deletes `translation/pr-{n}` and closes checkpoints; labels removed.
+- `doc_verify` GREEN/YELLOW closes prior RED checkpoint.
+- TOC scope hash ignores volatile `expected_sha256` wording; continue skips TOC string retranslate.
+- Follow-up: rename+RED continue publish interaction xfail under #14 TOC review context.
 - Offline suite mostly green; **live PR / production `doc_translate` still pending**.
