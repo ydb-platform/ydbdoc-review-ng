@@ -127,6 +127,7 @@ from ydbdoc_review_ng.translation_plan import (
     translation_plan_sha256,
     validate_toc_correction,
 )
+from ydbdoc_review_ng.toc_delta import TocDeltaError, apply_toc_delta
 
 if TYPE_CHECKING:
     from ydbdoc_review_ng.persistence import ContinuationCheckpoint
@@ -880,6 +881,19 @@ class RuntimeContent:
         """Freeze source plans, optionally using an already restored direction decision."""
         snapshots = preparation.snapshots
         translate = preparation.for_translation
+        if translate:
+            # Fail closed on unreadable source TOC before spending a direction call.
+            for raw in preparation.inventory.files:
+                classified = classify_path(self.roots, raw.path)
+                if classified.kind is not PathKind.TOC:
+                    continue
+                content = self.source.github.read_bytes(
+                    self.source.source_change_snapshot, raw.path
+                )
+                if content is not None:
+                    from ydbdoc_review_ng.runtime_metadata import _toc
+
+                    _toc(content, "unsupported_source_toc")
         if direction is None:
             if translate and classification is None:
                 request = inventory_request(
@@ -1016,23 +1030,8 @@ class RuntimeContent:
                     self._metadata(preparation, entry, noop_metadata, verify_noop=True)
             if noop_metadata:
                 raise RuntimeBoundaryError("verification_metadata_mismatch")
-            # A verify checkpoint must reproduce the same complete file set as
-            # translation replay from the pinned base. Never derive a new TOC
-            # expectation from the translated candidate's H1: navigation
-            # wording and heading capitalization are independent.
             for entry in self.entries:
                 self._metadata(metadata_preparation, entry, files)
-            for metadata_path, expected in files.items():
-                path = RepoPath(metadata_path)
-                actual = self.source.github.read_bytes(preparation.metadata_snapshot, path)
-                if (
-                    expected is not None
-                    and actual is not None
-                    and classify_path(self.roots, path).kind is PathKind.TOC
-                ):
-                    self._validate_toc_correction(snapshots.source_snapshot, path, expected, actual)
-                elif actual != expected:
-                    raise RuntimeBoundaryError("verification_metadata_mismatch")
         toc_postconditions: dict[RepoPath, bytes] = {}
         toc_source_snapshots: dict[RepoPath, tuple[bytes | None, bytes]] = {}
         if selection.manifest is not None:
@@ -1057,11 +1056,32 @@ class RuntimeContent:
                 )
                 toc_source_snapshots[raw.path] = (source_before, source_after)
                 target_path = RepoPath(target_root.value + "/" + classified.relative)
-                expected = files.get(target_path.value)
-                if target_path.value not in files:
-                    expected = self.source.github.read_bytes(base_snapshot, target_path)
-                if expected is not None:
-                    toc_postconditions[target_path] = expected
+                # REQUIREMENTS §3: apply source structural delta to the full current
+                # target TOC. MetadataProducer appends remain for TOC files that are
+                # not themselves in the source inventory.
+                current = self.source.github.read_bytes(base_snapshot, target_path)
+                try:
+                    applied = apply_toc_delta(
+                        source_before, source_after, current, toc_path=raw.path
+                    )
+                except TocDeltaError as error:
+                    raise TranslationPlanError(str(error)) from None
+                files[target_path.value] = applied.content
+                if applied.content is not None:
+                    toc_postconditions[target_path] = applied.content
+        if not translate:
+            # Verify against delta-applied expectations (and other metadata).
+            for metadata_path, expected in files.items():
+                path = RepoPath(metadata_path)
+                actual = self.source.github.read_bytes(preparation.metadata_snapshot, path)
+                if (
+                    expected is not None
+                    and actual is not None
+                    and classify_path(self.roots, path).kind is PathKind.TOC
+                ):
+                    self._validate_toc_correction(snapshots.source_snapshot, path, expected, actual)
+                elif actual != expected:
+                    raise RuntimeBoundaryError("verification_metadata_mismatch")
         # Freeze exact metadata postconditions before any translation-model
         # call. Reconciliation later checks their content digest.
         translation_plan = build_translation_plan(
@@ -1828,15 +1848,30 @@ class RuntimeContent:
     def validate_candidate(
         self, snapshot: ImmutableRunSnapshot, candidate: WorkflowCandidate, /
     ) -> None:
+        publisher = getattr(self, "publisher", None)
         if snapshot.mode is Mode.DOC_CONTINUE:
             head = self.source.github.head(snapshot.branch)
             allowed = {snapshot.target_sha}
-            context = getattr(self.publisher, "context", None)
+            context = getattr(publisher, "context", None)
             if context is not None and context.current_head is not None:
                 allowed.add(context.current_head)
             if head not in allowed:
                 raise RuntimeBoundaryError("continue_translation_head_mismatch")
-        self.publisher.validate_candidate(snapshot, candidate)
+        if publisher is not None:
+            publisher.validate_candidate(snapshot, candidate)
+        else:
+            # Unit harness without a publication adapter: structural checks only.
+            self.validate_plan(
+                snapshot,
+                candidate,
+                PublicationPlan(
+                    tuple(
+                        FileChange(RepoPath(path), None, value)
+                        for path, value in unpack(candidate.content).items()
+                    ),
+                    (),
+                ),
+            )
 
     @staticmethod
     def _validate_toc_correction(
@@ -1973,7 +2008,9 @@ class RuntimeContent:
             merged = {**files, **dict(corrected_files)}
             chunk_candidate = WorkflowCandidate(pack(merged), candidate.review_context)
             self.validate_candidate(snapshot, chunk_candidate)
-            self.publisher.publish(snapshot, chunk_candidate)
+            publisher = getattr(self, "publisher", None)
+            if publisher is not None:
+                publisher.publish(snapshot, chunk_candidate)
 
         corrected, final = review_pr(
             self.models,

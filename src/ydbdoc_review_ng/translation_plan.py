@@ -29,6 +29,7 @@ from ydbdoc_review_ng.scope import (
     ScopeManifest,
     ScopeOrigin,
 )
+from ydbdoc_review_ng.toc_delta import TocDeltaError, planned_toc_markdown_additions
 
 _TOC_NAME = re.compile(r"^toc(?:_[A-Za-z0-9-]+)?\.ya?ml$")
 _ASSET_EXTENSIONS = frozenset(
@@ -197,72 +198,12 @@ def validate_toc_correction(expected: bytes, corrected: bytes, /) -> tuple[tuple
 def _planned_toc_additions(
     path: RepoPath, before: bytes | None, after: bytes, /
 ) -> tuple[RepoPath, ...]:
-    """Return the complete supported source delta: simple Markdown entry additions.
+    """Return Markdown paths newly introduced by the source TOC structural delta."""
+    try:
+        return planned_toc_markdown_additions(path, before, after)
+    except TocDeltaError as error:
+        raise TranslationPlanError(str(error)) from None
 
-    Existing nodes must remain a byte-independent semantic subsequence. Any
-    removal, edit, move, include/group change or comment-only rewrite is rejected
-    until it has a dedicated executor.
-    """
-    after_root, after_items = _compose_toc(after)
-    if before is None:
-        before_root, before_items = None, ()
-    else:
-        # The currently shipped executor can prove only byte-preserving appends.
-        # This also prevents an otherwise invisible comment/style edit from
-        # hitching a ride with a semantically valid entry addition.
-        if not after.startswith(before):
-            raise TranslationPlanError("translation_plan_toc_delta_unsupported")
-        before_root, before_items = _compose_toc(before)
-        before_values = _yaml_mapping(before_root)
-        after_values = _yaml_mapping(after_root)
-        if {
-            key: _yaml_fingerprint(value)
-            for key, value in before_values.items()
-            if key != "items"
-        } != {
-            key: _yaml_fingerprint(value)
-            for key, value in after_values.items()
-            if key != "items"
-        }:
-            raise TranslationPlanError("translation_plan_toc_delta_unsupported")
-
-    before_fingerprints = tuple(map(_yaml_fingerprint, before_items))
-    added: list[Any] = []
-    before_index = 0
-    item: Any
-    for item in after_items:
-        fingerprint = _yaml_fingerprint(item)
-        if (
-            before_index < len(before_fingerprints)
-            and fingerprint == before_fingerprints[before_index]
-        ):
-            before_index += 1
-        else:
-            added.append(item)
-    if before_index != len(before_fingerprints) or not added:
-        raise TranslationPlanError("translation_plan_toc_delta_unsupported")
-
-    directory = posixpath.dirname(path.value)
-    resolved: list[RepoPath] = []
-    for node in added:
-        values = _yaml_mapping(node)
-        if set(values) != {"href", "name"}:
-            raise TranslationPlanError("translation_plan_toc_delta_unsupported")
-        href, name = values["href"], values["name"]
-        if any(
-            not isinstance(value, yaml.ScalarNode)
-            or value.tag != "tag:yaml.org,2002:str"
-            or not value.value.strip()
-            for value in (href, name)
-        ):
-            raise TranslationPlanError("translation_plan_toc_delta_unsupported")
-        destination = RepoPath(posixpath.normpath(posixpath.join(directory, href.value)))
-        if not destination.value.endswith(".md"):
-            raise TranslationPlanError("translation_plan_toc_delta_unsupported")
-        resolved.append(destination)
-    if len(resolved) != len(set(resolved)):
-        raise TranslationPlanError("translation_plan_toc_delta_unsupported")
-    return tuple(sorted(resolved, key=lambda item: item.value))
 
 
 def _locale_root(core_root: RepoPath) -> RepoPath:

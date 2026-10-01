@@ -518,6 +518,29 @@ def test_toc_delta_rejects_an_unplanned_second_entry_even_when_target_file_exist
 @pytest.mark.parametrize(
     "before,after",
     [
+        (b"items: []\n", b"items: [] # changed comment\n"),
+        (
+            b"items:\n- name: Existing\n  href: existing.md\n",
+            b"items:\n# changed comment\n- name: Existing\n  href: existing.md\n",
+        ),
+    ],
+)
+def test_toc_comment_only_changes_fail_closed(before: bytes, after: bytes) -> None:
+    document = entry("manual/page.md")
+    source_path = RepoPath("ydb/docs/ru/core/manual/toc_i.yaml")
+    with pytest.raises(TranslationPlanError, match="toc_delta_unsupported"):
+        build_translation_plan(
+            inventory(change(document.pair.source_path.value), change(source_path.value)),
+            ROOTS,
+            manifest(document),
+            toc_postconditions=toc_postcondition("manual/toc_i.yaml"),
+            toc_source_snapshots={source_path: (before, after)},
+        )
+
+
+@pytest.mark.parametrize(
+    "before,after",
+    [
         (
             b"items:\n- name: Old\n  href: page.md\n",
             b"items:\n- name: New\n  href: page.md\n",
@@ -530,29 +553,23 @@ def test_toc_delta_rejects_an_unplanned_second_entry_even_when_target_file_exist
             b"items:\n- name: A\n  href: a.md\n- name: B\n  href: b.md\n",
             b"items:\n- name: B\n  href: b.md\n- name: A\n  href: a.md\n",
         ),
-        (b"items: []\n", b"items: [] # changed comment\n"),
-        (
-            b"items:\n- name: Existing\n  href: existing.md\n",
-            (
-                b"items:\n# changed comment\n- name: Existing\n  href: existing.md\n"
-                b"- name: Page\n  href: page.md\n"
-            ),
-        ),
     ],
 )
-def test_toc_edits_removals_moves_and_comment_only_changes_fail_closed(
-    before: bytes, after: bytes
-) -> None:
+def test_toc_label_delete_and_reorder_deltas_are_planned(before: bytes, after: bytes) -> None:
     document = entry("manual/page.md")
     source_path = RepoPath("ydb/docs/ru/core/manual/toc_i.yaml")
-    with pytest.raises(TranslationPlanError, match="toc_delta_unsupported"):
-        build_translation_plan(
-            inventory(change(document.pair.source_path.value), change(source_path.value)),
-            ROOTS,
-            manifest(document),
-            toc_postconditions=toc_postcondition("manual/toc_i.yaml"),
-            toc_source_snapshots={source_path: (before, after)},
-        )
+    expected = b"items:\n- name: Planned\n  href: page.md\n"
+    plan = build_translation_plan(
+        inventory(change(document.pair.source_path.value), change(source_path.value)),
+        ROOTS,
+        manifest(document),
+        toc_postconditions=toc_postcondition("manual/toc_i.yaml", expected),
+        toc_source_snapshots={source_path: (before, after)},
+    )
+    toc_inputs = [item for item in plan.inputs if item.action is PlanAction.SYNC_TOC]
+    assert len(toc_inputs) == 1
+    assert toc_inputs[0].outputs == (RepoPath("ydb/docs/en/core/manual/toc_i.yaml"),)
+
 
 
 def test_translation_plan_hash_binds_source_toc_head() -> None:

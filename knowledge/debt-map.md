@@ -11,7 +11,7 @@
 | 1 | Direction = `translation_required` + `direction` + `reason`; Python зеркалит Git | done |
 | 2 | Dependency pull A→A1 + лимиты | done |
 | 3 | Whole-file translator, без DocumentChunk split | done |
-| 4 | TOC Python-delta + tests | partial |
+| 4 | TOC Python-delta + tests | done |
 | 5 | Critic полные файлы → сразу push + context chunking | done |
 | 6 | Arbiter: YELLOW закрывает checkpoint | done |
 | 7 | Continuation state v3 | done |
@@ -43,5 +43,9 @@
 - ~~Старые per-pair `select_direction` / `DirectionModel*` живут рядом с inventory classifier.~~
   Удалены. Остаются bridge-типы `DirectionPairVerdict` /
   `DirectionSelectionResult` для `freeze_scope_manifest`.
-- TOC §3: append-only `{name,href}` + fail-closed на delete/rename/reorder/hierarchy
-  (`tests/unit/test_toc_section3_coverage.py`). Нужен полный structural delta applicator.
+- ~~TOC §3: append-only `{name,href}` + fail-closed на delete/rename/reorder/hierarchy.~~
+  Structural applicator `toc_delta.apply_toc_delta`: add/delete/rename/change,
+  href, hierarchy, includes, conditions; unrelated target entries preserved;
+  delete-only without target TOC creates no file. DeepSeek JSON-ID string
+  translation for new/changed visible labels still provisional (source text /
+  translation map hook); wire model call remains a follow-up under reporting.

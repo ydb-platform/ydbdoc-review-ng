@@ -421,8 +421,14 @@ def test_source_toc_preflight_precedes_every_model_and_github_mutation(source_to
     class Services(RuntimeServices):
         def github(self, method, path, payload):
             if path.endswith("/pulls/42/files?per_page=100"):
-                return [{"status": "added", "filename": "ydb/docs/ru/core/page.md"}]
-            return super().github(method, path, payload)
+                return [
+                    {"status": "added", "filename": "ydb/docs/ru/core/page.md"},
+                    {"status": "modified", "filename": "ydb/docs/ru/core/toc.yaml"},
+                ]
+            result = super().github(method, path, payload)
+            if path.endswith("/pulls/42"):
+                result["changed_files"] = 2
+            return result
 
     services = Services()
     services.files["ydb/docs/ru/core/toc.yaml"] = source_toc
