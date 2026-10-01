@@ -1,4 +1,4 @@
-"""Small, source-relevant bilingual glossary excerpts for model prompts."""
+"""Document-relevant bilingual glossary sections for model prompts."""
 
 from __future__ import annotations
 
@@ -7,8 +7,6 @@ import re
 _HEADING = re.compile(r"(?m)^(#{2,6})\s+.*?\{#([A-Za-z0-9_.:-]+)\}\s*$")
 _BOLD = re.compile(r"\*\*([^*]+)\*\*")
 _WORD = re.compile(r"[^\W_]+", re.UNICODE)
-_MAX_ENTRIES = 8
-_MAX_CHARACTERS = 8_000
 
 
 def _sections(markdown: str) -> dict[str, str]:
@@ -29,12 +27,8 @@ def bilingual_glossary_context(
     source_glossary: bytes | None,
     target_glossary: bytes | None,
     /,
-    *,
-    max_characters: int = _MAX_CHARACTERS,
 ) -> str | None:
-    """Select paired glossary sections whose declared terms occur in source prose."""
-    if type(max_characters) is not int or max_characters < 1:
-        raise ValueError("max_characters must be a positive integer")
+    """Select complete paired sections whose declared terms occur in document prose."""
     if source_glossary is None or target_glossary is None:
         return None
     try:
@@ -45,8 +39,9 @@ def bilingual_glossary_context(
     document_words = _stemmed_words(source_text)
     candidates: list[tuple[int, str, str]] = []
     for anchor in sorted(source_sections.keys() & target_sections.keys()):
-        section = source_sections[anchor]
-        aliases = _BOLD.findall(section)
+        source_section = source_sections[anchor]
+        target_section = target_sections[anchor]
+        aliases = _BOLD.findall(source_section) + _BOLD.findall(target_section)
         term_sets = tuple(words for alias in aliases if (words := _stemmed_words(alias)))
         score = sum(len(words) for words in term_sets if words <= document_words)
         if score == 0:
@@ -57,19 +52,11 @@ def bilingual_glossary_context(
                 anchor,
                 (
                     f"<glossary-entry anchor=\"{anchor}\">\n"
-                    f"SOURCE:\n{section}\nTARGET:\n{target_sections[anchor]}\n"
+                    f"SOURCE:\n{source_section}\nTARGET:\n{target_section}\n"
                     "</glossary-entry>"
                 ),
             )
         )
-    selected: list[tuple[str, str]] = []
-    used = 0
-    for _score, anchor, entry in sorted(candidates, key=lambda item: (-item[0], item[1])):
-        if len(selected) >= _MAX_ENTRIES:
-            break
-        extra = len(entry) if not selected else len(entry) + 2
-        if used + extra > max_characters:
-            continue
-        selected.append((anchor, entry))
-        used += extra
-    return "\n\n".join(entry for _anchor, entry in sorted(selected)) or None
+    return "\n\n".join(
+        entry for _score, _anchor, entry in sorted(candidates, key=lambda item: (-item[0], item[1]))
+    ) or None

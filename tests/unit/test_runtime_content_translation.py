@@ -479,7 +479,7 @@ def test_translation_uses_glossary_context_for_each_chunk(monkeypatch) -> None:
     content = content_with(models, {"YDBDOC_MAX_MODEL_REQUEST_CHARACTERS": "4000"})
     contexts: list[str | None] = []
 
-    def context_for_chunk(document, /, *, max_characters: int = 8_000, source_text=None):
+    def context_for_chunk(document, /, *, source_text=None):
         contexts.append(source_text)
         if source_text is None:
             return "DOCUMENT_GLOSSARY"

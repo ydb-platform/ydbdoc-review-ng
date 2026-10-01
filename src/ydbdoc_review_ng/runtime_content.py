@@ -682,7 +682,6 @@ class RuntimeContent:
         document: Document,
         /,
         *,
-        max_characters: int = 8_000,
         source_text: str | None = None,
     ) -> str | None:
         plans = self.plans
@@ -714,7 +713,6 @@ class RuntimeContent:
             document.source.decode("utf-8") if source_text is None else source_text,
             source_glossary,
             target_glossary,
-            max_characters=max(1, min(8_000, max_characters // 6)),
         )
 
     def _link_resolver(
@@ -1328,7 +1326,7 @@ class RuntimeContent:
             if entry.target_content is not None
             else entry.rename_from_target_content
         )
-        terminology_context = self._terminology_context(document, max_characters=limit)
+        terminology_context = self._terminology_context(document)
         link_resolver = self._link_resolver(document, target_reference_bytes)
         prepared = prepare_document(
             document.source,
@@ -1355,7 +1353,6 @@ class RuntimeContent:
             previous_response: str | None = None
             chunk_terminology_context = self._terminology_context(
                 document,
-                max_characters=limit,
                 source_text=chunk.text,
             )
 
