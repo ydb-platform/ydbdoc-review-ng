@@ -540,9 +540,9 @@ class Limits:
 
     def check(self, request: ScopePreflightRequest, /) -> None:
         for item in request.measurements:
-            if item.dependency_file_count > self.files:
+            if any(count > self.files for count in item.translation_group_file_counts):
                 raise RuntimeBoundaryError("dependency_file_limit_exceeded")
-            if item.source_character_count > self.characters:
+            if any(count > self.characters for count in item.source_file_character_counts):
                 raise RuntimeBoundaryError("source_character_limit_exceeded")
 
 

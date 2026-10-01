@@ -17,7 +17,7 @@ _STATUS_ICONS = {"GREEN": "🟢", "YELLOW": "🟡", "RED": "🔴"}
 
 _SCOPE_FAILURE_MESSAGES = {
     "dependency_file_limit_exceeded": (
-        "число файлов зависимостей превышает лимит", "файлов"
+        "число файлов в группе перевода превышает лимит", "файлов"
     ),
     "source_character_limit_exceeded": (
         "объём исходного текста превышает лимит", "символов"
@@ -210,17 +210,20 @@ class QAReporter:
         self._verification_context = verification_context
         self._current_head = current_head
 
-    def report_failure(self, source_pr_number: int, diagnostic: str, /) -> None:
+    def report_failure(
+        self, source_pr_number: int, diagnostic: str, configured_limit: int | None = None, /
+    ) -> None:
         failure = _SCOPE_FAILURE_MESSAGES.get(diagnostic)
         plan_failure = _PLAN_FAILURE_MESSAGES.get(diagnostic)
         if failure is None and plan_failure is None:
             return
         if failure is not None:
+            if type(configured_limit) is not int or configured_limit < 0:
+                raise ValueError("scope failure requires the configured limit")
             reason, unit = failure
-            limit = "20" if diagnostic == "dependency_file_limit_exceeded" else "250 000"
             details = (
                 f"Причина: {reason}.\n"
-                f"Лимит: {limit} {unit}.\n\n"
+                f"Лимит: {configured_limit} {unit}.\n\n"
                 "Что сделать: уменьшить scope PR или увеличить настройку лимита, "
                 "затем повторно добавить метку `doc_translate`."
             )

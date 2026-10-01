@@ -113,6 +113,8 @@ def test_public_scope_contract_inventory() -> None:
                 "dependency_file_count",
                 "source_character_count",
                 "dependency_witnesses",
+                "translation_group_file_counts",
+                "source_file_character_counts",
             ),
         ),
         (scope.ScopePreflightRequest, ("scope_snapshot", "measurements")),

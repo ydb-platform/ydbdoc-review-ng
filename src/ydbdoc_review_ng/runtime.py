@@ -394,6 +394,19 @@ class RuntimeReporter:
         self.source, self.publisher, self.models = source, publisher, models
 
     def report_failure(self, source_pr_number: int, diagnostic: str, /) -> None:
+        from ydbdoc_review_ng.runtime_content import Limits
+
+        configured_limit = None
+        if diagnostic in {
+            "dependency_file_limit_exceeded",
+            "source_character_limit_exceeded",
+        }:
+            limits = Limits(self.source.environment)
+            configured_limit = (
+                limits.files
+                if diagnostic == "dependency_file_limit_exceeded"
+                else limits.characters
+            )
         QAReporter(
             self.source.github,
             self.publisher,
@@ -402,7 +415,7 @@ class RuntimeReporter:
                 self.source.snapshots.source_snapshot.commit_sha,
                 self.models.cost,
             ),
-        ).report_failure(source_pr_number, diagnostic)
+        ).report_failure(source_pr_number, diagnostic, configured_limit)
 
     def update_current_pr(
         self,

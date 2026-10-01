@@ -113,16 +113,55 @@ def test_scope_failure_is_reported_once_in_source_pr_and_updated_on_retry():
         lambda: ReportContext(SOURCE, TARGET, None),
     )
 
-    qa.report_failure(50858, "source_character_limit_exceeded")
+    qa.report_failure(50858, "source_character_limit_exceeded", 250000)
     assert backend.events == [("create_comment", 50858)]
     body = backend.comments[7].body
     assert "🔴 Перевод PR не запущен" in body
-    assert "Лимит: 250 000 символов" in body
+    assert "Лимит: 250000 символов" in body
     assert "doc_translate" in body
 
-    qa.report_failure(50858, "source_character_limit_exceeded")
+    qa.report_failure(50858, "source_character_limit_exceeded", 250000)
     assert backend.events == [("create_comment", 50858), ("update_comment", 50858, 7)]
     assert len(backend.comments) == 1
+
+
+@pytest.mark.parametrize(
+    ("diagnostic", "variable", "configured", "expected"),
+    [
+        (
+            "dependency_file_limit_exceeded",
+            "YDBDOC_MAX_DEPENDENCY_FILES_PER_ARTICLE",
+            "7",
+            "Лимит: 7 файлов",
+        ),
+        (
+            "source_character_limit_exceeded",
+            "YDBDOC_MAX_SOURCE_CHARACTERS",
+            "1234",
+            "Лимит: 1234 символов",
+        ),
+    ],
+)
+def test_runtime_scope_failure_comment_uses_actual_configured_limit(
+    diagnostic, variable, configured, expected
+):
+    backend = Backend()
+    source = SimpleNamespace(
+        environment={variable: configured},
+        github=backend,
+        snapshots=SimpleNamespace(source_snapshot=SimpleNamespace(commit_sha=SOURCE)),
+    )
+    runtime_reporter = RuntimeReporter(
+        source,
+        SimpleNamespace(noop=True),
+        SimpleNamespace(cost=None),
+    )
+
+    runtime_reporter.report_failure(50858, diagnostic)
+    runtime_reporter.report_failure(50858, diagnostic)
+
+    assert expected in backend.comments[7].body
+    assert backend.events == [("create_comment", 50858), ("update_comment", 50858, 7)]
 
 
 def test_translation_plan_failure_explains_why_no_candidate_was_published():

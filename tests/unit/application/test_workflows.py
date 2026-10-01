@@ -493,6 +493,46 @@ def test_fixed_boundary_diagnostic_survives_workflow_redaction() -> None:
 
 
 @pytest.mark.parametrize(
+    "diagnostic",
+    ["dependency_file_limit_exceeded", "source_character_limit_exceeded"],
+)
+def test_scope_limit_failure_stops_before_model_calls_and_publication(diagnostic: str) -> None:
+    scenario = Scenario()
+
+    class LimitContent(FakeContent):
+        def prepare_translation(self, snapshot: ImmutableRunSnapshot, /) -> WorkflowCandidate:
+            assert snapshot.mode is Mode.DOC_TRANSLATE
+            self.scenario.hit("prepare:scope-limit")
+            raise SafeDiagnosticError(diagnostic)
+
+    persistence = FakePersistence(scenario)
+    workflows = LinearWorkflows(
+        clock=FakeClock(),
+        persistence=persistence,
+        source=FakeSource(scenario),
+        content=LimitContent(scenario),
+        reviewer=FakeReviewer(scenario),
+        publisher=FakePublisher(scenario),
+        reporter=FakeReporter(scenario),
+    )
+
+    with pytest.raises(WorkflowError) as raised:
+        workflows.doc_translate(translate_input())
+
+    assert raised.value.diagnostic == diagnostic
+    assert scenario.model_calls == []
+    assert scenario.published_branches == []
+    assert scenario.events == [
+        "job:start",
+        "authorize:translate",
+        "snapshot:translate",
+        "budget",
+        "prepare:scope-limit",
+        "job:finish:failed",
+    ]
+
+
+@pytest.mark.parametrize(
     ("failed_event", "expected_before_finish"),
     [
         ("authorize:translate", ["job:start", "authorize:translate"]),

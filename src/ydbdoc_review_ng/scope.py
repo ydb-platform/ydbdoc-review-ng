@@ -251,6 +251,8 @@ class ScopeMeasurement:
     dependency_file_count: int
     source_character_count: int
     dependency_witnesses: tuple[DependencyWitness, ...]
+    translation_group_file_counts: tuple[int, ...]
+    source_file_character_counts: tuple[int, ...]
 
     def __post_init__(self) -> None:
         name = "ScopeMeasurement"
@@ -258,6 +260,12 @@ class ScopeMeasurement:
         _exact(self.dependency_file_count, int, name, "dependency_file_count")
         _exact(self.source_character_count, int, name, "source_character_count")
         _tuple_elements(self.dependency_witnesses, DependencyWitness, name, "dependency_witnesses")
+        _exact(
+            self.translation_group_file_counts, tuple, name, "translation_group_file_counts"
+        )
+        _exact(
+            self.source_file_character_counts, tuple, name, "source_file_character_counts"
+        )
         if self.dependency_file_count < 0:
             raise _invariant(name, "dependency_file_count", "a nonnegative integer")
         if self.source_character_count < 0:
@@ -270,6 +278,18 @@ class ScopeMeasurement:
             raise _invariant(name, "dependency_witnesses", "canonical unique dependency witnesses")
         if len(keys) != self.dependency_file_count:
             raise _invariant(name, "dependency_witnesses", "one witness per dependency file")
+        if any(type(count) is not int or count <= 0 for count in self.translation_group_file_counts):
+            raise _invariant(
+                name, "translation_group_file_counts", "positive exact integer counts"
+            )
+        if any(type(count) is not int or count < 0 for count in self.source_file_character_counts):
+            raise _invariant(
+                name, "source_file_character_counts", "nonnegative exact integer counts"
+            )
+        if sum(self.source_file_character_counts) != self.source_character_count:
+            raise _invariant(
+                name, "source_file_character_counts", "the aggregate source character count"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -357,6 +377,29 @@ class DirectionalPotentialScope:
             raise _invariant(name, "measurement", "the dependency entry count")
         if self.measurement.source_character_count != expected_characters:
             raise _invariant(name, "measurement", "the source character count")
+        translating_initials = tuple(
+            entry
+            for entry in initial_entries
+            if entry.operation in {FileOperation.TRANSLATE, FileOperation.RENAME_TARGET_AND_TRANSLATE}
+        )
+        if len(self.measurement.translation_group_file_counts) != len(translating_initials):
+            raise _invariant(name, "measurement", "one file count per translation group")
+        translating_entries = tuple(
+            entry
+            for entry in self.entries
+            if entry.source_content is not None
+            and entry.operation in {FileOperation.TRANSLATE, FileOperation.RENAME_TARGET_AND_TRANSLATE}
+        )
+        if any(
+            count > len(translating_entries)
+            for count in self.measurement.translation_group_file_counts
+        ):
+            raise _invariant(name, "measurement", "translation group counts within scope")
+        expected_file_characters = tuple(
+            len(entry.source_content.decode("utf-8")) for entry in translating_entries
+        )
+        if self.measurement.source_file_character_counts != expected_file_characters:
+            raise _invariant(name, "measurement", "one character count per source file")
 
 
 @dataclass(frozen=True, slots=True)
@@ -913,11 +956,17 @@ def _build_direction(
         )
 
     canonical_entries = tuple(sorted(entries, key=_entry_key))
-    character_count = sum(
+    source_file_character_counts = tuple(
         _decode_count(entry.source_content, direction, entry.pair.source_path)
         for entry in canonical_entries
         if entry.operation in {FileOperation.TRANSLATE, FileOperation.RENAME_TARGET_AND_TRANSLATE}
         and entry.source_content is not None
+    )
+    character_count = sum(source_file_character_counts)
+    translation_group_file_counts = tuple(
+        sum(seed_key in path_keys for path_keys in reaching.values())
+        for seed_path in sorted(seed_roots, key=lambda item: item.value)
+        for seed_key in sorted(seed_roots[seed_path], key=lambda key: key.relative_path.value)
     )
     _ensure_unique_targets(entries, direction)
     witnesses = tuple(
@@ -934,7 +983,14 @@ def _build_direction(
         )
         for path in sorted(dependency_paths, key=lambda item: item.value)
     )
-    measurement = ScopeMeasurement(direction, len(dependency_paths), character_count, witnesses)
+    measurement = ScopeMeasurement(
+        direction,
+        len(dependency_paths),
+        character_count,
+        witnesses,
+        translation_group_file_counts,
+        source_file_character_counts,
+    )
     return DirectionalPotentialScope(
         direction,
         snapshot,

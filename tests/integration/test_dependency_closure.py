@@ -34,6 +34,8 @@ from ydbdoc_review_ng.locales import (
     SnapshotLocaleFile,
 )
 from ydbdoc_review_ng.repository import BaseBranch, PullRequestState, ResolvedRepositorySnapshots
+from ydbdoc_review_ng.runtime_content import Limits
+from ydbdoc_review_ng.runtime_github import RuntimeBoundaryError
 from ydbdoc_review_ng.scope import (
     FileOperation,
     InvalidScopeInput,
@@ -635,6 +637,202 @@ def test_initial_origin_wins_when_an_initial_path_is_reached_as_dependency() -> 
         "ydb/docs/ru/a.md",
         "ydb/docs/ru/z.md",
     )
+
+
+def test_dependency_limit_counts_seed_and_complete_missing_target_closure() -> None:
+    seed = _inventory("seed.md", b"seed", None)
+    first = RepoPath("ydb/docs/ru/first.md")
+    second = RepoPath("ydb/docs/ru/second.md")
+    reader_values = {
+        first: b"first",
+        RepoPath("ydb/docs/en/first.md"): None,
+        second: b"second",
+        RepoPath("ydb/docs/en/second.md"): None,
+    }
+    scanner_links = {
+        seed.ru.path: (dependencies.DependencyLink(seed.ru.path, first),),
+        first: (dependencies.DependencyLink(first, second),),
+        second: (),
+    }
+    limits = Limits(
+        {
+            "YDBDOC_MAX_DEPENDENCY_FILES_PER_ARTICLE": "2",
+            "YDBDOC_MAX_SOURCE_CHARACTERS": "100",
+        }
+    )
+
+    with pytest.raises(RuntimeBoundaryError, match="dependency_file_limit_exceeded"):
+        build_potential_scopes(
+            _Reader(reader_values),
+            _Scanner(scanner_links),
+            limits,
+            _snapshots(),
+            (seed,),
+            dependencies.RedirectCatalog(_snapshot(), _roots(), ()),
+        )
+
+    allowed = build_potential_scopes(
+        _Reader(reader_values),
+        _Scanner(scanner_links),
+        Limits(
+            {
+                "YDBDOC_MAX_DEPENDENCY_FILES_PER_ARTICLE": "3",
+                "YDBDOC_MAX_SOURCE_CHARACTERS": "100",
+            }
+        ),
+        _snapshots(),
+        (seed,),
+        dependencies.RedirectCatalog(_snapshot(), _roots(), ()),
+    )
+    assert allowed.scopes[0].measurement.translation_group_file_counts == (3,)
+
+
+def test_dependency_limit_measures_each_seed_group_and_shared_dependency() -> None:
+    first_seed = _inventory("a.md", b"a", None)
+    second_seed = _inventory("z.md", b"z", None)
+    shared = RepoPath("ydb/docs/ru/shared.md")
+    result = build_potential_scopes(
+        _Reader(
+            {
+                shared: b"shared",
+                RepoPath("ydb/docs/en/shared.md"): None,
+            }
+        ),
+        _Scanner(
+            {
+                first_seed.ru.path: (
+                    dependencies.DependencyLink(first_seed.ru.path, shared),
+                ),
+                second_seed.ru.path: (
+                    dependencies.DependencyLink(second_seed.ru.path, shared),
+                ),
+                shared: (),
+            }
+        ),
+        Limits(
+            {
+                "YDBDOC_MAX_DEPENDENCY_FILES_PER_ARTICLE": "2",
+                "YDBDOC_MAX_SOURCE_CHARACTERS": "100",
+            }
+        ),
+        _snapshots(),
+        (second_seed, first_seed),
+        dependencies.RedirectCatalog(_snapshot(), _roots(), ()),
+    )
+
+    measurement = result.scopes[0].measurement
+    assert measurement.dependency_file_count == 1
+    assert measurement.translation_group_file_counts == (2, 2)
+
+
+def test_dependency_limit_allows_two_independent_two_file_groups() -> None:
+    first_seed = _inventory("a.md", b"a", None)
+    second_seed = _inventory("z.md", b"z", None)
+    first_dependency = RepoPath("ydb/docs/ru/a-dependency.md")
+    second_dependency = RepoPath("ydb/docs/ru/z-dependency.md")
+    result = build_potential_scopes(
+        _Reader(
+            {
+                first_dependency: b"first",
+                RepoPath("ydb/docs/en/a-dependency.md"): None,
+                second_dependency: b"second",
+                RepoPath("ydb/docs/en/z-dependency.md"): None,
+            }
+        ),
+        _Scanner(
+            {
+                first_seed.ru.path: (
+                    dependencies.DependencyLink(first_seed.ru.path, first_dependency),
+                ),
+                second_seed.ru.path: (
+                    dependencies.DependencyLink(second_seed.ru.path, second_dependency),
+                ),
+                first_dependency: (),
+                second_dependency: (),
+            }
+        ),
+        Limits(
+            {
+                "YDBDOC_MAX_DEPENDENCY_FILES_PER_ARTICLE": "2",
+                "YDBDOC_MAX_SOURCE_CHARACTERS": "100",
+            }
+        ),
+        _snapshots(),
+        (second_seed, first_seed),
+        dependencies.RedirectCatalog(_snapshot(), _roots(), ()),
+    )
+
+    assert len(result.scopes[0].entries) == 4
+    assert result.scopes[0].measurement.translation_group_file_counts == (2, 2)
+
+
+def test_dependency_limit_stops_at_existing_target() -> None:
+    seed = _inventory("seed.md", b"seed", None)
+    translated = RepoPath("ydb/docs/ru/translated.md")
+    beyond = RepoPath("ydb/docs/ru/beyond.md")
+    scanner = _Scanner(
+        {
+            seed.ru.path: (dependencies.DependencyLink(seed.ru.path, translated),),
+            translated: (dependencies.DependencyLink(translated, beyond),),
+        }
+    )
+    result = build_potential_scopes(
+        _Reader(
+            {
+                translated: b"translated",
+                RepoPath("ydb/docs/en/translated.md"): b"translated target",
+            }
+        ),
+        scanner,
+        Limits(
+            {
+                "YDBDOC_MAX_DEPENDENCY_FILES_PER_ARTICLE": "1",
+                "YDBDOC_MAX_SOURCE_CHARACTERS": "100",
+            }
+        ),
+        _snapshots(),
+        (seed,),
+        dependencies.RedirectCatalog(_snapshot(), _roots(), ()),
+    )
+
+    assert result.scopes[0].measurement.translation_group_file_counts == (1,)
+    assert tuple(call[1] for call in scanner.calls) == (seed.ru.path,)
+
+
+def test_source_character_limit_is_checked_per_file() -> None:
+    first = _inventory("a.md", b"a" * 60, None)
+    second = _inventory("z.md", b"z" * 60, None)
+    result = build_potential_scopes(
+        _Reader({}),
+        _Scanner({}),
+        Limits(
+            {
+                "YDBDOC_MAX_DEPENDENCY_FILES_PER_ARTICLE": "1",
+                "YDBDOC_MAX_SOURCE_CHARACTERS": "100",
+            }
+        ),
+        _snapshots(),
+        (second, first),
+        dependencies.RedirectCatalog(_snapshot(), _roots(), ()),
+    )
+
+    assert result.scopes[0].measurement.source_file_character_counts == (60, 60)
+
+    oversized = _inventory("oversized.md", b"x" * 101, None)
+    with pytest.raises(RuntimeBoundaryError, match="source_character_limit_exceeded"):
+        build_potential_scopes(
+            _Reader({}),
+            _Scanner({}),
+            Limits(
+                {
+                    "YDBDOC_MAX_DEPENDENCY_FILES_PER_ARTICLE": "1",
+                    "YDBDOC_MAX_SOURCE_CHARACTERS": "100",
+                }
+            ),
+            _snapshots(),
+            (oversized,),
+            dependencies.RedirectCatalog(_snapshot(), _roots(), ()),
+        )
 
 
 def test_mixed_job_builds_both_directions_and_calls_preflight_once_last() -> None:
