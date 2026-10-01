@@ -12,7 +12,7 @@
 | 2 | Dependency pull A→A1 + лимиты | done |
 | 3 | Whole-file translator, без DocumentChunk split | done |
 | 4 | TOC Python-delta + tests | partial |
-| 5 | Critic полные файлы → сразу push | partial |
+| 5 | Critic полные файлы → сразу push + context chunking | done |
 | 6 | Arbiter: YELLOW закрывает checkpoint | done |
 | 7 | Continuation state v3 | done |
 | 8 | Soft-publish частичных translation success до critic | done |
@@ -37,9 +37,9 @@
   checkpoint через `_legacy_pending_translation_stop` для pending_paths coverage.
 - ~~YELLOW в continuation трактуется как незакрытый semantic stop (как RED).~~
   Checkpoint открывает только RED; YELLOW = успех, в QA — руки + `doc_verify`.
-- Critic: успешный one-shot чанк сразу commit/push до arbiter
-  (`on_successful_critic_chunk`). Нет ещё split по context budget по целым
-  file pairs (§4.1 «иначе чанки»).
+- ~~Critic: успешный one-shot чанк сразу commit/push до arbiter.~~
+  Context chunking по целым source/target парам + immediate push; пара, которая
+  не влезает одна, остаётся unreviewed → RED с null location.
 - Старые per-pair `DirectionPairVerdict` / `select_direction` живут рядом с inventory classifier.
 - TOC §3: append-only `{name,href}` + fail-closed на delete/rename/reorder/hierarchy
   (`tests/unit/test_toc_section3_coverage.py`). Нужен полный structural delta applicator.

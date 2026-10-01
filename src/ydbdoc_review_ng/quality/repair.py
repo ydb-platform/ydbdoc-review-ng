@@ -1,8 +1,8 @@
-"""One complete-PR critic pass followed by independent arbitration."""
+"""Whole-PR critic/arbiter with context-fitting file-pair chunks."""
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from typing import Protocol
 
 from ydbdoc_review_ng.domain import RepoPath
@@ -15,7 +15,7 @@ from ydbdoc_review_ng.quality.critic import (
     parse_pr_arbiter_response,
     parse_pr_critic_response,
 )
-from ydbdoc_review_ng.quality.types import CriticResult
+from ydbdoc_review_ng.quality.types import CriticResult, Finding, Verdict
 from ydbdoc_review_ng.translation import (
     ProtectedMismatch,
     TranslationRequest,
@@ -23,6 +23,8 @@ from ydbdoc_review_ng.translation import (
     verify_document_candidate,
 )
 from ydbdoc_review_ng.translation.contract import field_request_text
+
+_VERDICT_RANK = {Verdict.GREEN: 0, Verdict.YELLOW: 1, Verdict.RED: 2}
 
 
 class ModelExecutor(Protocol):
@@ -41,6 +43,106 @@ class QualityExecutionError(RuntimeError):
         super().__init__(f"quality_execution:{stage}")
 
 
+def _locale_peer(path: str) -> str | None:
+    if path.startswith("ru/"):
+        return "en/" + path[3:]
+    if path.startswith("en/"):
+        return "ru/" + path[3:]
+    if "/ru/" in path:
+        return path.replace("/ru/", "/en/", 1)
+    if "/en/" in path:
+        return path.replace("/en/", "/ru/", 1)
+    return None
+
+
+def _review_pairs(
+    source_files: Mapping[str, bytes],
+    translated_files: Mapping[str, bytes | None],
+) -> tuple[tuple[str, str], ...]:
+    pairs: list[tuple[str, str]] = []
+    for target_path in sorted(translated_files):
+        source_path = _locale_peer(target_path)
+        if source_path is not None and source_path in source_files:
+            pairs.append((source_path, target_path))
+    return tuple(pairs)
+
+
+def _request_fits(
+    executor: ModelExecutor,
+    request: ModelRequest,
+    override: Callable[[ModelRequest], bool] | None,
+) -> bool:
+    if override is not None:
+        return override(request)
+    prepare = getattr(executor, "prepare_request", None)
+    if prepare is None:
+        return True
+    try:
+        prepare(request)
+    except ValueError:
+        return False
+    return True
+
+
+def _pack_pair_chunks(
+    pairs: Sequence[tuple[str, str]],
+    *,
+    build_request: Callable[[Sequence[tuple[str, str]]], ModelRequest],
+    fits: Callable[[ModelRequest], bool],
+) -> tuple[tuple[tuple[str, str], ...], ...]:
+    """Greedy whole-pair packing. Oversized single pairs are omitted (unreviewed)."""
+    if not pairs:
+        return ((),)
+    if fits(build_request(pairs)):
+        return (tuple(pairs),)
+    chunks: list[tuple[tuple[str, str], ...]] = []
+    current: list[tuple[str, str]] = []
+    for pair in pairs:
+        trial = (*current, pair)
+        if fits(build_request(trial)):
+            current.append(pair)
+            continue
+        if current:
+            chunks.append(tuple(current))
+            current = []
+        if fits(build_request((pair,))):
+            current = [pair]
+    if current:
+        chunks.append(tuple(current))
+    return tuple(chunks)
+
+
+def _subset_sources(
+    source_files: Mapping[str, bytes], pairs: Sequence[tuple[str, str]]
+) -> dict[str, bytes]:
+    return {source: source_files[source] for source, _target in pairs}
+
+
+def _subset_targets(
+    translated_files: Mapping[str, bytes | None], pairs: Sequence[tuple[str, str]]
+) -> dict[str, bytes | None]:
+    return {target: translated_files[target] for _source, target in pairs}
+
+
+def _worst_verdict(results: Sequence[CriticResult]) -> Verdict:
+    worst = Verdict.GREEN
+    for result in results:
+        if _VERDICT_RANK[result.verdict] > _VERDICT_RANK[worst]:
+            worst = result.verdict
+    return worst
+
+
+def _unreviewed_finding(target_path: str) -> Finding:
+    return Finding(
+        False,
+        "Файл не удалось проверить в доступном контексте модели.",
+        "Уменьшите файл или продолжите проверку отдельно.",
+        None,  # type: ignore[arg-type]
+        target_path,
+        None,  # type: ignore[arg-type]
+    )
+
+
 def review_pr(
     executor: ModelExecutor,
     *,
@@ -53,38 +155,118 @@ def review_pr(
     operator_context: str | None = None,
     before_model_call: Callable[[], None] | None = None,
     on_successful_critic_chunk: Callable[[Mapping[str, bytes]], None] | None = None,
+    request_fits: Callable[[ModelRequest], bool] | None = None,
 ) -> tuple[dict[str, bytes], CriticResult]:
-    """Correct the complete PR once, validate atomically, then judge those bytes."""
-    critic = build_pr_critic_request(
-        model=critic_model,
-        source_files=source_files,
-        translated_files=translated_files,
-        glossary_files=glossary_files,
-        operator_context=operator_context,
-    )
-    if before_model_call is not None:
-        before_model_call()
-    response = executor.invoke(critic)
-    if not response.success or response.text is None:
-        raise QualityExecutionError("critic")
-    corrected = parse_pr_critic_response(response.text, target_paths=tuple(translated_files))
-    validate_files(corrected)
-    if on_successful_critic_chunk is not None:
-        on_successful_critic_chunk(corrected)
-    arbiter = build_pr_arbiter_request(
-        model=arbiter_model,
-        source_files=source_files,
-        translated_files=corrected,
-        glossary_files=glossary_files,
-        operator_context=operator_context,
-    )
-    if before_model_call is not None:
-        before_model_call()
-    response = executor.invoke(arbiter)
-    if not response.success or response.text is None:
-        raise QualityExecutionError("arbiter")
-    final = parse_pr_arbiter_response(response.text, target_files=corrected)
-    return corrected, final
+    """Correct/judge the PR in context-fitting whole source/target pair chunks."""
+    pairs = _review_pairs(source_files, translated_files)
+    corrected: dict[str, bytes] = {
+        path: content for path, content in translated_files.items() if content is not None
+    }
+    unreviewed: set[str] = set()
+
+    def build_critic(chunk_pairs: Sequence[tuple[str, str]]) -> ModelRequest:
+        return build_pr_critic_request(
+            model=critic_model,
+            source_files=_subset_sources(source_files, chunk_pairs),
+            translated_files=_subset_targets(translated_files, chunk_pairs),
+            glossary_files=glossary_files,
+            operator_context=operator_context,
+        )
+
+    def fits(request: ModelRequest) -> bool:
+        return _request_fits(executor, request, request_fits)
+
+    critic_chunks = _pack_pair_chunks(pairs, build_request=build_critic, fits=fits)
+    packed_targets = {target for chunk in critic_chunks for _source, target in chunk}
+    for _source, target in pairs:
+        if target not in packed_targets:
+            unreviewed.add(target)
+    if not pairs:
+        critic_chunks = ((),)
+
+    for chunk_pairs in critic_chunks:
+        critic = build_critic(chunk_pairs)
+        if before_model_call is not None:
+            before_model_call()
+        response = executor.invoke(critic)
+        target_paths = tuple(target for _source, target in chunk_pairs)
+        if not response.success or response.text is None:
+            if len(critic_chunks) <= 1 and not unreviewed:
+                raise QualityExecutionError("critic")
+            unreviewed.update(target_paths)
+            continue
+        try:
+            chunk_corrected = parse_pr_critic_response(response.text, target_paths=target_paths)
+            validate_files(chunk_corrected)
+        except Exception:
+            if len(critic_chunks) <= 1 and not unreviewed:
+                raise
+            unreviewed.update(target_paths)
+            continue
+        corrected.update(chunk_corrected)
+        if on_successful_critic_chunk is not None:
+            on_successful_critic_chunk(chunk_corrected)
+
+    arbiter_targets: dict[str, bytes | None] = {
+        path: corrected.get(path, translated_files.get(path)) for path in translated_files
+    }
+
+    def build_arbiter(chunk_pairs: Sequence[tuple[str, str]]) -> ModelRequest:
+        return build_pr_arbiter_request(
+            model=arbiter_model,
+            source_files=_subset_sources(source_files, chunk_pairs),
+            translated_files={target: arbiter_targets[target] for _source, target in chunk_pairs},
+            glossary_files=glossary_files,
+            operator_context=operator_context,
+        )
+
+    reviewed_pairs = tuple(pair for pair in pairs if pair[1] not in unreviewed)
+    arbiter_chunks = _pack_pair_chunks(reviewed_pairs, build_request=build_arbiter, fits=fits)
+    packed_arbiter = {target for chunk in arbiter_chunks for _source, target in chunk}
+    for _source, target in reviewed_pairs:
+        if target not in packed_arbiter:
+            unreviewed.add(target)
+
+    results: list[CriticResult] = []
+    if not pairs:
+        arbiter_chunks = ((),)
+
+    for chunk_pairs in arbiter_chunks:
+        arbiter = build_arbiter(chunk_pairs)
+        if before_model_call is not None:
+            before_model_call()
+        response = executor.invoke(arbiter)
+        chunk_files = {target: arbiter_targets[target] for _source, target in chunk_pairs}
+        if not response.success or response.text is None:
+            if len(arbiter_chunks) <= 1 and not unreviewed:
+                raise QualityExecutionError("arbiter")
+            unreviewed.update(target for _source, target in chunk_pairs)
+            continue
+        try:
+            results.append(parse_pr_arbiter_response(response.text, target_files=chunk_files))
+        except Exception:
+            if len(arbiter_chunks) <= 1 and not unreviewed:
+                raise
+            unreviewed.update(target for _source, target in chunk_pairs)
+
+    findings = [finding for result in results for finding in result.findings]
+    for path in sorted(unreviewed):
+        findings.append(_unreviewed_finding(path))
+    if unreviewed:
+        verdict = Verdict.RED
+    elif results:
+        verdict = _worst_verdict(results)
+    else:
+        verdict = Verdict.GREEN
+    if (verdict is Verdict.GREEN) != (not findings):
+        verdict = Verdict.RED if findings else Verdict.GREEN
+    final_corrected = {
+        path: corrected[path] for path in translated_files if path in corrected
+    }
+    for path, content in translated_files.items():
+        if content is not None and path not in final_corrected:
+            final_corrected[path] = content
+    return final_corrected, CriticResult(verdict, tuple(findings))
 
 
 def _derive_target_translations(

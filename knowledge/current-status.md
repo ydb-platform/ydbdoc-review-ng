@@ -15,9 +15,8 @@
 
 ## Код
 
-Срезы 1–3, 6–8 закрыты на local `main` (dependency+limits, soft-publish,
-continuation v3, YELLOW=success, whole-file translate, direction-only).
-Critic §4.1: successful chunk сразу push (one-shot); multi-pair context split
-ещё нет. TOC §3 пока append-only.
-Остаётся: critic context-chunking, полный TOC delta, удаление мёртвого
-`select_direction`, `doc_verify`/budget — см. `debt-map.md`.
+Срезы 1–3, 5–8 закрыты на local `main` (dependency+limits, soft-publish,
+critic chunking+immediate push, continuation v3, YELLOW=success, whole-file
+translate, direction-only). TOC §3 пока append-only.
+Остаётся: полный TOC delta, удаление мёртвого `select_direction`,
+`doc_verify`/budget — см. `debt-map.md`.
