@@ -66,6 +66,13 @@ complete_pair/no_action/saved_head test rewrites.
 | 4 | Resource-only RED checkpoint not continuable | **fixed** | Same empty-scope continue admission |
 | 5 | Mixed MD+binary continue loads asset as Markdown | **fixed** | Assets skip UTF-8 `AcceptedDocument`; fixed_files bytes only |
 
+## Independent audit (023f662, 2026-10-01)
+
+| # | Finding | Status | Notes |
+|---|---|---|---|
+| A | Continue still-zero-commit RED → head mismatch + silent report | **fixed** | noop→null checkpoint_sha + source-PR RED report |
+| B | `render_report` upgrades arbiter GREEN→YELLOW on probable_duplicates | **fixed** | QA color = arbiter; duplicates stay advisory note |
+
 ## Известные расхождения в коде
 
 - Complete-pair Git heuristic removed; both-locale edits stay in translate scope.
@@ -73,7 +80,7 @@ complete_pair/no_action/saved_head test rewrites.
 - New `doc_translate` deletes `translation/pr-{n}` and closes checkpoints; labels removed.
 - `doc_verify` GREEN/YELLOW closes prior RED checkpoint.
 - TOC scope hash ignores volatile `expected_sha256` wording; review-stage continue skips TOC string retranslate.
-- Offline focused suite green; **live PR / production `doc_translate` still pending**.
+- Offline contract surface **READY**; **live PR / production `doc_translate` still pending**.
 - Continue tests that still expected per-file `complete_pair` exclusion or translation-PR
   continue after branch-delete/`target_sha=null` were updated to §1.1/§1.2/§5.1 contracts
   (stale expectations, not production bugs).

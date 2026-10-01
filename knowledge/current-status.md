@@ -15,10 +15,10 @@
 
 ## Код
 
-Срезы 1–10 закрыты на `main`. Second-review residuals 1–12 и third-review
-residuals 1–9 закрыты против `REQUIREMENTS_RU.md`. Пять production bugs после
-`bbb7495` закрыты: critic malformed YAML soft-publish, continue после soft YAML,
-TOC-only/resource-only continue без Markdown scope, mixed MD+binary restore без
-UTF-8 decode ассетов. См. `debt-map.md`. Continue tests с устаревшими
-ожиданиями `complete_pair`/null-head переписаны на §1.1/§1.2/§5.1. Остаётся
-live `doc_translate` gate.
+**READY** vs `REQUIREMENTS_RU.md` на offline contract surface.
+
+Срезы 1–10, second/third-review residuals, five production continue/critic
+bugs, и independent-audit findings A/B закрыты. См. `debt-map.md`.
+
+Остаточный operational риск: live `doc_translate` gate ещё не доказан
+end-to-end credentials/push.

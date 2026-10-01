@@ -160,9 +160,9 @@ def render_report(
     # The QA comment is the semantic translation verdict. Repository build and
     # merge-readiness checks have their own GitHub UI and must never change an
     # arbiter verdict or delay its publication.
+    # §0.4 / §4.2 / §7: published color is the arbiter verdict only.
+    # Probable duplicates stay a separate advisory note under GREEN.
     status = review.final.verdict.value
-    if status == "GREEN" and context.probable_duplicates:
-        status = "YELLOW"
     cost = "неизвестна" if context.job_cost_rub is None else f"{context.job_cost_rub} RUB"
     lines = [
         f"{_STATUS_ICONS[status]} {status}",

@@ -45,6 +45,7 @@ def test_translate_publishes_assembled_candidate_before_critic_review() -> None:
     assert scenario.events == [
         "job:start",
         "authorize:translate",
+        "checkpoint:close_open:42:translation/pr-42",
         "snapshot:translate",
         "budget",
         "prepare:direction-scope-translate-assemble-reparse",

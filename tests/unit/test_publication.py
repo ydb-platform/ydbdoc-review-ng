@@ -724,7 +724,8 @@ def test_translate_links_source_pr_to_one_current_translation_pr_comment() -> No
     assert "Перевод PR #42" in backend.comments_by_pr[123][0].body
 
 
-def test_probable_duplicate_is_a_semantic_yellow_and_names_both_files() -> None:
+def test_probable_duplicate_keeps_arbiter_green_and_names_both_files() -> None:
+    """REQUIREMENTS §0.4/§4.2/§7: QA color is arbiter verdict; duplicates are a note."""
     new_path = RepoPath("ydb/docs/en/core/dev/optimization/hints.md")
     old_path = RepoPath(
         "ydb/docs/en/core/dev/query-execution-optimization/query-hints.md"
@@ -741,7 +742,8 @@ def test_probable_duplicate_is_a_semantic_yellow_and_names_both_files() -> None:
         context,
     )
 
-    assert report.startswith("🟡 YELLOW")
+    assert report.startswith("🟢 GREEN")
+    assert "🟡 YELLOW" not in report
     assert new_path.value in report
     assert old_path.value in report
     assert "возможный дубликат" in report.lower()
