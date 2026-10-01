@@ -429,60 +429,6 @@ def build_document_correction_note(
     return "\n".join(lines)
 
 
-def split_content_filter_chunk(
-    chunk: DocumentChunk,
-    block_texts: tuple[str, ...],
-    /,
-    *,
-    aligned_block_texts: tuple[str, ...] | None = None,
-) -> tuple[DocumentChunk, DocumentChunk] | None:
-    """Split one provider-filtered unit once at its nearest safe block midpoint."""
-    if type(chunk) is not DocumentChunk or type(block_texts) is not tuple:
-        raise TypeError("chunk and block texts must have exact public contract types")
-    if aligned_block_texts is not None and (
-        type(aligned_block_texts) is not tuple or len(aligned_block_texts) != len(block_texts)
-    ):
-        raise TypeError("aligned block texts must match the source block texts")
-    start, end = chunk.block_start, chunk.block_end
-    if start < 0 or end > len(block_texts) or start >= end:
-        return None
-    candidates: list[tuple[int, int, str, str]] = []
-    aligned_parent = (
-        "".join(aligned_block_texts[start:end]) if aligned_block_texts is not None else None
-    )
-    for boundary in range(start + 1, end):
-        left = "".join(block_texts[start:boundary])
-        right = "".join(block_texts[boundary:end])
-        if not left or not right or len(left) >= len(chunk.text) or len(right) >= len(chunk.text):
-            continue
-        if not _can_start_chunk(right):
-            continue
-        if aligned_block_texts is not None:
-            aligned_left = "".join(aligned_block_texts[start:boundary])
-            aligned_right = "".join(aligned_block_texts[boundary:end])
-            assert aligned_parent is not None
-            if (
-                not aligned_left
-                or not aligned_right
-                or len(aligned_left) >= len(aligned_parent)
-                or len(aligned_right) >= len(aligned_parent)
-            ):
-                continue
-        candidates.append((abs(len(left) - len(right)), boundary, left, right))
-    if not candidates:
-        return None
-    _distance, boundary, left, right = min(candidates, key=lambda item: (item[0], item[1]))
-    return (
-        DocumentChunk(left, start, boundary, tuple(_TOKEN.findall(left))),
-        DocumentChunk(right, boundary, end, tuple(_TOKEN.findall(right))),
-    )
-
-
-def _can_start_chunk(text: str, /) -> bool:
-    first_content_line = next((line for line in text.splitlines() if line.strip()), None)
-    return first_content_line is None or not first_content_line.startswith((" ", "\t"))
-
-
 def _lines(source: bytes, block: Block) -> tuple[tuple[int, int], ...]:
     result: list[tuple[int, int]] = []
     cursor = block.span.start

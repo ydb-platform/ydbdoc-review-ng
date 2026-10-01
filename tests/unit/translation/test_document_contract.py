@@ -12,7 +12,6 @@ from ydbdoc_review_ng.translation.document import (
     build_document_prompt,
     prepare_document,
     restore_document,
-    split_content_filter_chunk,
     validate_chunk_response,
 )
 
@@ -446,25 +445,6 @@ def test_source_list_indentation_is_restored_at_chunk_boundary() -> None:
     )
 
     assert candidate == source
-
-
-def test_adaptive_split_does_not_start_inside_nested_list() -> None:
-    block_texts = (
-        "* Parent:\n",
-        "  * Child one\n",
-        "  * Child two\n\n",
-        "## Next\n\n",
-        "Paragraph.\n",
-    )
-    parent = DocumentChunk("".join(block_texts), 0, len(block_texts), ())
-
-    children = split_content_filter_chunk(parent, block_texts)
-
-    assert children is not None
-    left, right = children
-    assert left.block_end == 3
-    assert right.block_start == 3
-    assert right.text == "## Next\n\nParagraph.\n"
 
 
 def test_prepare_document_keeps_nested_list_in_whole_document() -> None:

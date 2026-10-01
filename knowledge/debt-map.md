@@ -10,7 +10,7 @@
 | 0 | Эта карта | done |
 | 1 | Direction = `translation_required` + `direction` + `reason`; Python зеркалит Git | done |
 | 2 | Dependency pull A→A1 + лимиты | pending |
-| 3 | Whole-file translator, без DocumentChunk | pending |
+| 3 | Whole-file translator, без DocumentChunk split | done |
 | 4 | TOC Python-delta + tests | pending |
 | 5 | Critic полные файлы → сразу push | pending |
 | 6 | Arbiter: YELLOW закрывает checkpoint | done |
@@ -24,7 +24,8 @@
 - ~~`direction.parse_inventory_response` требует `files[]` с `action`/`toc_delta` от модели.~~
   Direction-only schema landed; Python `mirror_classified_files` владеет actions.
 - `SourceSemanticAction` / `semantic_actions` в inventory ещё пишутся для continue codec (временный bridge).
-- `DocumentChunk` / chunk translator в `translation/document.py`.
+- ~~`DocumentChunk` / chunk translator в `translation/document.py`.~~
+  Один файл = один translate request; adaptive content-filter split удалён.
 - `STATE_VERSION = 2` (нужен 3); поля `accepted_documents`, `candidate_sha256`.
 - ~~YELLOW в continuation трактуется как незакрытый semantic stop (как RED).~~
   Checkpoint открывает только RED; YELLOW = успех, в QA — руки + `doc_verify`.

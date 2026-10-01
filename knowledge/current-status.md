@@ -15,6 +15,6 @@
 
 ## Код
 
-Срез 1 начат: direction call больше не возвращает per-file `files[]`/`action`.
-Python зеркалит Git через `mirror_classified_files`. Остаётся chunk-translator,
-continuation v2, YELLOW≈RED и прочий долг в `debt-map.md`.
+Срезы 1 и 6 закрыты. Whole-file: один документ = один translate call, adaptive
+content-filter split удалён. Остаётся continuation v2, старый `select_direction`
+рядом с classifier, TOC/dependency polish — см. `debt-map.md`.

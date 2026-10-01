@@ -405,7 +405,7 @@ def test_shipped_composition_translates_then_verifies_current_pr_without_retrans
         == 0
     )
     assert "deepseek" in model_uris[0]
-    assert "yandexgpt-5.1" in model_uris[1]
+    assert "deepseek" in model_uris[1]
     assert services.files["ydb/docs/en/core/page.md"] == b"# Translated\n"
     assert len(services.comments) == 1
     assert services.comments[0]["body"].startswith("🟢 GREEN\n")
@@ -458,8 +458,8 @@ def test_shipped_composition_translates_then_verifies_current_pr_without_retrans
     )
     assert len(services.comments) == 1
     assert (
-        sum(row.get("status") == "succeeded" for row in services.audit) == 7
-    )  # two jobs plus five model attempts
+        sum(row.get("status") == "succeeded" for row in services.audit) == 8
+    )  # two jobs plus six model attempts (direction, translate, critic×2, arbiter×2)
 
 
 def test_runtime_publishes_field_local_inline_code_grammar_order_once() -> None:
@@ -754,37 +754,22 @@ def test_runtime_two_content_filters_fail_without_publication_or_checkpoint() ->
         row for row in services.audit if "attempt_id" in row and row["role"] == "translate"
     ]
     assert exit_code == 1
-    assert len(services.raw_request_bodies) == 4
+    # Whole-file contract: identical request at most twice. No adaptive chunk split.
+    assert len(services.raw_request_bodies) == 2
     assert services.raw_request_bodies[0] == services.raw_request_bodies[1]
-    assert [row["status"] for row in translation_attempts] == ["failed"] * 4
-    assert [row["error"] for row in translation_attempts] == ["content_filter"] * 4
-    assert [row["cost_rub"] for row in translation_attempts] == [Decimal("0.01")] * 4
+    assert [row["status"] for row in translation_attempts] == ["failed", "failed"]
+    assert [row["error"] for row in translation_attempts] == ["content_filter", "content_filter"]
+    assert [row["cost_rub"] for row in translation_attempts] == [Decimal("0.01"), Decimal("0.01")]
     assert not any(method in {"POST", "PATCH"} for method, _path in services.events)
     assert all("continuation_id" not in row for row in services.audit)
     assert services.audit[-1]["status"] == "failed"
 
 
-class AdaptiveContentFilterServices(ContentFilterServices):
-    def __init__(self, filtered_responses: int) -> None:
-        super().__init__(filtered_responses)
-        lengths = [157] * 49 + [177] + [130] * 60 + [131]
-        parts = []
-        for number, length in enumerate(lengths):
-            prefix = f"## Block {number:03d} "
-            parts.append(prefix + "x" * (length - len(prefix) - 1) + "\n")
-        self.files["ydb/docs/ru/core/page.md"] = "".join(parts).encode()
-        self.semantic_responses[0] = {
-            "files": {
-                "ydb/docs/en/core/page.md": "\n".join(["## Translated\n"] * 111),
-            }
-        }
-
-
-def test_runtime_adaptive_split_audits_parent_and_children_then_publishes_once() -> None:
+def test_runtime_content_filter_does_not_split_document_into_child_requests() -> None:
     from ydbdoc_review_ng.cli import main
     from ydbdoc_review_ng.runtime import create_runtime
 
-    services = AdaptiveContentFilterServices(filtered_responses=4)
+    services = ContentFilterServices(filtered_responses=2)
     runtime = create_runtime(
         environment={
             "GITHUB_ACTOR": "maintainer",
@@ -805,55 +790,12 @@ def test_runtime_adaptive_split_audits_parent_and_children_then_publishes_once()
     translation_attempts = [
         row for row in services.audit if "attempt_id" in row and row["role"] == "translate"
     ]
-    assert exit_code == 0
-    assert len(services.raw_request_bodies) == 9
-    assert services.raw_request_bodies[0] == services.raw_request_bodies[1]
-    assert [row["status"] for row in translation_attempts] == ["failed"] * 4 + ["succeeded"] * 5
-    assert [row["error"] for row in translation_attempts] == ["content_filter"] * 4 + [None] * 5
-    assert [row["cost_rub"] for row in translation_attempts] == [Decimal("0.01")] * 9
-    assert (
-        sum(method in {"POST", "PATCH"} and "/git/refs" in path for method, path in services.events)
-        == 1
-    )
-
-
-def test_runtime_filtered_child_splits_again_and_publishes_once() -> None:
-    from ydbdoc_review_ng.cli import main
-    from ydbdoc_review_ng.runtime import create_runtime
-
-    services = AdaptiveContentFilterServices(filtered_responses=4)
-    runtime = create_runtime(
-        environment={
-            "GITHUB_ACTOR": "maintainer",
-            "YDBDOC_ALLOWED_ACTORS": "maintainer",
-            "YANDEX_API_KEY": "secret",
-            "YANDEX_FOLDER_ID": "folder",
-        },
-        ydb_executor=services,
-        github_transport=services.github,
-        model_transport=services.model,
-    )
-
-    exit_code = main(
-        ["translate", "--pr", "42", "--source-sha", services.source, "--budget-rub", "10"],
-        dispatcher=runtime,
-    )
-
-    translation_attempts = [
-        row for row in services.audit if "attempt_id" in row and row["role"] == "translate"
-    ]
-    assert exit_code == 0
-    assert len(services.raw_request_bodies) == 9
-    assert services.raw_request_bodies[0] == services.raw_request_bodies[1]
-    assert services.raw_request_bodies[2] == services.raw_request_bodies[3]
-    assert services.raw_request_bodies[0] != services.raw_request_bodies[2]
-    assert [row["error"] for row in translation_attempts] == ["content_filter"] * 4 + [None] * 5
-    assert [row["cost_rub"] for row in translation_attempts] == [Decimal("0.01")] * 9
-    assert (
-        sum(method in {"POST", "PATCH"} and "/git/refs" in path for method, path in services.events)
-        == 1
-    )
-    assert all("continuation_id" not in row for row in services.audit)
+    assert exit_code == 1
+    assert len(services.raw_request_bodies) == 2
+    assert len({body for body in services.raw_request_bodies}) == 1
+    assert [row["error"] for row in translation_attempts] == ["content_filter", "content_filter"]
+    assert services.files["ydb/docs/en/core/page.md"] == b"# Old\n"
+    assert not any(method in {"POST", "PATCH"} for method, _path in services.events)
 
 
 def test_t017_f04_pure_rename_rejects_changed_whole_fence_before_commit() -> None:
