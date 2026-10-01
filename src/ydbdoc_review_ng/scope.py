@@ -1040,6 +1040,24 @@ def freeze_scope_manifest(
     ):
         raise _scope_error(ScopeInputReason.DIRECTION_RESULT_MISMATCH, direction_result.direction)
     if not potential.scopes:
+        if (
+            direction_result.state is DirectionSelectionState.SELECTED
+            and direction_result.direction is not None
+            and not decisions
+        ):
+            # TOC / locale-resource-only PRs: direction is set, Markdown scope empty.
+            return ScopeSelection(
+                ScopeSelectionState.SELECTED,
+                ScopeManifest(
+                    direction_result.direction,
+                    potential.scope_snapshot,
+                    potential.roots,
+                    (),
+                    (),
+                    0,
+                    0,
+                ),
+            )
         if direction_result.state is not DirectionSelectionState.NO_TRANSLATE or decisions:
             raise _scope_error(
                 ScopeInputReason.DIRECTION_RESULT_MISMATCH, direction_result.direction

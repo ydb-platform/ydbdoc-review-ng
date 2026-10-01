@@ -129,7 +129,6 @@ from ydbdoc_review_ng.translation_plan import (
     PlanAction,
     TranslationPlan,
     TranslationPlanError,
-    _complete_pairs,
     build_translation_plan,
     classify_path,
     mirror_classified_files,
@@ -166,6 +165,15 @@ def unpack(content: bytes) -> dict[str, bytes | None]:
         path: None if value is None else base64.b64decode(value, validate=True)
         for path, value in json.loads(content).items()
     }
+
+
+def _non_markdown_inventory_work(inventory: SourceChangeInventory, roots: LocaleRoots) -> bool:
+    """TOC / locale resource rows that do not create Markdown pair inventories."""
+    return any(
+        classify_path(roots, change.path).kind
+        in {PathKind.TOC, PathKind.ASSET, PathKind.REDIRECTS, PathKind.LOCALIZED_OTHER}
+        for change in inventory.files
+    )
 
 
 @dataclass(frozen=True)
@@ -970,32 +978,15 @@ class RuntimeContent:
                 return self.plans
             selected_direction = classification.direction
             if selected_direction is not None:
-                if not preparation.inventories:
+                if not preparation.inventories and not _non_markdown_inventory_work(
+                    preparation.inventory, self.roots
+                ):
                     raise TranslationPlanError("translation_plan_direction_missing")
-                complete = {
-                    RepoPath(relative)
-                    for kind, relative in _complete_pairs(preparation.inventory, self.roots)
-                    if kind is PathKind.MARKDOWN
-                }
-                verify_targets = (
-                    frozenset()
-                    if translate
-                    else frozenset(self.source.verification_target_paths)
-                )
+                # §1.2 has no "both locales changed ⇒ skip" rule. Translate and
+                # verify both keep the selected direction for every Markdown pair;
+                # doc_verify additionally reviews the full frozen group (§5.2).
 
                 def _pair_verdict(pair: LocalePairInventory) -> DirectionPairVerdict:
-                    if translate:
-                        if pair.key.relative_path in complete:
-                            return DirectionPairVerdict.COMPLETE_PAIR
-                    else:
-                        # doc_verify: source PR may also list target-locale noise.
-                        # Scope direction from frozen verification targets, not
-                        # source-inventory complete-pair detection.
-                        target_side = (
-                            pair.en if selected_direction is Direction.RU_TO_EN else pair.ru
-                        )
-                        if target_side.path not in verify_targets:
-                            return DirectionPairVerdict.COMPLETE_PAIR
                     return DirectionPairVerdict(selected_direction.value)
 
                 direction = DirectionSelectionResult(
@@ -1226,8 +1217,42 @@ class RuntimeContent:
             else:
                 target = self.source.github.read_bytes(target_snapshot, path)
             if target is None:
+                # §4.1 / §5.2: missing verify target is JSON null for critic.
+                if not translate:
+                    files[path.value] = None
+                    continue
                 raise RuntimeBoundaryError("verification_target_missing")
             files[path.value] = target
+        for item in translation_plan.inputs:
+            if item.target_path is None:
+                continue
+            if item.action is PlanAction.COPY_TARGET:
+                source_bytes = self.source.github.read_bytes(
+                    snapshots.source_snapshot, item.change.path
+                )
+                if (
+                    not translate
+                    and self.source.github.read_bytes(target_snapshot, item.target_path)
+                    != source_bytes
+                ):
+                    raise RuntimeBoundaryError("verification_asset_mismatch")
+                files[item.target_path.value] = source_bytes
+            elif item.action is PlanAction.DELETE_TARGET and item.kind is not PathKind.MARKDOWN:
+                if (
+                    not translate
+                    and self.source.github.read_bytes(target_snapshot, item.target_path) is not None
+                ):
+                    raise RuntimeBoundaryError("verification_delete_mismatch")
+                files[item.target_path.value] = None
+            elif item.action is PlanAction.RENAME_TARGET and item.kind is not PathKind.MARKDOWN:
+                source_bytes = self.source.github.read_bytes(
+                    snapshots.source_snapshot, item.change.path
+                )
+                for path in item.outputs:
+                    if path == item.target_path:
+                        files[path.value] = source_bytes
+                    else:
+                        files[path.value] = None
         self.documents = tuple(documents)
         fixed_files = tuple(sorted(files.items()))
         reconcile_fixed_outputs(translation_plan, fixed_files)

@@ -235,16 +235,22 @@ def test_missing_required_inventory_version_fails_before_classifier(version):
     assert services.requests == [] and not services.pr_exists
 
 
-def test_required_resource_is_classified_before_existing_executor_limit():
+def test_required_resource_is_classified_and_mirrored_without_markdown() -> None:
     rows = [{"filename": IMAGE, "status": "renamed", "previous_filename": OLD_IMAGE, "changes": 0}]
-    services = ClassifierServices(rows, [answer(rows, required=True, direction="ru_to_en")])
-    with pytest.raises(WorkflowError, match="translation_plan_direction_missing"):
-        runtime(services).doc_translate(
-            TranslateWorkflowInput(42, GitSha(services.source), Decimal(10))
-        )
-    assert len(services.requests) == 1
-    assert services.source_comments == []
-    assert not services.pr_exists and services.branch_head is None
+    services = ClassifierServices(
+        rows,
+        [
+            answer(rows, required=True, direction="ru_to_en"),
+            json.dumps({"files": {}}),
+            json.dumps({"verdict": "GREEN", "findings": []}),
+        ],
+    )
+    result = runtime(services).doc_translate(
+        TranslateWorkflowInput(42, GitSha(services.source), Decimal(10))
+    )
+    assert len(services.requests) >= 1
+    assert result.verdict.value == "GREEN"
+    assert services.pr_exists or services.branch_head is not None
 
 
 @pytest.mark.parametrize("second_page", ["complete", "missing", "duplicate"])

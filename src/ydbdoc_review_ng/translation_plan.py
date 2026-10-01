@@ -55,6 +55,7 @@ class PlanAction(str, Enum):
     NO_ACTION = "no_action"
     TRANSLATE_DOCUMENT = "translate_document"
     DELETE_TARGET = "delete_target"
+    COPY_TARGET = "copy_target"
     RENAME_TARGET = "rename_target"
     RENAME_AND_TRANSLATE = "rename_and_translate"
     TARGET_ALREADY_ABSENT = "target_already_absent"
@@ -395,7 +396,6 @@ def mirror_classified_files(
     if direction is None:
         return tuple(ClassifiedFile(change, "none", None) for change in inventory.files)
     source_locale, _source_root, target_root = _source_and_target_roots(roots, direction)
-    complete = _complete_pairs(inventory, roots)
     mirrored: list[ClassifiedFile] = []
     for change in inventory.files:
         current = classify_path(roots, change.path)
@@ -410,10 +410,7 @@ def mirror_classified_files(
             mirrored.append(ClassifiedFile(change, "none", None))
             continue
         if current.kind is PathKind.MARKDOWN:
-            if (current.kind, current.relative) in complete:
-                mirrored.append(ClassifiedFile(change, "none", None))
-            else:
-                mirrored.append(ClassifiedFile(change, "page", None))
+            mirrored.append(ClassifiedFile(change, "page", None))
         elif current.kind is PathKind.TOC:
             mirrored.append(
                 ClassifiedFile(change, "toc_delta", "Apply navigation delta from source PR.")
@@ -547,6 +544,32 @@ def build_translation_plan(
                 None if before is None else sha256(before).hexdigest(),
                 sha256(after).hexdigest(),
             )
+        elif current.kind in {PathKind.ASSET, PathKind.REDIRECTS, PathKind.LOCALIZED_OTHER}:
+            # §1.2: locale resources are deterministic copy/delete/rename.
+            target = _paired(target_root, current.relative)
+            if change.status == "removed":
+                item = PlannedInput(
+                    change, current.kind, PlanAction.DELETE_TARGET, target, (target,)
+                )
+            elif change.status == "renamed":
+                assert change.previous_path is not None
+                previous = classify_path(roots, change.previous_path)
+                if previous.relative is None:
+                    raise TranslationPlanError("translation_plan_rename_preimage_missing")
+                previous_target = _paired(target_root, previous.relative)
+                item = PlannedInput(
+                    change,
+                    current.kind,
+                    PlanAction.RENAME_TARGET,
+                    target,
+                    tuple(sorted((previous_target, target), key=lambda path: path.value)),
+                )
+            elif change.status in {"added", "modified"}:
+                item = PlannedInput(
+                    change, current.kind, PlanAction.COPY_TARGET, target, (target,)
+                )
+            else:
+                raise TranslationPlanError("translation_plan_localized_file_unsupported")
         else:
             raise TranslationPlanError("translation_plan_localized_file_unsupported")
         planned.append(item)
@@ -627,6 +650,9 @@ def reconcile_fixed_outputs(
         elif item.action is PlanAction.DELETE_TARGET:
             if item.target_path not in fixed or fixed[item.target_path] is not None:
                 raise TranslationPlanError("translation_plan_delete_uncovered")
+        elif item.action is PlanAction.COPY_TARGET:
+            if item.target_path not in fixed or fixed[item.target_path] is None:
+                raise TranslationPlanError("translation_plan_localized_file_unsupported")
         elif item.action is PlanAction.RENAME_TARGET and any(
             path not in fixed for path in item.outputs
         ):

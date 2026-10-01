@@ -165,7 +165,7 @@ class DirectionSelectionResult:
                 if self.direction is Direction.RU_TO_EN
                 else DirectionPairVerdict.EN_TO_RU
             )
-            if not non_complete or has_undetermined or any(
+            if has_undetermined or any(
                 decision.verdict is not expected for decision in non_complete
             ):
                 raise _invariant(type_name, "decisions", "non-complete decisions matching direction")
