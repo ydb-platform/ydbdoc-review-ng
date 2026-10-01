@@ -227,6 +227,13 @@ class CaptureServices(RuntimeServices):
             if self.stop == "review":
                 path = "ydb/docs/en/core/a.md"
                 files[path] = rewrite_markdown(files[path], "Corrected")
+            if self.stop == "critic_reverts_to_base":
+                # Critic returns bytes identical to the pre-translate base. The
+                # published branch still holds the translator draft, so the
+                # second push must still land this correction.
+                for path in list(files):
+                    name = path.rsplit("/", 1)[-1].removesuffix(".md")
+                    files[path] = f"# Old {name}\n"
             values = {"files": files}
             if self.failure == "repair" and self.stop == "review":
                 self.roles.append(role)
@@ -399,6 +406,24 @@ def test_partial_translation_failure_soft_publishes_successes_and_nulls_for_crit
     # Failed translator targets must not wipe an existing counterpart as a deletion.
     assert services.files.get("ydb/docs/en/core/b.md") is not None
     assert services.rows == {}
+
+
+def test_critic_revert_to_base_bytes_replaces_published_translator_draft() -> None:
+    """P0 / REQUIREMENTS §4.1: GREEN must describe bytes that land on the branch.
+
+    Translator publishes a draft; critic returns content identical to the old
+    base. Publication must still overwrite the draft so arbiter GREEN matches
+    the remote translation branch.
+    """
+    services = CaptureServices(names=("a",), stop="critic_reverts_to_base")
+
+    result = services.translate()
+
+    assert result.verdict is Verdict.GREEN
+    assert services.roles == ["direction", "translate", "critic", "arbiter"]
+    assert services.commits == 2
+    assert services.files["ydb/docs/en/core/a.md"] == b"# Old a\n"
+    assert services.snapshots[services.branch_head]["ydb/docs/en/core/a.md"] == b"# Old a\n"
 
 
 def test_structured_translation_restores_known_placeholder_before_review() -> None:

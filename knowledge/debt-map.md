@@ -25,6 +25,16 @@
 > timeline/commits и soft-publish/critic-push ожидания выровнены под контракт.
 > Остаётся только live `doc_translate` gate (нужны credentials / push).
 
+## Neural review triage (2026-10-01)
+
+Findings from `final-clean-context-review.md` + `adversarial-pipeline-review.md`
+vs `REQUIREMENTS_RU.md`. Fix only contract violations; skip invented requirements.
+
+| # | Finding | Status |
+|---|---|---|
+| 1 | GREEN vs unpublished critic bytes (`publication_plan` old base head) | **fixed** |
+| 2–25 | P1/P2 batch | in progress |
+
 ## Известные расхождения в коде
 
 - ~~`direction.parse_inventory_response` требует `files[]` с `action`/`toc_delta` от модели.~~

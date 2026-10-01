@@ -66,7 +66,12 @@ from ydbdoc_review_ng.models.types import FrozenJson, mutable_json
 from ydbdoc_review_ng.parser.markdown import build_markdown_plan
 from ydbdoc_review_ng.plan import ProtectedKind, SourcePlan, fields_of
 from ydbdoc_review_ng.ports import SnapshotReader
-from ydbdoc_review_ng.publication import FileChange, GitPublicationAdapter, PublicationPlan
+from ydbdoc_review_ng.publication import (
+    FileChange,
+    GitPublicationAdapter,
+    PublicationContext,
+    PublicationPlan,
+)
 from ydbdoc_review_ng.quality import (
     CriticResult,
     QualityInputError,
@@ -1882,10 +1887,17 @@ class RuntimeContent:
     def publication_plan(
         self, snapshot: ImmutableRunSnapshot, candidate: WorkflowCandidate
     ) -> PublicationPlan:
-        # Every workflow now publishes at most once. Build the only plan from
-        # the immutable run context instead of state left by an earlier run.
-        context = self.source.context
-        target = SnapshotRef(self.source.snapshots.source_snapshot.repository, context.current_head)
+        # Compare against the currently published translation head. After soft-
+        # publish / critic chunk pushes, GitPublicationAdapter passes an updated
+        # PublicationContext via snapshot.context; source.context stays at the
+        # original base and must not be used for before-bytes.
+        published = snapshot.context
+        head = (
+            published.current_head
+            if type(published) is PublicationContext
+            else self.source.context.current_head
+        )
+        target = SnapshotRef(self.source.snapshots.source_snapshot.repository, head)
         publishable_nulls = self._publishable_null_paths()
         return PublicationPlan(
             tuple(
