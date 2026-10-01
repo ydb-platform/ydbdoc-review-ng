@@ -186,10 +186,12 @@ class ContinuationCheckpoint:
         # TOC metadata outputs are not always listed in the document manifest.
         # Replay discovers them from the published branch; envelope validation
         # only permits toc*.ya?ml basenames outside the selected scope.
+        # Zero-text / delete-only NON_FINAL uses synthetic resource-review (§4/#17).
         metadata = {
             path
             for path in referenced
-            if re.fullmatch(
+            if path.value == "resource-review"
+            or re.fullmatch(
                 r"toc(?:_[A-Za-z0-9-]+)?\.ya?ml", posixpath.basename(path.value)
             )
         }

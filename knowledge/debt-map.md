@@ -103,6 +103,18 @@ External Important 1–18 + Minor 19–22 vs `REQUIREMENTS_RU.md`. Tip after clo
 | 21 | Continue-created PR missing source link | **fixed** | DOC_CONTINUE posts source link |
 | 22 | Limit comment missing YDBDOC_MAX_* | **fixed** | variable name in comment |
 
+## Tip residuals after 6c373d6 (2026-10-01)
+
+Four new confirmed holes vs `REQUIREMENTS_RU.md` (remaining gaps under claimed
+#6/#7/#17/#18). Tip after closeout recorded in `current-status.md`.
+
+| # | Bug | Status | Notes / witness |
+|---|---|---|---|
+| 1 | doc_verify missing TOC → `toc_uncovered` | **fixed** | null `toc_postconditions` + soft-pending; `test_bug1_*` |
+| 2 | Critic malformed YAML TOC discarded | **fixed** | soft `_toc` in `reconcile_candidate_outputs`; `test_bug2_*` |
+| 3 | Delete-only NON_FINAL continue broken | **fixed** | admit `resource-review` in persistence + continue + restore; `test_delete_only_non_final_checkpoint_is_continuable` |
+| 4 | Full source TOC delete still unsupported in plan | **fixed** | `removed` TOC → `DELETE_TARGET`; `test_bug4_*` / `test_removed_source_toc_plans_delete_target` |
+
 ## Известные расхождения в коде
 
 - Complete-pair Git heuristic removed; both-locale edits stay in translate scope.

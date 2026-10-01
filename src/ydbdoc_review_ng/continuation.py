@@ -611,6 +611,9 @@ def validate_restored_documents(
     if len(plans) != len(restored_plans):
         raise _fail()
     referenced = set(state.pending_paths) | set(state.review_paths)
-    metadata = set(_exact_paths(metadata_paths))
+    metadata = set(_exact_paths(metadata_paths)) | {
+        # Synthetic zero-text / delete-only NON_FINAL marker (§4 / #17 residual).
+        RepoPath("resource-review")
+    }
     if not referenced.issubset(set(plans) | metadata) or set(state.pending_paths) & metadata:
         raise _fail()

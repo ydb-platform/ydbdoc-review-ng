@@ -1242,6 +1242,9 @@ class RuntimeContent:
                     # §4.1 / §5.2: missing required TOC reaches critic as JSON null.
                     if kind is PathKind.TOC and actual is None and expected is not None:
                         files[metadata_path] = None
+                        # Soft-pending: clear expected digest so reconcile does not
+                        # raise translation_plan_toc_uncovered before critic runs.
+                        toc_postconditions[path] = None
                         continue
                     raise RuntimeBoundaryError("verification_metadata_mismatch")
         # Freeze exact metadata postconditions before any translation-model

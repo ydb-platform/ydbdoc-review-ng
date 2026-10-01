@@ -17,11 +17,11 @@
 
 **READY** vs `REQUIREMENTS_RU.md` на offline contract surface.
 
-Clean-slate review `78e0e58` Important 1–18 / Minor 19–22 закрыты (21 FIXED-NOW,
-1 INCORRECT = #2 mixed-locale). См. `debt-map.md`.
+Clean-slate review `78e0e58` Important 1–18 / Minor 19–22 закрыты ранее.
+Tip residuals after `6c373d6` (four holes under claimed #6/#7/#17/#18) FIXED-NOW:
+missing verify TOC soft-pending, critic TOC YAML soft-publish, delete-only
+`resource-review` continue/persistence, plan-level source TOC delete. См. `debt-map.md`.
 
-Offline suite: **0 failed / 2137 passed** (1 deselected). Residual 14 failures after
-clean-slate were stale expectations vs soft-publish / §4.1 zero-text critic /
-label DELETE — tests updated, no production regression found.
+Focused regression: **291 passed** (tip-bug + plan/review/continue/persistence).
 
 Live `doc_translate` gate ещё не доказан end-to-end credentials/push.

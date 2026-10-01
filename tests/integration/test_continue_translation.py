@@ -1037,6 +1037,55 @@ def test_resource_only_red_checkpoint_is_continuable() -> None:
     assert services.roles
 
 
+def test_delete_only_non_final_checkpoint_is_continuable() -> None:
+    """REQUIREMENTS §4/§5.3: delete-only NON_FINAL opens a working continue (#3 tip)."""
+
+    class DeleteOnly(ContinueServices):
+        def model(self, request):
+            body = json.loads(request.body)
+            props = request_schema(body)["schema"]["properties"]
+            role = (
+                "direction"
+                if "translation_required" in props
+                else "critic"
+                if "files" in props
+                else "arbiter"
+                if "findings" in props
+                else "toc"
+                if "strings" in props
+                else "translate"
+            )
+            if role == "arbiter" and not self.continuing:
+                self.roles.append(role)
+                payload = {
+                    "model": "t",
+                    "choices": [
+                        {
+                            "finish_reason": "length",
+                            "message": {"role": "assistant", "content": '{"verdict":"GREEN","findings":[]}'},
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+                }
+                return HttpResponse(200, json.dumps(payload).encode(), Decimal(".01"))
+            return super().model(request)
+
+    services = DeleteOnly(names=("page",), stop="rename_red")
+    services.changes = [{"status": "removed", "filename": RU + "page.md"}]
+    for tree in [services.files, *services.snapshots.values()]:
+        tree.pop(RU + "page.md", None)
+
+    assert services.translate().verdict is Verdict.RED
+    checkpoint = services.checkpoint()
+    assert any(path.value == "resource-review" for path in checkpoint.state.review_paths)
+
+    services.continuing = True
+    services.stop = None
+    services.roles.clear()
+    resumed = services.resume()
+    assert resumed.verdict in {Verdict.GREEN, Verdict.YELLOW, Verdict.RED}
+
+
 def test_mixed_markdown_and_binary_continue_skips_asset_utf8_restore() -> None:
     """REQUIREMENTS §5.3: continue restores binaries by bytes, not Markdown plan (#5)."""
 

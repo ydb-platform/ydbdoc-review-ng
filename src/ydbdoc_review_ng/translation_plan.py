@@ -22,6 +22,7 @@ from ydbdoc_review_ng.direction import ClassifiedFile, Direction, InventoryClass
 from ydbdoc_review_ng.domain import ContentHash, RepoPath
 from ydbdoc_review_ng.errors import SafeDiagnosticError
 from ydbdoc_review_ng.locales import LocaleRoots, PairKey, paired_markdown_path
+from ydbdoc_review_ng.runtime_github import RuntimeBoundaryError
 from ydbdoc_review_ng.runtime_metadata import _toc
 from ydbdoc_review_ng.scope import (
     FileOperation,
@@ -507,36 +508,42 @@ def build_translation_plan(
         if current.kind is PathKind.MARKDOWN:
             item = _markdown_input(change, current, target_root, manifest)
         elif current.kind is PathKind.TOC:
-            if change.status not in _ORDINARY_STATUSES:
-                raise TranslationPlanError("translation_plan_toc_operation_unsupported")
             target = _paired(target_root, current.relative)
-            # Key present with None = soft-pending TOC (string map failed or no file).
-            if toc_postconditions is None or target not in toc_postconditions:
-                raise TranslationPlanError("translation_plan_toc_postcondition_missing")
-            expected = toc_postconditions[target]
-            snapshots = (
-                None if toc_source_snapshots is None else toc_source_snapshots.get(change.path)
-            )
-            if snapshots is None:
-                raise TranslationPlanError("translation_plan_toc_source_snapshot_missing")
-            before, after = snapshots
-            if change.status == "added" and before is not None:
-                raise TranslationPlanError("translation_plan_toc_delta_unsupported")
-            if change.status == "modified" and before is None:
-                raise TranslationPlanError("translation_plan_toc_delta_unsupported")
-            # Validate the delta is representable. §3.5: links to missing or
-            # already-existing target pages are diagnostics, not a plan gate.
-            _planned_toc_additions(change.path, before, after)
-            item = PlannedInput(
-                change,
-                current.kind,
-                PlanAction.SYNC_TOC,
-                target,
-                (target,),
-                None if expected is None else sha256(expected).hexdigest(),
-                None if before is None else sha256(before).hexdigest(),
-                sha256(after).hexdigest(),
-            )
+            if change.status == "removed":
+                # §1.2 / §3: full source TOC Git delete mirrors as target TOC delete.
+                item = PlannedInput(
+                    change, current.kind, PlanAction.DELETE_TARGET, target, (target,)
+                )
+            elif change.status not in _ORDINARY_STATUSES:
+                raise TranslationPlanError("translation_plan_toc_operation_unsupported")
+            else:
+                # Key present with None = soft-pending TOC (string map failed or no file).
+                if toc_postconditions is None or target not in toc_postconditions:
+                    raise TranslationPlanError("translation_plan_toc_postcondition_missing")
+                expected = toc_postconditions[target]
+                snapshots = (
+                    None if toc_source_snapshots is None else toc_source_snapshots.get(change.path)
+                )
+                if snapshots is None:
+                    raise TranslationPlanError("translation_plan_toc_source_snapshot_missing")
+                before, after = snapshots
+                if change.status == "added" and before is not None:
+                    raise TranslationPlanError("translation_plan_toc_delta_unsupported")
+                if change.status == "modified" and before is None:
+                    raise TranslationPlanError("translation_plan_toc_delta_unsupported")
+                # Validate the delta is representable. §3.5: links to missing or
+                # already-existing target pages are diagnostics, not a plan gate.
+                _planned_toc_additions(change.path, before, after)
+                item = PlannedInput(
+                    change,
+                    current.kind,
+                    PlanAction.SYNC_TOC,
+                    target,
+                    (target,),
+                    None if expected is None else sha256(expected).hexdigest(),
+                    None if before is None else sha256(before).hexdigest(),
+                    sha256(after).hexdigest(),
+                )
         elif current.kind in {PathKind.ASSET, PathKind.REDIRECTS, PathKind.LOCALIZED_OTHER}:
             # §1.2: locale resources are deterministic copy/delete/rename.
             # Asset/redirect relatives are locale-root-relative (incl. "core/…"),
@@ -686,7 +693,11 @@ def reconcile_candidate_outputs(
                 # Critic may supply a complete TOC (§3.6 / §4.1).
                 if content is None:
                     continue
-                _toc(content, "translation_plan_toc_correction_invalid")
+                # §2 / §7: assembled UTF-8 soft-publishes; YAML parse is diagnostic.
+                try:
+                    _toc(content, "translation_plan_toc_correction_invalid")
+                except RuntimeBoundaryError:
+                    pass
                 continue
             if (
                 content is None
@@ -695,8 +706,12 @@ def reconcile_candidate_outputs(
             ):
                 raise TranslationPlanError("translation_plan_candidate_output_missing")
             if expected is not None:
-                # Critic may change href/hierarchy/conditions; only require parseable TOC.
-                _toc(content, "translation_plan_toc_correction_invalid")
+                # Critic may change href/hierarchy/conditions. Soft-publish any
+                # assembled UTF-8; malformed YAML is not a publication gate (§2/§7).
+                try:
+                    _toc(content, "translation_plan_toc_correction_invalid")
+                except RuntimeBoundaryError:
+                    pass
         elif item.action is PlanAction.DELETE_TARGET:
             if target not in candidate or candidate[target] is not None:
                 raise TranslationPlanError("translation_plan_candidate_delete_missing")

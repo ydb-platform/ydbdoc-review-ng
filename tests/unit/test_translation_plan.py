@@ -342,7 +342,7 @@ def test_supported_toc_write_is_an_independent_planned_input(name: str, status: 
     assert toc.outputs == (RepoPath(f"ydb/docs/en/core/manual/{name}"),)
 
 
-@pytest.mark.parametrize("status", ["removed", "copied", "changed", "unchanged"])
+@pytest.mark.parametrize("status", ["copied", "changed", "unchanged"])
 def test_unsupported_toc_status_fails_closed(status: str) -> None:
     document = entry("manual/page.md")
     with pytest.raises(TranslationPlanError, match="toc_operation_unsupported"):
@@ -354,6 +354,22 @@ def test_unsupported_toc_status_fails_closed(status: str) -> None:
             ROOTS,
             manifest(document),
         )
+
+
+def test_removed_source_toc_plans_delete_target() -> None:
+    """§1.2 / §3: Git delete of source TOC mirrors as target TOC delete."""
+    document = entry("manual/page.md", FileOperation.DELETE_TARGET)
+    plan = build_translation_plan(
+        inventory(
+            change(document.pair.source_path.value, "removed"),
+            change("ydb/docs/ru/core/manual/toc_i.yaml", "removed"),
+        ),
+        ROOTS,
+        manifest(document),
+    )
+    toc = next(item for item in plan.inputs if item.kind is PathKind.TOC)
+    assert toc.action is PlanAction.DELETE_TARGET
+    assert toc.target_path == RepoPath("ydb/docs/en/core/manual/toc_i.yaml")
 
 
 def test_toc_rename_inside_locale_is_rejected_until_executor_supports_it() -> None:

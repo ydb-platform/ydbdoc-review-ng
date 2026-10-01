@@ -181,7 +181,10 @@ def replay_continue(
     }
     reviewable = {document.entry.pair.target_path for document in plans.documents} | set(
         metadata_paths
-    ) | set(asset_paths)
+    ) | set(asset_paths) | {
+        # Synthetic zero-text / delete-only NON_FINAL marker (§4 / #17 residual).
+        RepoPath("resource-review")
+    }
     if state.stage is ContinuationStage.TRANSLATION:
         if not set(state.pending_paths).issubset(required) or not referenced <= reviewable:
             raise ContinuationStateError()
