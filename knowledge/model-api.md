@@ -1,81 +1,45 @@
-# Модели и API Yandex Cloud
+# Модели и response contracts
 
-## Обязательные настройки translate
+## Production model
 
-- `temperature = 0`.
-- Reasoning полностью отключён.
-- Translate возвращает structured map только переводимых prose segments. Runtime
-  сам вставляет protected code/URL/path/template между ними; модель не возвращает
-  и не контролирует placeholders.
-- Direction и translate возвращают structured output по JSON Schema;
-  raw JSON повторно проверяется локально независимо от гарантий провайдера.
-- Критик сравнивает полные актуальные source PR files, полные соответствующие
-  translation PR files и полный glossary и возвращает полные исправленные файлы.
-  Его точный JSON prompt приведён в REQUIREMENTS_RU.md. Runtime проверяет и
-  применяет исправления; независимый арбитр возвращает GREEN/YELLOW/RED по степени
-  проблем. Остаточные замечания идут непосредственно в отчёт, автоматически не
-  исправляются и никуда не передаются. Build/CI не участвуют в semantic verdict.
-  Prompt живой и модифицируется при отладке без изменения orchestration.
-  Runtime загружает `quality/prompts/critic.txt` из установленного пакета при
-  построении запроса и подставляет только три полные карты данных. Критик
-  возвращает ровно `{"files": {"target/path": "complete content"}}`, арбитр
-  возвращает `verdict` и `findings`. Оба запроса имеют `target_path = None`,
-  поскольку их единица проверки, весь PR.
-- Каждая начатая attempt сохраняется в durable state с параметрами, входом,
-  status/error, сырым ответом и usage при их наличии.
-- Любой полученный response, включая malformed или семантически неудачный,
-  сохраняет фактическую cost. Если response/usage отсутствуют и provider не
-  сообщил billable cost, сохраняется `NULL`/unknown, а не фиктивный `0`.
-  Достоверно сообщённая нулевая стоимость сохраняется как `0`.
-- Явный content-filter допускает ровно один повтор идентичного request в пределах
-  `max_attempts = 2`; обе attempts аудируются и оплачиваются, а truncation и
-  прочие non-final статусы не повторяются.
-- `TRANSLATE` chunk, дважды завершённый content-filter,
-  допускает один deterministic split по ближайшей к середине top-level block
-  boundary. Дочерний chunk при повторном content-filter делится тем же способом,
-  пока диапазон top-level blocks строго уменьшается; успешные соседние chunks не
-  перезапускаются. Невалидная correction и content-filter на correction также допускают split
-  TRANSLATE; другие provider errors деление не включают.
-- Translator schema не содержит placeholders: полная карта segment IDs
-  проверяется локально, затем runtime вставляет source-owned fragments в
-  исходном порядке.
-- Только translator получает для каждого отдельного чанка те пары project
-  glossary, исходные термины которых встречаются в этом чанке. Критик и арбитр
-  получают полные файлы и полный glossary.
+Все production calls используют DeepSeek V4 Flash: direction, простая
+проверка необходимости перевода, translator, TOC strings, critic и arbiter.
+YandexGPT и model fallback в production flow не используются. Единственное
+исключение — специальный `doc_model_probe`, который не переводит и не публикует
+документы.
 
-## Проверенные модели
+Контекстное окно DeepSeek считается равным 1 048 576 токенов. Искусственных
+пределов ответа 8 000 или 2 000 нет. `max_tokens` равен остатку окна
+после полного prompt. Упаковка учитывает и input, и ожидаемый полный output.
 
-### YandexGPT 5.1
+## Контракты
 
-Нативный Foundation Models API принимает `reasoningOptions.mode = DISABLED` и
-JSON Schema. В интеграционном прогоне PR 51079 все 361 принятых ответа сообщили
-`reasoningTokens = 0`. Канонический текущий model URI:
-`gpt://<folder>/yandexgpt-5.1`; суффикс `/latest` не используется в default,
-но явный `YDBDOC_MODEL` сохраняет возможность выбрать другой URI. В runtime это
-fallback-модель для перевода и отдельная модель critic-editor
-по умолчанию (`YDBDOC_MODEL_CRITIC`).
-DeepSeek также является независимым arbiter по умолчанию после YandexGPT
-critic-editor; `YDBDOC_MODEL_ARBITER` позволяет выбрать третью модель явно.
+- Direction и простая классификация возвращают strict JSON. Git inventory и
+  статусы файлов остаются authoritative Python data.
+- Translator возвращает точную UTF-8 JSON-карту всех запрошенных
+  prose segment IDs. Unknown, duplicate и missing IDs отклоняют response, потому
+  что без карты runtime не может собрать файл.
+- Critic возвращает только `{"files": {"target/path": "complete UTF-8 content"}}`.
+  Каждый запрошенный path должен присутствовать ровно один раз. Unknown paths,
+  duplicate keys, non-string values и invalid UTF-8 запрещены. При нуле
+  текстовых пар ожидается `{"files": {}}`.
+- Arbiter возвращает только `verdict` и `findings`. GREEN требует пустого
+  `findings`; YELLOW и RED требуют findings. Для существующего и проверенного
+  target нужны exact line и searchable snippet. Для missing или технически
+  unreviewed target они равны `null`.
 
-### DeepSeek V4 Flash
+Точные живые prompts critic и arbiter хранятся в `REQUIREMENTS_RU.md` и packaged prompt
+files. Их можно менять при отладке, не меняя orchestration.
 
-OpenAI-compatible endpoint принимает `reasoning_effort = none`, temperature 0 и
-JSON Schema. В runtime модель используется как основная модель перевода; при
-ошибке провайдера или content filter запрос повторяется через YandexGPT.
-Runtime извлекает обычные и кешированные входящие токены из OpenAI usage и
-считает стоимость DeepSeek V4 Flash по опубликованному тарифу на 2026-09-29:
-0,3 руб./1000 входящих, 0,075 руб./1000 кешированных входящих и
-0,5 руб./1000 исходящих токенов. Поэтому успешный ответ модели имеет числовую
-стоимость; unknown остаётся только при отсутствии usage и provider billable cost.
-Источник тарифа: <https://aistudio.yandex.ru/ru/docs/ai-studio/pricing>.
+## Повторы и аудит
 
-### gpt-oss-120b
+Critic и arbiter повторяются ровно один раз при provider error или
+malformed response. Неполный critic response не применяется. Ошибка одного
+чанка не останавливает остальные.
 
-Проверенный endpoint отвергает `reasoning_effort = none` и допускает только
-`low`, `medium` или `high`. Эта модель не подходит для роли `translate`, пока
-полное отключение reasoning является требованием.
+Каждая attempt аудируется с фактическим usage и cost, если они известны.
+Unknown cost остаётся `NULL`, а не подменяется нулём. Prompts, responses и
+source prose не попадают в публичные логи и GitHub comments.
 
-## Секреты
-
-Ключи и идентификаторы читаются только из environment/GitHub secrets. Их нельзя
-писать в prompts, логи, fixtures, knowledge bank или git history.
+Секреты читаются только из environment и GitHub secrets. Их нельзя записывать в
+prompts, fixtures, логи, банк знаний или git history.

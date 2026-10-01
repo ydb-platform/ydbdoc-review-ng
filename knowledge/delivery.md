@@ -1,20 +1,21 @@
-# Конвейер разработки
+# Конвейер разработки и выкатки
 
-1. Из канонических требований выделяется одна атомарная задача.
-2. Разработчик сначала пишет failing unit test, затем минимальную реализацию.
-3. Независимый tester проверяет публичное поведение, non-vacuity и regression.
-4. Конкретный FAIL возвращается как bounded remediation.
-5. PASS фиксируется отдельным task commit; перед релизом выполняются полный
-   non-live suite, static checks, package build и installed smoke.
-
-`v1.0.x` поставляет `doc_translate` и `doc_verify`; `1.1.0` реализует
-`doc_continue` через CLI и composite action. История разработки,
-временные отчёты и paid-model transcripts не входят в публичный репозиторий.
-
-До публикации `v1.1.0` dispatcher повторяет release gate на точном финальном tree:
-полный offline suite, Ruff/format/mypy/diff, clean wheel/sdist и installed smoke
-трёх режимов, затем независимая release review. Локальная реализация не означает
-deployment. После приёмки отдельно выполняются YDB migration и consumer label
-workflow/tag cutover в `ydb-platform/ydb`. `docs/deployment.md` различает новый
-install трёх таблиц и одноразовую migration из `v1.0.x`; автоматической DDL при
-создании runtime нет. До внешнего cutover действующий consumer не меняется.
+1. Перед каждой общей правкой `main` синхронизируется с `public/main` через
+   fast-forward pull.
+2. Реализацию ведёт независимый разработчик в чистом контексте, буквально
+   по `REQUIREMENTS_RU.md`. Новые решения без согласования не добавляются.
+3. Вся работа идёт напрямую в `main`, без feature branches и worktrees. Атомарные
+   изменения часто коммитятся и сразу пушатся. Каждый заявленный commit
+   проверяется через remote SHA.
+4. Для каждой атомарной задачи сначала пишется failing regression test, затем
+   минимальная реализация и focused checks.
+5. Независимый tester проверяет каждый атомарный task commit. Следующая
+   задача не начинается до PASS предыдущей.
+6. После всех задач один раз выполняются полный non-live suite, Ruff, mypy,
+   `git diff --check`, package build и installed smoke. Затем независимый reviewer
+   проверяет exact final tree.
+7. Только после приёмки передвигается release tag. После точной проверки
+   remote SHA удаляется старая translation branch тестового PR, на source PR
+   повторно ставится `doc_translate`, и ожидается новый translation PR.
+8. Полученный PR проходит независимую проверку. Цель — реальный GREEN
+   арбитра. Build/CI остаются отдельной операцией.
