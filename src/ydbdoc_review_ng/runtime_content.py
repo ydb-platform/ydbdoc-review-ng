@@ -677,6 +677,14 @@ class RuntimeContent:
 
         # §3.6 / §4.1: generated or inventory TOC must reach critic/arbiter with
         # source before/after snapshots, even when MetadataProducer wrote them.
+        # §1.2 intentional DELETE_TARGET is not a required-missing null (§4.2).
+        intentional_toc_deletes = {
+            item.target_path.value
+            for item in plans.translation_plan.inputs
+            if item.target_path is not None
+            and item.kind is PathKind.TOC
+            and item.action is PlanAction.DELETE_TARGET
+        }
         toc_snapshots: dict[str, dict[str, str | None]] = {}
         for path, value in plans.fixed_files:
             classified = classify_path(self.roots, RepoPath(path))
@@ -684,6 +692,21 @@ class RuntimeContent:
                 continue
             # Prefer the candidate/published TOC when present so continue replay
             # does not overwrite critic-corrected wording with a fresh delta draft.
+            if path in intentional_toc_deletes:
+                # Full source TOC delete: omit from required critic/arbiter map.
+                # Still attach source before/after so models see the deletion.
+                source_path = RepoPath(f"{source_root.value}/{classified.relative}")
+                before = self.source.github.read_bytes(
+                    self.source.source_base_snapshot, source_path
+                )
+                after = self.source.github.read_bytes(
+                    self.source.source_change_snapshot, source_path
+                )
+                toc_snapshots[source_path.value] = {
+                    "before": None if before is None else before.decode("utf-8"),
+                    "after": None if after is None else after.decode("utf-8"),
+                }
+                continue
             if path in candidate_files:
                 translated_files[path] = candidate_files[path]
             elif value is not None:
@@ -1186,6 +1209,12 @@ class RuntimeContent:
                         source_before, source_after, current, toc_path=raw.path
                     )
                 except TocDeltaError as error:
+                    # §7 / §5.2: malformed existing target TOC is not a load gate.
+                    # Keep the UTF-8 bytes (or null) so critic can repair them.
+                    if current is not None or not translate:
+                        files[target_path.value] = current
+                        toc_postconditions[target_path] = current
+                        continue
                     raise TranslationPlanError(str(error)) from None
                 content = draft.content
                 if (
@@ -2336,11 +2365,12 @@ class RuntimeContent:
     ) -> None:
         # Critic may rewrite href/hierarchy/conditions/labels (§3.6 / §4.1).
         # §7: any technically assembled UTF-8 publishes; YAML parse is not a gate.
+        # Production `_toc` raises RuntimeBoundaryError (not TranslationPlanError).
         from ydbdoc_review_ng.translation_plan import TranslationPlanError, _toc
 
         try:
             _toc(corrected, "translation_plan_toc_correction_invalid")
-        except TranslationPlanError:
+        except (RuntimeBoundaryError, TranslationPlanError):
             pass
         _ = (snapshot, path, expected)
 

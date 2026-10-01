@@ -98,12 +98,21 @@ def test_bug2_critic_malformed_yaml_toc_soft_publishes_via_reconcile() -> None:
 
 
 def test_bug2_review_pr_keeps_malformed_critic_toc_for_arbiter() -> None:
-    """End-to-end: validate_files soft path must retain critic TOC UTF-8."""
+    """Production path: RuntimeContent._validate_toc_correction soft-keeps critic TOC."""
+    from ydbdoc_review_ng.domain import GitSha, RepositoryId, SnapshotRef
+    from ydbdoc_review_ng.runtime_content import RuntimeContent
+    from ydbdoc_review_ng.runtime_github import RuntimeBoundaryError
+    from ydbdoc_review_ng.runtime_metadata import _toc
+
     toc = "ydb/docs/en/core/toc.yaml"
     page = "ydb/docs/en/core/page.md"
     draft = b"items:\n- name: Draft\n  href: page.md\n"
     bad = "items: [\n  - name: Critic fixed labels\n"
     page_text = "# Page\n"
+
+    # Production `_toc` raises RuntimeBoundaryError — the soft path must catch it.
+    with __import__("pytest").raises(RuntimeBoundaryError):
+        _toc(bad.encode(), "translation_plan_toc_correction_invalid")
 
     class Models:
         def __init__(self) -> None:
@@ -119,13 +128,13 @@ def test_bug2_review_pr_keeps_malformed_critic_toc_for_arbiter() -> None:
 
     def validate(files: dict[str, bytes]) -> None:
         seen.append(dict(files))
-        from ydbdoc_review_ng.runtime_github import RuntimeBoundaryError as RBE
-        from ydbdoc_review_ng.runtime_metadata import _toc
-
-        try:
-            _toc(files[toc], "translation_plan_toc_correction_invalid")
-        except RBE:
-            pass
+        # Call the real production soft-validator (not a fake that catches RBE).
+        RuntimeContent._validate_toc_correction(
+            SnapshotRef(RepositoryId("ydb-platform/ydb"), GitSha("a" * 40)),
+            RepoPath(toc),
+            draft,
+            files[toc],
+        )
         reconcile_candidate_outputs(
             build_translation_plan(
                 inventory(

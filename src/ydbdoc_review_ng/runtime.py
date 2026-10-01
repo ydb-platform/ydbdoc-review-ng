@@ -551,9 +551,8 @@ class RuntimeReporter:
             and self.source.continue_target_sha is None
             and head is None
         ):
-            # §4.2 / §7: still-zero-commit continue RED reports on the source PR.
-            if review.final.verdict is not Verdict.RED:
-                return
+            # §7: one current QA comment always reflects the final arbiter verdict,
+            # including GREEN/YELLOW continue after a prior RED with target_sha=null.
             report_context = ReportContext(
                 self.source.snapshots.source_snapshot.commit_sha,
                 self.source.snapshots.source_snapshot.commit_sha,

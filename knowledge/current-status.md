@@ -18,12 +18,17 @@
 **READY** vs `REQUIREMENTS_RU.md` на offline contract surface.
 
 Clean-slate review `78e0e58` Important 1–18 / Minor 19–22 закрыты ранее.
-Tip residuals after `6c373d6` (four holes under claimed #6/#7/#17/#18) FIXED-NOW:
-missing verify TOC soft-pending, critic TOC YAML soft-publish, delete-only
-`resource-review` continue/persistence, plan-level source TOC delete. См. `debt-map.md`.
+Tip residuals after `6c373d6` / `cbd0632` (holes under claimed soft-publish /
+TOC delete / continue QA):
 
-Focused regression: **291 passed** (tip-bug + plan/review/continue/persistence).
-Full non-live suite after tip residuals: **2226 passed / 0 failed** (1 deselected).
-One follow-up commit aligned stale e2e continue expectations (`54ce446`).
+| Hole | Status |
+|---|---|
+| A Critic/verify TOC soft-publish (`RuntimeBoundaryError`) | **FIXED** |
+| B Intentional TOC DELETE forced RED via required null | **FIXED** |
+| C GREEN continue noop left stale RED QA | **FIXED** |
 
+Witnesses: `tests/integration/test_tip_abc_holes_cbd0632.py` (production-path,
+no fake validators). См. `debt-map.md`.
+
+Focused regression: tip ABC + prior tip-bug / continue / plan suite.
 Live `doc_translate` gate ещё не доказан end-to-end credentials/push.

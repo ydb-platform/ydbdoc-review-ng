@@ -228,22 +228,32 @@ def test_continue_preserves_complete_corrected_toc_with_residual_finding(toc_nam
     assert services.files[EN + toc_name].decode() == corrected
 
 
-@pytest.mark.parametrize("fault", ["invalid_yaml", "outside", "binary"])
+@pytest.mark.parametrize("fault", ["outside", "binary"])
 def test_review_metadata_replay_rejects_tampering_before_models(fault):
+    """Path/type swaps are still fail-closed. Malformed YAML is soft-publish (§7)."""
     services = metadata_review_services()
     saved = services.start_review()
     snapshot = services.snapshots[saved.target_sha.value]
-    if fault == "invalid_yaml":
-        snapshot[EN + "toc.yaml"] = b"items: ["
-    else:
-        path = EN + ("toc_other.yaml" if fault == "outside" else "asset.png")
-        snapshot[path] = snapshot.pop(EN + "toc.yaml")
+    path = EN + ("toc_other.yaml" if fault == "outside" else "asset.png")
+    snapshot[path] = snapshot.pop(EN + "toc.yaml")
     with pytest.raises(application.WorkflowError):
         services.resume()
     # Critic/arbiter must not run after metadata tampering is proven.
     assert not any(role in {"critic", "arbiter"} for role in services.roles)
     assert not any(method in {"POST", "PATCH"} for method, _ in services.events)
     assert services.rows[saved.continuation_id]["status"] == "open"
+
+
+def test_review_metadata_replay_allows_soft_published_malformed_yaml_toc() -> None:
+    """§7: continue after soft-published malformed TOC UTF-8 must reach critic."""
+    services = metadata_review_services()
+    saved = services.start_review()
+    snapshot = services.snapshots[saved.target_sha.value]
+    snapshot[EN + "toc.yaml"] = b"items: ["
+    result = services.resume()
+    assert result.verdict in {Verdict.GREEN, Verdict.YELLOW, Verdict.RED}
+    assert "critic" in services.roles
+    assert services.rows[saved.continuation_id]["status"] in {"closed", "open"}
 
 
 def test_green_review_only_updates_current_verdict_and_consumes_without_commit(capsys):
