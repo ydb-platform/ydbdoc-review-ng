@@ -13,7 +13,7 @@
 | 3 | Whole-file translator, без DocumentChunk | pending |
 | 4 | TOC Python-delta + tests | pending |
 | 5 | Critic полные файлы → сразу push | pending |
-| 6 | Arbiter: YELLOW закрывает checkpoint | pending |
+| 6 | Arbiter: YELLOW закрывает checkpoint | done |
 | 7 | Continuation state v3 | pending |
 | 8 | `doc_verify` | pending |
 | 9 | Budget / reporting | pending |
@@ -26,5 +26,6 @@
 - `SourceSemanticAction` / `semantic_actions` в inventory ещё пишутся для continue codec (временный bridge).
 - `DocumentChunk` / chunk translator в `translation/document.py`.
 - `STATE_VERSION = 2` (нужен 3); поля `accepted_documents`, `candidate_sha256`.
-- YELLOW в continuation трактуется как незакрытый semantic stop (как RED).
+- ~~YELLOW в continuation трактуется как незакрытый semantic stop (как RED).~~
+  Checkpoint открывает только RED; YELLOW = успех, в QA — руки + `doc_verify`.
 - Старые per-pair `DirectionPairVerdict` / `select_direction` живут рядом с inventory classifier.

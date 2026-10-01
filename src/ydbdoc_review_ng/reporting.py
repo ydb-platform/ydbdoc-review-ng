@@ -166,6 +166,16 @@ def render_report(
                 ),
             )
         )
+    elif review.final.verdict is Verdict.YELLOW:
+        lines.extend(
+            (
+                "### Как продолжить",
+                (
+                    "Проблемы незначительные: поправьте translation branch вручную "
+                    "и поставьте label `doc_verify`."
+                ),
+            )
+        )
     elif context.probable_duplicates:
         lines.append("### Возможный дубликат")
         for warning in context.probable_duplicates:

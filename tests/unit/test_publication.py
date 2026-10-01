@@ -576,6 +576,7 @@ def test_residual_findings_keep_arbiter_status_and_red_only_continue_recipe(verd
         assert value in report
     assert ("/ydbdoc continue" in report) is (verdict == "RED")
     assert ("doc_continue" in report) is (verdict == "RED")
+    assert ("doc_verify" in report) is (verdict == "YELLOW")
     assert "Исправления не требуются" not in report
 
 
