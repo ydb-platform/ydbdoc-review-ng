@@ -124,6 +124,7 @@ from ydbdoc_review_ng.translation import (
     validate_translation_values,
 )
 from ydbdoc_review_ng.translation.document import verify_document_candidate_with_links
+from ydbdoc_review_ng.translation.language import validate_translated_prose
 from ydbdoc_review_ng.translation_plan import (
     PathKind,
     PlanAction,
@@ -568,6 +569,17 @@ class Limits:
                 raise RuntimeBoundaryError("source_character_limit_exceeded")
 
 
+def _operator_context_with_echo(
+    operator_context: str | None, diagnostics: list[str], /
+) -> str | None:
+    if not diagnostics:
+        return operator_context
+    echo = "Source-echo diagnostics:\n- " + "\n- ".join(diagnostics)
+    if operator_context is None or not operator_context.strip():
+        return echo
+    return operator_context.rstrip() + "\n\n" + echo
+
+
 class DirectionClient:
     def __init__(
         self, models: RecordedModels, model: str, operator_context: str | None = None
@@ -605,6 +617,7 @@ class RuntimeContent:
         self.plans: FrozenSourcePlans | None = None
         self.review_paths: tuple[RepoPath, ...] | None = None
         self.review_operator_context: str | None = None
+        self._source_echo_diagnostics: list[str] = []
         self.publisher: GitPublicationAdapter
         # Continue harness only: reopen unfinished translation checkpoints.
         self._legacy_pending_translation_stop = False
@@ -1710,6 +1723,12 @@ class RuntimeContent:
                     continue
                 try:
                     validate_chunk_response(chunk, prepared.placeholders, response)
+                    validate_translated_prose(
+                        chunk,
+                        response,
+                        entry.pair.source_locale.value,
+                        entry.pair.target_locale.value,
+                    )
                 except DocumentTranslationError as error:
                     code = str(error)
                     # REQUIREMENTS §2: assembled UTF-8 always publishes.
@@ -1726,6 +1745,27 @@ class RuntimeContent:
                             code=code,
                         )
                         return response, None, False
+                    # §2.2: one source-echo correction; residual echo still publishes.
+                    if code == "document_response:untranslated_source_prose":
+                        write_trace(
+                            "translation",
+                            "chunk_validation",
+                            "retry" if attempt == 1 else "ok",
+                            article=entry.pair.target_path.value,
+                            chunk_index=chunk_index,
+                            chunks_total=len(prepared.chunks),
+                            attempt=attempt,
+                            code=code,
+                        )
+                        if attempt == 2:
+                            self._source_echo_diagnostics.append(
+                                f"{entry.pair.target_path.value}: residual source echo after one "
+                                "correction; critic/arbiter must finish the translation."
+                            )
+                            return response, None, False
+                        note = code
+                        previous_response = result.text
+                        continue
                     write_trace(
                         "translation",
                         "chunk_validation",
@@ -2291,7 +2331,9 @@ class RuntimeContent:
             translated_files=translated_files,
             glossary_files=glossary_files,
             validate_files=validate_files,
-            operator_context=self.review_operator_context,
+            operator_context=_operator_context_with_echo(
+                self.review_operator_context, self._source_echo_diagnostics
+            ),
             before_model_call=check_head if snapshot.mode is Mode.DOC_CONTINUE else None,
             on_successful_critic_chunk=publish_critic_chunk,
             toc_snapshots=toc_snapshots,

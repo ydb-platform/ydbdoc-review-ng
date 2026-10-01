@@ -1537,21 +1537,26 @@ def test_invalid_indivisible_chunk_has_two_calls_and_safe_diagnostic(capsys) -> 
     assert all('Private-prose' not in json.dumps(event) for event in events)
 
 
-def test_copied_russian_paragraph_is_left_for_critic_editor() -> None:
+def test_copied_russian_paragraph_gets_one_echo_correction() -> None:
+    """REQUIREMENTS §2.2: one translator correction for residual Russian prose."""
     source = "Русский абзац о выполнении запросов должен быть полностью переведён.\n"
     translated = "The Russian paragraph about query execution must be fully translated.\n"
     models = ScriptedModels([source, translated])
     _, result = content_with(models)._translate_document(document_for(source.encode()))
-    assert result.translated_markdown == source
-    assert len(models.calls) == 1
+    assert result.translated_markdown == translated
+    assert len(models.calls) == 2
+    assert "untranslated_source_prose" in models.calls[1].prompt
 
 
-def test_repeated_source_echo_is_not_retried_before_critic_editor() -> None:
+def test_repeated_source_echo_publishes_with_diagnostic_after_one_retry() -> None:
+    """REQUIREMENTS §2.2: after one failed correction, publish and diagnose."""
     source = "Русский абзац о выполнении запросов должен быть полностью переведён.\n"
     models = ScriptedModels([source, source])
-    _, result = content_with(models)._translate_document(document_for(source.encode()))
+    content = content_with(models)
+    _, result = content._translate_document(document_for(source.encode()))
     assert result.translated_markdown == source
-    assert len(models.calls) == 1
+    assert len(models.calls) == 2
+    assert content._source_echo_diagnostics
 
 
 def test_cyrillic_inside_protected_code_does_not_require_translation() -> None:
