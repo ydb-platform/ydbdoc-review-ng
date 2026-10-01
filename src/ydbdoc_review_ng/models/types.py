@@ -58,7 +58,7 @@ class ModelRequest:
     model: str
     prompt: str = field(repr=False)
     schema: FrozenJson | None = field(repr=False)
-    max_tokens: int = 2000
+    expected_response: FrozenJson = field(default=None, repr=False)
     target_path: RepoPath | None = None
 
     def __post_init__(self) -> None:
@@ -68,12 +68,13 @@ class ModelRequest:
             raise ValueError("model must be a non-empty string")
         if type(self.prompt) is not str or not self.prompt:
             raise ValueError("prompt must be a non-empty string")
-        if type(self.max_tokens) is not int or self.max_tokens < 1:
-            raise ValueError("max_tokens must be a positive integer")
         if self.target_path is not None and type(self.target_path) is not RepoPath:
             raise TypeError("target_path must be RepoPath or None")
         if self.schema is not None:
             object.__setattr__(self, "schema", freeze_json(self.schema))
+        object.__setattr__(
+            self, "expected_response", freeze_json(mutable_json(self.expected_response))
+        )
 
 
 @dataclass(frozen=True, slots=True)

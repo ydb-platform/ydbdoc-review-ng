@@ -12,6 +12,11 @@ from decimal import Decimal, InvalidOperation
 from typing import Protocol, cast
 
 from ydbdoc_review_ng.domain import ModelRole
+from ydbdoc_review_ng.models.context import (
+    ContextBudget,
+    calculate_context_budget,
+    serialize_json,
+)
 from ydbdoc_review_ng.models.types import (
     AttemptError,
     AttemptRecorder,
@@ -298,7 +303,9 @@ class _BaseYandexClient:
     def __repr__(self) -> str:
         return f"{type(self).__name__}(credentials=<redacted>)"
 
-    def _payload(self, request: ModelRequest, model_uri: str) -> dict[str, object]:
+    def _payload(
+        self, request: ModelRequest, model_uri: str, max_tokens: int
+    ) -> dict[str, object]:
         raise NotImplementedError
 
     def _headers(self) -> dict[str, str]:
@@ -307,13 +314,17 @@ class _BaseYandexClient:
     def _parse(self, document: Mapping[str, object], role: ModelRole) -> _ParsedResponse:
         raise NotImplementedError
 
+    def prepare_request(self, request: ModelRequest, /) -> ContextBudget:
+        model_uri = normalize_model_uri(request.model, self.credentials.folder_id)
+        return calculate_context_budget(
+            lambda max_tokens: serialize_json(self._payload(request, model_uri, max_tokens)),
+            request.expected_response,
+        )
+
     def invoke(self, request: ModelRequest, /) -> ModelCallResult:
         if request.role is ModelRole.TRANSLATE and "gpt-oss" in request.model.lower():
             return ModelCallResult(None, AttemptError.UNSUPPORTED_MODEL, ())
-        model_uri = normalize_model_uri(request.model, self.credentials.folder_id)
-        body = json.dumps(
-            self._payload(request, model_uri), ensure_ascii=False, separators=(",", ":")
-        ).encode()
+        body = self.prepare_request(request).body
         wire_request = HttpRequest(
             self.endpoint,
             self._headers(),
@@ -414,13 +425,15 @@ class _BaseYandexClient:
 class NativeYandexClient(_BaseYandexClient):
     endpoint = NATIVE_ENDPOINT
 
-    def _payload(self, request: ModelRequest, model_uri: str) -> dict[str, object]:
+    def _payload(
+        self, request: ModelRequest, model_uri: str, max_tokens: int
+    ) -> dict[str, object]:
         payload: dict[str, object] = {
             "modelUri": model_uri,
             "completionOptions": {
                 "stream": False,
                 "temperature": 0,
-                "maxTokens": str(request.max_tokens),
+                "maxTokens": str(max_tokens),
                 "reasoningOptions": {"mode": "DISABLED"},
             },
             "messages": [{"role": "user", "text": request.prompt}],
@@ -443,12 +456,14 @@ class NativeYandexClient(_BaseYandexClient):
 class YandexOpenAIClient(_BaseYandexClient):
     endpoint = OPENAI_ENDPOINT
 
-    def _payload(self, request: ModelRequest, model_uri: str) -> dict[str, object]:
+    def _payload(
+        self, request: ModelRequest, model_uri: str, max_tokens: int
+    ) -> dict[str, object]:
         payload: dict[str, object] = {
             "model": model_uri,
             "stream": False,
             "temperature": 0,
-            "max_tokens": request.max_tokens,
+            "max_tokens": max_tokens,
             "reasoning_effort": "none",
             "messages": [{"role": "user", "content": request.prompt}],
         }

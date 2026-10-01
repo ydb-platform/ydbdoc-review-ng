@@ -249,7 +249,7 @@ def _corrective_translation_request(
         request.model,
         request.prompt + correction,
         cast(FrozenJson, mutable_json(request.schema)),
-        request.max_tokens,
+        request.expected_response,
         request.target_path,
     )
 
@@ -311,7 +311,7 @@ def _segment_translation_request(
             request.model,
             prompt,
             cast(FrozenJson, schema),
-            request.max_tokens,
+            {item.field_id: item.text for item in segment_fields},
             request.target_path,
         ),
         fallback,
@@ -596,6 +596,10 @@ class DirectionClient:
                     else "\n\nOperator context:\n" + self.operator_context
                 ),
                 cast(FrozenJson, schema),
+                expected_response={
+                    pair.key.relative_path.value: DirectionPairVerdict.COMPLETE_PAIR.value
+                    for pair in request.pairs
+                },
             )
         )
         if not result.success or result.text is None:
@@ -1367,8 +1371,7 @@ class RuntimeContent:
                     self.model,
                     "translate document chunk prose",
                     None,
-                    8000,
-                    entry.pair.target_path,
+                    target_path=entry.pair.target_path,
                 )
                 segment_request, segment_field, segment_contract, segments = (
                     _document_chunk_translation_request(
@@ -1408,7 +1411,7 @@ class RuntimeContent:
                     None
                     if segment_request.schema is None
                     else cast(FrozenJson, mutable_json(segment_request.schema)),
-                    segment_request.max_tokens,
+                    segment_request.expected_response,
                     segment_request.target_path,
                 )
                 result = self.models.invoke(request)
@@ -1663,7 +1666,7 @@ class RuntimeContent:
                 fallback_request.model,
                 fallback_request.prompt + "\n\nOperator context:\n" + operator_context,
                 fallback_request.schema,
-                fallback_request.max_tokens,
+                fallback_request.expected_response,
                 fallback_request.target_path,
             )
         fallback_result = self.models.invoke(fallback_request)

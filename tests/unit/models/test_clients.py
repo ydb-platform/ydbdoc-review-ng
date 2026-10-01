@@ -117,7 +117,10 @@ def openai_response(
 
 
 def request(model: str = "yandexgpt-5.1/latest") -> ModelRequest:
-    return ModelRequest(ModelRole.TRANSLATE, model, "translate secret-free prompt", SCHEMA, 321)
+    return ModelRequest(
+        ModelRole.TRANSLATE, model, "translate secret-free prompt", SCHEMA,
+        expected_response={"field-1": "Hello"},
+    )
 
 
 def native_client(
@@ -170,7 +173,7 @@ def test_native_payload_headers_and_short_model_normalization_are_exact() -> Non
         "completionOptions": {
             "stream": False,
             "temperature": 0,
-            "maxTokens": "321",
+            "maxTokens": str(1_048_576 - len(sent.body)),
             "reasoningOptions": {"mode": "DISABLED"},
         },
         "messages": [{"role": "user", "text": "translate secret-free prompt"}],
@@ -195,7 +198,7 @@ def test_openai_payload_headers_and_full_model_uri_are_exact() -> None:
         "model": model,
         "stream": False,
         "temperature": 0,
-        "max_tokens": 321,
+        "max_tokens": 1_048_576 - len(sent.body),
         "reasoning_effort": "none",
         "messages": [{"role": "user", "content": "translate secret-free prompt"}],
         "response_format": {
@@ -216,7 +219,7 @@ def test_native_raw_text_request_omits_json_schema_and_returns_message_text() ->
         "yandexgpt-5.1/latest",
         "translate complete Markdown",
         None,
-        321,
+        expected_response="# Complete Markdown\n",
     )
 
     result = native_client(transport, []).invoke(raw)
@@ -234,7 +237,7 @@ def test_openai_raw_text_request_omits_response_format_and_returns_message_conte
         "deepseek-v4-flash/latest",
         "translate complete Markdown",
         None,
-        321,
+        expected_response="# Complete Markdown\n",
     )
 
     result = openai_client(transport, []).invoke(raw)
