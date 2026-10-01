@@ -1,19 +1,12 @@
 # Банк знаний ydbdoc-review-ng
 
-Этот каталог содержит только действующие подтверждённые решения проекта. При
-конфликте приоритет имеет `REQUIREMENTS_RU.md`. Устаревшие варианты алгоритма и
-исторические журналы здесь не сохраняются.
+Только подтверждённые решения. При конфликте побеждает `REQUIREMENTS_RU.md`.
 
-- `architecture.md`: границы системы и неизменяемые инварианты.
-- `translation-algorithm.md`: построение scope, перевод полных файлов, отдельная
-  обработка TOC, critic и arbiter.
-- `model-api.md`: действующие контракты вызовов DeepSeek.
-- `testing.md`: правила тестирования и независимой приёмки.
-- `delivery.md`: локальный конвейер разработки и коммитов.
-- `current-status.md`: утверждённый semantic flow и фактический статус выкатки.
+- `architecture.md` — режимы и инварианты
+- `translation-algorithm.md` — scope, перевод, TOC, critic/arbiter
+- `model-api.md` — DeepSeek contracts
+- `testing.md` — TDD и witnesses
+- `delivery.md` — commits в `main`
+- `current-status.md` — что согласовано и где код
 
-Prompts критика и арбитра живые: их можно модифицировать при отладке без изменения
-orchestration, если их response contracts остаются совместимыми с runtime.
-
-Не хранить здесь секреты, полные model transcripts, временные планы агентов или
-неподтверждённые идеи.
+Не хранить секреты, полные transcripts, черновики агентов.

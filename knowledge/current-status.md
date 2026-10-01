@@ -1,39 +1,22 @@
 # Текущее состояние
 
-Канонические требования полностью переписаны в `REQUIREMENTS_RU.md` и опубликованы
-в `public/main`. Предыдущие независимые ревью выявили переходы continuation и
-manifest-only review, после чего требования были исправлены. Финальный независимый
-ревьюер прочитал весь документ на commit
-`bebb52ca6e84b47c6844e164a7a90d3b93787142` и вернул `APPROVED` без замечаний.
+## Согласованный контракт (2026-10-01)
 
-## Утверждённый semantic flow
+Упрощённый semantic flow в `REQUIREMENTS_RU.md`:
 
-1. Runtime берёт полные актуальные source-файлы frozen group, а не diff.
-2. DeepSeek переводит каждый файл целиком. TOC обрабатывается отдельно:
-   Python применяет source base→head structural delta, DeepSeek переводит только
-   новые и изменённые видимые строки.
-3. Все технически извлечённые UTF-8 файлы публикуются, даже если local
-   diagnostics нашли ошибки содержимого.
-4. Critic получает полные source/target пары, relevant glossary context и manifests,
-   а возвращает полные исправленные target-файлы. Findings и repair-loop нет.
-5. Каждый успешный critic-чанк сразу публикуется. Arbiter заново строит
-   чанки по финальным файлам и возвращает GREEN/YELLOW/RED.
-6. Arbiter findings идут непосредственно в отчёт. Они не исправляются и никуда не
-   передаются. YELLOW операционно равен RED.
-7. Build, `build-docs`, `doc_verify` checks и иная CI не участвуют в semantic verdict.
+1. Файлы PR + дотянутые missing-target зависимости.
+2. Direction: только «нужен перевод?» + направление (Python владеет Git-ops).
+3. Whole-file translate; TOC — Python delta + перевод строк.
+4. Всегда публикуем собранный UTF-8.
+5. Critic правит полные файлы и пушит.
+6. Arbiter: GREEN / YELLOW / RED.
+7. YELLOW = успех (ручная правка + `doc_verify`); RED = continue / ручная правка.
+8. Режимы: `doc_translate`, `doc_verify`, `doc_continue`.
 
-## Текущий deployment status
+## Код
 
-Требования готовы к буквальной реализации независимым разработчиком.
-Код ещё не приведён к новому контракту. Release tag ещё не сдвинут, старая
-translation branch тестового PR ещё не удалена, новый `doc_translate` ещё не
-запущен.
+Код **не** приведён к контракту. В runtime ещё chunk-translator, старые
+semantic-action пути, YELLOW≈RED в continuation и прочий долг ChatGPT-эпохи.
 
-Порядок следующих действий:
-
-1. Независимый разработчик реализует требования на `main` с частыми commits.
-2. Независимые тестер и ревьюер проверяют готовый tree.
-3. После зелёной приёмки commit пушится, release tag передвигается на точный SHA.
-4. Старая translation branch удаляется, на source PR повторно ставится `doc_translate`,
-   ожидается новый translation PR.
-5. Новый PR проходит независимую проверку. Цель — честный GREEN арбитра.
+Следующий шаг: буквально выровнять код под сжатые требования, TDD, commits в
+`main`, обновляя `knowledge/` при каждом зафиксированном решении.
