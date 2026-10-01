@@ -17,8 +17,9 @@
 
 **READY** vs `REQUIREMENTS_RU.md` на offline contract surface.
 
-Срезы 1–10, second/third-review residuals, five production continue/critic
-bugs, и independent-audit findings A/B закрыты. См. `debt-map.md`.
+Clean-slate review `78e0e58` Important 1–18 / Minor 19–22 закрыты на tip
+`947a556` (21 FIXED-NOW, 1 INCORRECT = #2 mixed-locale). См. `debt-map.md`.
 
-Остаточный operational риск: live `doc_translate` gate ещё не доказан
+Offline suite: **14 failed / 2123 passed** (лучше tip baseline 22 failed; без
+новых регрессий относительно tip). Live `doc_translate` gate ещё не доказан
 end-to-end credentials/push.

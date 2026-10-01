@@ -73,6 +73,36 @@ complete_pair/no_action/saved_head test rewrites.
 | A | Continue still-zero-commit RED → head mismatch + silent report | **fixed** | noop→null checkpoint_sha + source-PR RED report |
 | B | `render_report` upgrades arbiter GREEN→YELLOW on probable_duplicates | **fixed** | QA color = arbiter; duplicates stay advisory note |
 
+## Clean-slate review 78e0e58 (2026-10-01)
+
+External Important 1–18 + Minor 19–22 vs `REQUIREMENTS_RU.md`. Tip after closeout:
+`947a556` (base was `78e0e58`).
+
+| # | Finding | Status | Notes |
+|---|---|---|---|
+| 1 | Critic chunk rolls back prior push | **fixed** | accumulate `published_corrections` |
+| 2 | Mixed-locale translates unchanged source | **incorrect** | §1.2 both-locale pairs stay in translate scope after complete-pair removal |
+| 3 | Delete blocked by TOC link check | **fixed** | §3.5 diagnostic, not gate |
+| 4 | New article+TOC can't create target TOC | **fixed** | missing TOC deferred to §3.4 delta |
+| 5 | TOC delta drops dependency entry | **fixed** | prefer in-flight metadata draft |
+| 6 | doc_verify rejects missing TOC pre-critic | **fixed** | missing TOC → null for critic |
+| 7 | Critic TOC UTF-8 blocked by YAML gate | **fixed** | soft-publish any assembled UTF-8 |
+| 8 | Null required target can finish GREEN | **fixed** | null → unreviewed RED |
+| 9 | Zero-commit silent GREEN | **fixed** | force RED + source report + null SHA |
+| 10 | GitHub pagination aborts on rel=next | **fixed** | follow Link pages |
+| 11 | Resource-only arbiter empty enum | **fixed** | manifest paths in finding enum |
+| 12 | Bash `${…#…}` treated as comment | **fixed** | skip parameter expansions |
+| 13 | Delete-only TOC forced as required null | **fixed** | omit intentional no-create |
+| 14 | Continue noop nulls existing target_sha | **fixed** | preserve `snapshot.target_sha` |
+| 15 | First NON_FINAL forgotten on 2nd fail | **fixed** | `saw_non_final` retained |
+| 16 | Incomplete translation not in pending | **fixed** | REVIEW pending + continue translate |
+| 17 | resource-review path_mismatch | **fixed** | synthetic path in reviewable |
+| 18 | Full source TOC delete not mirrored | **fixed** | Git delete → target TOC delete |
+| 19 | Comment-only TOC → unsupported | **fixed** | keep target, zero strings |
+| 20 | SQL/YQL comments translated | **fixed** | unsupported language fully opaque |
+| 21 | Continue-created PR missing source link | **fixed** | DOC_CONTINUE posts source link |
+| 22 | Limit comment missing YDBDOC_MAX_* | **fixed** | variable name in comment |
+
 ## Известные расхождения в коде
 
 - Complete-pair Git heuristic removed; both-locale edits stay in translate scope.
