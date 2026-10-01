@@ -61,6 +61,6 @@ vs `REQUIREMENTS_RU.md`. Fix only contract violations; skip invented requirement
 - `doc_verify` GREEN/YELLOW closes prior RED checkpoint.
 - TOC scope hash ignores volatile `expected_sha256` wording; review-stage continue skips TOC string retranslate.
 - Offline focused suite green; **live PR / production `doc_translate` still pending**.
-- Three pre-existing continue integration failures remain on main unrelated to this triage
-  (`test_translation_pr_uses_saved_head…`, `test_direction_selection_excludes_complete_pair…`,
-  `test_selected_no_action_survives_translation_checkpoint…`).
+- Continue tests that still expected per-file `complete_pair` exclusion or translation-PR
+  continue after branch-delete/`target_sha=null` were updated to §1.1/§1.2/§5.1 contracts
+  (stale expectations, not production bugs).

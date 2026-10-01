@@ -196,7 +196,14 @@ def test_pending_only_preserves_accepted_source_fragments_and_records_current_co
     )
 
 
-def test_translation_pr_uses_saved_head_after_source_base_and_inventory_move():
+def test_continue_uses_saved_inventory_after_source_head_and_inventory_move():
+    """§5.3: continue freezes source inventory/SHA; live source PR head is ignored.
+
+    New ``doc_translate`` deletes the translation branch before work (§5.1), so a
+    harness translation-stage stop has ``target_sha=null`` and is continued from
+    the source PR. Translation-PR continue still requires a matching published head.
+    """
+
     class MovedSource(ContinueServices):
         def github(self, method, path, payload):
             relative = path.removeprefix("/repos/ydb-platform/ydb")
@@ -205,27 +212,21 @@ def test_translation_pr_uses_saved_head_after_source_base_and_inventory_move():
                 assert "/files?" not in relative, "checkpoint owns the source inventory"
             result = super().github(method, path, payload)
             if self.continuing and relative == "/pulls/42":
+                result = dict(result)
+                result["head"] = dict(result["head"])
                 result["head"]["sha"] = "f" * 40
                 result["changed_files"] = 99
             return result
 
     services = MovedSource(names=("a", "b"), stop="translation")
-    services.branch_head = services.translated
-    services.snapshots[services.translated] = {
-        **services.files,
-        EN + "a.md": b"# Poison accepted target\n",
-        EN + "b.md": b"# Poison pending target\n",
-    }
-    services.pr_exists = True
     saved = services.stop_and_continue()
-    result = services.resume(43)
+    assert saved.target_sha is None
+    result = services.resume(42)
     assert result.verdict is Verdict.GREEN
-    assert services.parents == [[saved.target_sha.value]]
     assert services.roles[:1] == ["translate"] and services.roles[-2:] == ["critic", "arbiter"]
-    assert services.files[EN + "a.md"] in {b"# Translated\n", b"# Resumed a\n"}
     assert services.files[EN + "b.md"] == b"# Resumed b\n"
     assert all("ref=" + services.source in path for path in services.reads if "/ru/core/" in path)
-    assert services.jobs[result.job_id]["pr_number"] == 43
+    assert services.jobs[result.job_id]["pr_number"] == 42
     assert services.rows[saved.continuation_id]["status"] == "closed"
     assert sum("<!-- ydbdoc-current-qa -->" in c["body"] for c in services.comments) == 1
 
@@ -378,14 +379,19 @@ def test_direction_retry_alone_hands_off_new_job_without_extending_expiry():
     assert services.commits == 0
 
 
-def test_direction_selection_excludes_complete_pair_before_translation():
+def test_direction_selection_translates_all_markdown_pairs_for_selected_direction():
+    """§1.1/§1.2: one selected direction; Python translates every Markdown pair.
+
+    Fixture ``complete_pair`` labels only feed the direction-only JSON helper; they
+    do not exclude individual pages once ``translation_required`` is true.
+    """
     services = ContinueServices(names=("a", "b"), stop="direction")
     saved = services.stop_and_continue()
     services.direction_values = {"a.md": "complete_pair", "b.md": "ru_to_en"}
     result = services.resume()
     assert result.verdict is Verdict.GREEN
-    assert services.roles == ["direction", "translate", "critic", "arbiter"]
-    assert services.files[EN + "a.md"] == b"# Old a\n"
+    assert services.roles == ["direction", "translate", "translate", "critic", "arbiter"]
+    assert services.files[EN + "a.md"] in {b"# Translated\n", b"# Resumed a\n"}
     assert services.files[EN + "b.md"] == b"# Resumed b\n"
     assert services.rows[saved.continuation_id]["status"] == "closed"
     assert all(
@@ -395,7 +401,8 @@ def test_direction_selection_excludes_complete_pair_before_translation():
     )
 
 
-def test_selected_no_action_survives_translation_checkpoint_without_reclassification():
+def test_selected_direction_survives_translation_checkpoint_without_reclassification():
+    """Saved direction continues pending translation without a second classifier call."""
     services = ContinueServices(names=("a", "b"), stop="direction")
     services.stop_and_continue()
     services.direction_values = {"a.md": "complete_pair", "b.md": "ru_to_en"}
@@ -406,8 +413,9 @@ def test_selected_no_action_survives_translation_checkpoint_without_reclassifica
     services.invalid_pending = None
     services.roles.clear()
     services.resume()
+    assert "direction" not in services.roles
     assert services.roles[:1] == ["translate"] and services.roles[-2:] == ["critic", "arbiter"]
-    assert services.files[EN + "a.md"] == b"# Old a\n"
+    assert services.files[EN + "a.md"] in {b"# Translated\n", b"# Resumed a\n"}
     assert services.files[EN + "b.md"] == b"# Resumed b\n"
 
 

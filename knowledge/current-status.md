@@ -20,4 +20,6 @@ residuals 1–9 закрыты против `REQUIREMENTS_RU.md`: soft-publish d
 (Markdown/YAML/structure) не gate, continue для missing/null targets и
 soft-published RED, zero-text NON_FINAL → RED, TOC same-name prune + empty-target
 ancestor string IDs, линейный source-echo detector. См. `debt-map.md`.
-Остаётся live `doc_translate` gate.
+Continue tests that still expected per-file `complete_pair` exclusion or
+translation-PR continue after branch-delete/`target_sha=null` were rewritten to
+§1.1/§1.2/§5.1 (stale expectations). Остаётся live `doc_translate` gate.
