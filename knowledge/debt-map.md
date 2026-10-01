@@ -16,7 +16,7 @@
 | 6 | Arbiter: YELLOW закрывает checkpoint | done |
 | 7 | Continuation state v3 | done |
 | 8 | Soft-publish частичных translation success до critic | done |
-| 9 | `doc_verify` | pending |
+| 9 | `doc_verify` | done |
 | 10 | Budget / reporting | pending |
 | 11 | Full suite + live PR | pending |
 

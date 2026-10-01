@@ -199,7 +199,7 @@ class FakeReviewer:
         del snapshot
         self.scenario.hit("review:t011")
         self.scenario.hit("review:critic-editor")
-        self.scenario.model_calls.append("critic")
+        self.scenario.model_calls.extend(["critic", "arbiter"])
         green = CriticResult(Verdict.GREEN, ())
         if not self.scenario.repair and not self.scenario.invalid_review:
             return QualityReviewResult(
@@ -359,7 +359,7 @@ def test_translate_success_reviews_then_publishes_once_and_terminalizes() -> Non
         "report:current-pr-verdict",
         "job:finish:succeeded",
     ]
-    assert scenario.model_calls == ["translate", "critic"]
+    assert scenario.model_calls == ["translate", "critic", "arbiter"]
     assert scenario.published_branches == ["translation/pr-42"]
     assert persistence.finished_errors == [None]
     assert SECRET not in repr(result)
@@ -388,11 +388,12 @@ def test_translate_applies_critic_edit_and_publishes_exactly_once() -> None:
         "report:current-pr-verdict",
         "job:finish:succeeded",
     ]
-    assert scenario.model_calls == ["translate", "critic"]
+    assert scenario.model_calls == ["translate", "critic", "arbiter"]
     assert scenario.published_branches == ["translation/pr-42", "translation/pr-42"]
 
 
 def test_verify_success_never_checks_budget_or_translates_and_publishes_once() -> None:
+    """REQUIREMENTS §5.2: no budget gate, no translator; critic+arbiter on head."""
     scenario = Scenario()
     workflows, _ = build_workflows(scenario)
 
@@ -412,7 +413,9 @@ def test_verify_success_never_checks_budget_or_translates_and_publishes_once() -
         "report:current-pr-verdict",
         "job:finish:succeeded",
     ]
-    assert scenario.model_calls == ["critic"]
+    assert "budget" not in scenario.events
+    assert "prepare:direction-scope-translate-assemble-reparse" not in scenario.events
+    assert scenario.model_calls == ["critic", "arbiter"]
     assert scenario.published_branches == ["translation/pr-42"]
 
 
@@ -436,7 +439,7 @@ def test_verify_repair_validates_and_commits_once_to_same_branch() -> None:
         "report:current-pr-verdict",
         "job:finish:succeeded",
     ]
-    assert scenario.model_calls == ["critic"]
+    assert scenario.model_calls == ["critic", "arbiter"]
     assert scenario.published_branches == ["translation/pr-42"]
 
 
@@ -654,7 +657,7 @@ def test_corrected_candidate_failure_prevents_report(failed_event: str) -> None:
     if failed_event == "publish:repair":
         expected_before_failure.append("publish:repair")
     assert scenario.events == [*expected_before_failure, "job:finish:failed"]
-    assert scenario.model_calls == ["critic"]
+    assert scenario.model_calls == ["critic", "arbiter"]
     assert "report:current-pr-verdict" not in scenario.events
     assert persistence.finished_errors[-1] == f"{captured.value.stage.value}_failed"
 
@@ -690,7 +693,7 @@ def test_invalid_critic_edit_fails_review_without_publication_or_semantic_verdic
         "review:critic-editor",
         "job:finish:failed",
     ]
-    assert scenario.model_calls == (["translate", "critic"] if mode == "translate" else ["critic"])
+    assert scenario.model_calls == (["translate", "critic", "arbiter"] if mode == "translate" else ["critic", "arbiter"])
     assert scenario.published_branches == (
         ["translation/pr-42"] if mode == "translate" else []
     )

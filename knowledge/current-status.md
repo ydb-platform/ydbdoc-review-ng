@@ -15,7 +15,8 @@
 
 ## Код
 
-Срезы 1–3, 5–8 закрыты на local `main` (dependency+limits, soft-publish,
+Срезы 1–3, 5–9 закрыты на local `main` (dependency+limits, soft-publish,
 critic chunking+immediate push, continuation v3, YELLOW=success, whole-file
-translate, direction-only; мёртвый `select_direction` удалён). TOC §3 пока
-append-only. Остаётся: полный TOC delta, `doc_verify`/budget — см. `debt-map.md`.
+translate, direction-only; мёртвый `select_direction` удалён; `doc_verify`
+без translator/budget, critic+arbiter на translation head). TOC §3 пока
+append-only. Остаётся: полный TOC delta, budget/reporting — см. `debt-map.md`.
