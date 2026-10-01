@@ -85,6 +85,9 @@ class AdmissionServices:
 
     def github(self, method, path, payload):
         self.calls.append((method, path))
+        if method == "DELETE" and "/labels/" in path:
+            self.effects.append((method, path))
+            return None
         if method != "GET":
             self.effects.append((method, path))
             raise AssertionError("unexpected GitHub mutation")
@@ -134,6 +137,13 @@ def admit(services, pr=42, allowed="writer", now=NOW):
     return source.authorize_continue(pr, YdbPersistence(services), now=now)
 
 
+
+def expect_label_removed(services, pr=42):
+    assert services.effects == [
+        ("DELETE", f"/repos/ydb-platform/ydb/issues/{pr}/labels/doc_continue")
+    ]
+
+
 @pytest.mark.parametrize("pr", [42, 52])
 def test_source_and_translation_pr_resolve_same_checkpoint_without_branch_guessing(services, pr):
     result = admit(services, pr)
@@ -145,7 +155,7 @@ def test_source_and_translation_pr_resolve_same_checkpoint_without_branch_guessi
     assert result.checkpoint.translation_branch == BRANCH
     assert result.trigger.operator_context == "private context\nsecond line\n"
     assert "private context" not in repr(result)
-    assert services.effects == []
+    expect_label_removed(services, pr)
 
 
 def test_prepublication_checkpoint_needs_no_translation_pr(services):
@@ -154,7 +164,7 @@ def test_prepublication_checkpoint_needs_no_translation_pr(services):
     services.head = None
     result = admit(services)
     assert result.checkpoint.target_sha is None
-    assert services.effects == []
+    expect_label_removed(services)
 
 
 def test_v1_checkpoint_is_rejected_before_models_or_external_mutations(services):
@@ -303,7 +313,7 @@ def test_translation_pr_provenance_selects_matching_checkpoint_among_stale_roots
     result = admit(services, 52)
 
     assert result.checkpoint.continuation_id == "checkpoint-1"
-    assert services.effects == []
+    expect_label_removed(services, 52)
 
 
 def test_actual_actors_are_authorized_even_when_actions_actor_is_different(services):
@@ -354,6 +364,8 @@ def test_selected_command_edited_at_or_after_label_rejects_without_fallback(serv
         }
     )
     assert admit(services).trigger.comment_id == 2
+    expect_label_removed(services)
+    services.effects.clear()
     services.comments[0].update(
         body="/ydbdoc continue\nprivate replacement context", updated_at=updated_at
     )
@@ -379,7 +391,7 @@ def test_prelabel_edit_is_retained_and_selection_still_uses_creation_time(servic
     result = admit(services)
     assert result.trigger.comment_id == 2
     assert result.trigger.operator_context == "private context\nsecond line\n"
-    assert services.effects == []
+    expect_label_removed(services)
 
 
 @pytest.mark.parametrize(
@@ -395,6 +407,8 @@ def test_prelabel_edit_is_retained_and_selection_still_uses_creation_time(servic
 )
 def test_invalid_comment_update_timestamp_fails_closed(services, updated_at, capsys):
     assert admit(services).trigger.comment_id == 2
+    expect_label_removed(services)
+    services.effects.clear()
     if updated_at == "missing":
         del services.comments[0]["updated_at"]
     else:

@@ -151,7 +151,7 @@ class GitHubHTTP:
                             raise RuntimeBoundaryError("github_result_exceeds_single_page")
                         return json.loads(response.read())
                 except urllib.error.HTTPError as error:
-                    if error.code == 404 and method == "GET":
+                    if error.code == 404 and method in {"GET", "DELETE"}:
                         return None
                     retryable = method == "GET" and error.code in _RETRYABLE_GITHUB_STATUSES
                 except (OSError, ValueError):
@@ -283,6 +283,21 @@ class GitHubBackend:
     def head(self, branch: str) -> GitSha | None:
         data = self.request("GET", "/git/ref/heads/" + urllib.parse.quote(branch, safe="/"))
         return None if data is None else GitSha(data["object"]["sha"])
+
+    def delete_branch(self, branch: str) -> None:
+        """Delete a remote branch ref. Missing refs are a successful no-op (§5.1)."""
+        if self.head(branch) is None:
+            return
+        self.request("DELETE", "/git/refs/heads/" + urllib.parse.quote(branch, safe="/"))
+
+    def remove_label(self, pr_number: int, label: str) -> None:
+        """Drop an accepted trigger label. Missing labels are a successful no-op (§0)."""
+        encoded = urllib.parse.quote(label, safe="")
+        try:
+            self.request("DELETE", f"/issues/{pr_number}/labels/{encoded}")
+        except RuntimeBoundaryError:
+            # Label already absent or race with another unlabel — admission already passed.
+            return
 
     def commit(self, context: PublicationContext, plan: PublicationPlan, /) -> GitSha:
         if plan.metadata:

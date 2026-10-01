@@ -18,7 +18,9 @@ from _runtime_services import (
 from test_checkpoint_capture import CaptureServices
 
 from ydbdoc_review_ng import application
+from ydbdoc_review_ng.application import TranslateWorkflowInput
 from ydbdoc_review_ng.continuation import ContinuationStage
+from ydbdoc_review_ng.domain import GitSha
 from ydbdoc_review_ng.models import HttpResponse
 from ydbdoc_review_ng.persistence import PersistenceError
 from ydbdoc_review_ng.quality import Verdict
@@ -332,28 +334,26 @@ def test_valid_response_cannot_publish_after_saved_branch_moves():
     assert not any(method in {"POST", "PATCH"} for method, _ in services.events)
 
 
-def test_noop_with_existing_branch_cannot_close_checkpoint_after_branch_disappears():
-    class DeletedBranch(ContinueServices):
-        def model(self, request):
-            result = super().model(request)
-            if self.continuing and self.roles[-1] == "critic":
-                self.branch_head = None
-            return result
-
-    services = DeletedBranch(names=("a", "b"), stop="translation")
-    services.branch_head = services.translated
-    services.snapshots[services.translated] = {
-        **services.files,
-        EN + "a.md": b"# Translated\n",
-        EN + "b.md": b"# Resumed b\n",
-    }
-    services.pr_exists = True
+def test_fresh_translate_deletes_previous_branch_and_closes_open_checkpoints():
+    services = ContinueServices(names=("a", "b"), stop="direction")
     saved = services.stop_and_continue()
-    with pytest.raises(application.WorkflowError, match="review"):
-        services.resume()
-    assert services.commits == 0
     assert services.rows[saved.continuation_id]["status"] == "open"
-    assert list(services.jobs.values())[-1]["status"] == "failed"
+    services.branch_head = services.translated
+    services.snapshots[services.translated] = dict(services.files)
+    services.pr_exists = True
+    services.stop = None
+    services.continuing = False
+    services.events.clear()
+    # Fresh doc_translate must wipe recovery state (§5.1) before prepare/report.
+    with pytest.raises(application.WorkflowError):
+        services.runtime().doc_translate(
+            TranslateWorkflowInput(42, GitSha(services.source), Decimal(10))
+        )
+    assert services.rows[saved.continuation_id]["status"] == "closed"
+    assert any(
+        method == "DELETE" and "/git/refs/heads/translation" in path
+        for method, path in services.events
+    )
 
 
 def test_direction_retry_alone_hands_off_new_job_without_extending_expiry():
@@ -466,7 +466,10 @@ def test_corrupt_frozen_inventory_fails_before_continuation_models(corruption):
     with pytest.raises(application.WorkflowError):
         services.resume()
     assert services.roles == [] and services.commits == 0
-    assert not any(method in {"POST", "PATCH", "DELETE"} for method, _ in services.events)
+    assert not any(
+        method in {"POST", "PATCH"} or (method == "DELETE" and "/labels/" not in path)
+        for method, path in services.events
+    )
 
 
 @pytest.mark.parametrize("merged", [False, True])

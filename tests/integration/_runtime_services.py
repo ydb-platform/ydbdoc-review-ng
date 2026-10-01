@@ -238,6 +238,11 @@ class RuntimeServices:
             return {"object": {"sha": self.base}}
         if path.startswith("/git/ref/heads/translation"):
             return None if self.branch_head is None else {"object": {"sha": self.branch_head}}
+        if method == "DELETE" and path.startswith("/git/refs/heads/translation"):
+            self.branch_head = None
+            return None
+        if method == "DELETE" and "/labels/" in path:
+            return None
         if path.startswith("/contents/"):
             name = path[10:].split("?")[0]
             content = self.files.get(name)

@@ -664,6 +664,21 @@ class YdbPersistence:
             {"continuation_id": continuation_id},
         )
 
+    def close_open_checkpoints(self, *, source_pr: int, translation_branch: str) -> None:
+        """Close live open/pending recovery state for a translation branch (§5.1 / §5.2)."""
+        rows = self._execute(
+            "checkpoint list for translation reset",
+            f"""SELECT continuation_id, status, translation_branch FROM `{self._table("continuations")}`
+                WHERE source_pr = $pr_number;""",
+            {"pr_number": source_pr},
+        )
+        for row in rows:
+            if (
+                row.get("translation_branch") == translation_branch
+                and row.get("status") in {"open", "pending"}
+            ):
+                self.close_checkpoint(str(row["continuation_id"]))
+
     @staticmethod
     def _require_open(checkpoint: ContinuationCheckpoint, now: datetime) -> None:
         YdbPersistence._require_live(checkpoint, now)

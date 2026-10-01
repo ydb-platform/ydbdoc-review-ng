@@ -163,6 +163,9 @@ class CaptureServices(RuntimeServices):
             return {"sha": self.translated}
         if relative == "/git/refs" or relative.startswith("/git/refs/heads/"):
             self.events.append((method, path))
+            if method == "DELETE":
+                self.branch_head = None
+                return {}
             self.branch_head = payload["sha"]
             self.files = dict(self.snapshots[self.branch_head])
             return {}
@@ -496,12 +499,12 @@ def test_provider_non_final_translation_is_rejected_before_publication():
         services.translate()
 
     attempts = [row for row in services.audit if "attempt_id" in row]
-    # Both the primary and the existing alternate translator are bounded to
-    # two identical transport attempts before the workflow fails closed.
-    # Non-final provider status fails closed without publishing.
-    assert [role for role in services.roles if role != "direction"] == ["translate"]
-    attempts = [row for row in attempts if row["role"] == "translate"]
-    assert len(attempts) == 1 and all(row["error"] == "non_final" for row in attempts)
+    # Soft-publish (§5.1): translator NON_FINAL becomes a null path and the job
+    # still reaches critic/arbiter. Critic NON_FINAL likewise retries then fails.
+    assert "translate" in services.roles
+    assert "critic" in services.roles
+    translate_attempts = [row for row in attempts if row["role"] == "translate"]
+    assert translate_attempts and all(row["error"] == "non_final" for row in translate_attempts)
     assert services.commits == 0 and services.blobs == {} and services.tree == []
 
 

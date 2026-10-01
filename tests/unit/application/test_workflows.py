@@ -120,6 +120,11 @@ class FakePersistence:
         assert now == NOW
         self.scenario.hit("budget")
 
+    def close_open_checkpoints(self, *, source_pr: int, translation_branch: str) -> None:
+        assert source_pr == 42
+        assert translation_branch == "translation/pr-42"
+        self.scenario.hit(f"checkpoint:close_open:{source_pr}:{translation_branch}")
+
 
 class FakeSource:
     def __init__(self, scenario: Scenario) -> None:
@@ -144,7 +149,12 @@ class FakeSource:
     def authorize_verify(self, request: VerifyWorkflowInput, /) -> AuthorizedRun:
         assert request.target_sha == TARGET_SHA
         self.scenario.hit("authorize:verify")
-        return AuthorizedRun(Mode.DOC_VERIFY, "translation/pr-42", TARGET_SHA, object())
+        return AuthorizedRun(
+            Mode.DOC_VERIFY,
+            "translation/pr-42",
+            TARGET_SHA,
+            (request, 42, "main"),
+        )
 
     def snapshot_verify(self, authorization: AuthorizedRun, /) -> ImmutableRunSnapshot:
         assert authorization.mode is Mode.DOC_VERIFY
@@ -349,6 +359,7 @@ def test_translate_success_reviews_then_publishes_once_and_terminalizes() -> Non
     assert scenario.events == [
         "job:start",
         "authorize:translate",
+        "checkpoint:close_open:42:translation/pr-42",
         "snapshot:translate",
         "budget",
         "prepare:direction-scope-translate-assemble-reparse",
@@ -376,6 +387,7 @@ def test_translate_applies_critic_edit_and_publishes_exactly_once() -> None:
     assert scenario.events == [
         "job:start",
         "authorize:translate",
+        "checkpoint:close_open:42:translation/pr-42",
         "snapshot:translate",
         "budget",
         "prepare:direction-scope-translate-assemble-reparse",
@@ -411,6 +423,7 @@ def test_verify_success_never_checks_budget_or_translates_and_publishes_once() -
         "validate:initial",
         "publish:initial",
         "report:current-pr-verdict",
+        "checkpoint:close_open:42:translation/pr-42",
         "job:finish:succeeded",
     ]
     assert "budget" not in scenario.events
@@ -437,6 +450,7 @@ def test_verify_repair_validates_and_commits_once_to_same_branch() -> None:
         "validate:repair",
         "publish:repair",
         "report:current-pr-verdict",
+        "checkpoint:close_open:42:translation/pr-42",
         "job:finish:succeeded",
     ]
     assert scenario.model_calls == ["critic", "arbiter"]
@@ -532,6 +546,7 @@ def test_scope_limit_failure_stops_before_model_calls_and_publication(diagnostic
     assert scenario.events == [
         "job:start",
         "authorize:translate",
+        "checkpoint:close_open:42:translation/pr-42",
         "snapshot:translate",
         "budget",
         "prepare:scope-limit",
@@ -545,13 +560,14 @@ def test_scope_limit_failure_stops_before_model_calls_and_publication(diagnostic
         ("authorize:translate", ["job:start", "authorize:translate"]),
         (
             "snapshot:translate",
-            ["job:start", "authorize:translate", "snapshot:translate"],
+            ["job:start", "authorize:translate", "checkpoint:close_open:42:translation/pr-42", "snapshot:translate"],
         ),
         (
             "validate:initial",
             [
                 "job:start",
                 "authorize:translate",
+                "checkpoint:close_open:42:translation/pr-42",
                 "snapshot:translate",
                 "budget",
                 "prepare:direction-scope-translate-assemble-reparse",
@@ -563,6 +579,7 @@ def test_scope_limit_failure_stops_before_model_calls_and_publication(diagnostic
             [
                 "job:start",
                 "authorize:translate",
+                "checkpoint:close_open:42:translation/pr-42",
                 "snapshot:translate",
                 "budget",
                 "prepare:direction-scope-translate-assemble-reparse",
@@ -575,6 +592,7 @@ def test_scope_limit_failure_stops_before_model_calls_and_publication(diagnostic
             [
                 "job:start",
                 "authorize:translate",
+                "checkpoint:close_open:42:translation/pr-42",
                 "snapshot:translate",
                 "budget",
                 "prepare:direction-scope-translate-assemble-reparse",
@@ -588,6 +606,7 @@ def test_scope_limit_failure_stops_before_model_calls_and_publication(diagnostic
             [
                 "job:start",
                 "authorize:translate",
+                "checkpoint:close_open:42:translation/pr-42",
                 "snapshot:translate",
                 "budget",
                 "prepare:direction-scope-translate-assemble-reparse",
@@ -687,6 +706,7 @@ def test_invalid_critic_edit_fails_review_without_publication_or_semantic_verdic
     assert scenario.events == [
         "job:start",
         f"authorize:{mode}",
+        *( ["checkpoint:close_open:42:translation/pr-42"] if mode == "translate" else [] ),
         f"snapshot:{mode}",
         *preparation,
         "review:t011",
@@ -714,6 +734,7 @@ def test_mixed_locale_exhausted_budget_after_snapshot_has_exact_error_and_zero_m
     assert scenario.events == [
         "job:start",
         "authorize:translate",
+        "checkpoint:close_open:42:translation/pr-42",
         "snapshot:translate",
         "budget",
         "job:finish:failed",
@@ -766,6 +787,7 @@ def test_clock_failure_after_job_creation_still_attempts_failed_terminal_audit()
     assert scenario.events == [
         "job:start",
         "authorize:translate",
+        "checkpoint:close_open:42:translation/pr-42",
         "snapshot:translate",
         "job:finish:failed",
     ]

@@ -206,6 +206,30 @@ def test_activation_checks_exact_pending_record_and_never_refreshes_expiry():
         store.activate_checkpoint(pending, now=first.expires_at)
 
 
+def test_close_open_checkpoints_closes_matching_live_rows() -> None:
+    executor = CheckpointExecutor()
+    store = YdbPersistence(executor)
+    original = checkpoint()
+    save_semantic(store, original, now=NOW)
+    other = replace(
+        original,
+        continuation_id="checkpoint-2",
+        job_id="other-job",
+        translation_branch="translation/pr-99",
+    )
+    executor.jobs["other-job"] = {
+        "job_id": "other-job",
+        "source_sha": "a" * 40,
+        "target_sha": None,
+    }
+    save_semantic(store, other, now=NOW)
+
+    store.close_open_checkpoints(source_pr=42, translation_branch="translation/pr-42")
+
+    assert executor.rows["checkpoint-1"]["status"] == "closed"
+    assert executor.rows["checkpoint-2"]["status"] == "open"
+
+
 def test_save_load_close_checkpoint_for_source_and_translation_pr() -> None:
     executor = CheckpointExecutor()
     store = YdbPersistence(executor)

@@ -252,6 +252,7 @@ class RuntimeSource:
 
     def authorize_translate(self, request: TranslateWorkflowInput, /) -> AuthorizedRun:
         self._authorize()
+        self.github.remove_label(request.pr_number, Mode.DOC_TRANSLATE.value)
         return AuthorizedRun(
             Mode.DOC_TRANSLATE, f"translation/pr-{request.pr_number}", None, request
         )
@@ -259,7 +260,7 @@ class RuntimeSource:
     def authorize_continue(
         self, pr_number: int, checkpoints: CheckpointReader, /, *, now: datetime
     ) -> ContinueAdmission:
-        """Read-only admission using actual label/comment actors, not Actions actor env."""
+        """Admission using actual label/comment actors, not Actions actor env."""
         allowed = frozenset(
             actor
             for actor in re.split(
@@ -267,7 +268,9 @@ class RuntimeSource:
             )
             if actor
         )
-        return admit_continue(self.github, checkpoints, pr_number, allowed, now=now)
+        admission = admit_continue(self.github, checkpoints, pr_number, allowed, now=now)
+        self.github.remove_label(pr_number, Mode.DOC_CONTINUE.value)
+        return admission
 
     def authorize_verify(self, request: VerifyWorkflowInput, /) -> AuthorizedRun:
         self._authorize()
@@ -283,6 +286,7 @@ class RuntimeSource:
         pinned = re.search(r"<!-- ydbdoc-source-sha:([0-9a-f]{40}) -->", pr.get("body") or "")
         if pinned is None or pinned[1] != request.source_sha.value:
             raise RuntimeBoundaryError("source_sha_provenance_mismatch")
+        self.github.remove_label(request.pr_number, Mode.DOC_VERIFY.value)
         return AuthorizedRun(
             Mode.DOC_VERIFY,
             pr["head"]["ref"],
@@ -388,6 +392,8 @@ class RuntimeSource:
     def snapshot_translate(self, authorization: AuthorizedRun, /) -> ImmutableRunSnapshot:
         request = authorization.context
         assert isinstance(request, TranslateWorkflowInput)
+        # §5.1: delete the previous remote translation branch before resolving head.
+        self.github.delete_branch(authorization.branch)
         return self._snapshot(authorization, request.pr_number, request.source_sha)
 
     def snapshot_verify(self, authorization: AuthorizedRun, /) -> ImmutableRunSnapshot:

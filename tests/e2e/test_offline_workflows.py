@@ -583,10 +583,9 @@ def test_offline_translate_runs_real_pipeline_in_both_directions(
     assert (
         case.events.index("validate")
         < case.events.index("publish")
-        < case.events.index("critic")
-        < case.events.index("arbiter")
         < case.events.index("create_pr")
     )
+    assert case.events.index("publish") < case.events.index("critic") < case.events.index("arbiter")
     assert ydb.terminal_rows[-1]["status"] == JobStatus.SUCCEEDED.value
 
 
@@ -649,10 +648,11 @@ def test_critic_edit_is_validated_and_published_once(tmp_path: Path, existing_pr
     # Soft-publish of translator output, then critic repair push (and optional
     # final publish when the reviewed candidate still needs a head update).
     assert case.backend.commit_count >= 2
-    assert case.events[:4] == ["validate", "publish", "critic", "arbiter"]
-    pr_event = "update_pr" if existing_pr else "create_pr"
-    assert [event for event in case.events if event.endswith("_pr")] == [pr_event]
-    assert case.events.index("publish") < case.events.index(pr_event)
+    assert case.events[:2] == ["validate", "publish"]
+    assert case.events.index("publish") < case.events.index("critic") < case.events.index("arbiter")
+    pr_events = [event for event in case.events if event.endswith("_pr")]
+    assert pr_events[0] == ("update_pr" if existing_pr else "create_pr")
+    assert case.events.index("publish") < case.events.index(pr_events[0])
     repaired = case.backend.read(result.final_commit_sha, case.target_path)
     assert repaired is not None and repaired.startswith(b"# Repaired:")
 

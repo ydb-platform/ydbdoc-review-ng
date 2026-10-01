@@ -218,6 +218,9 @@ class WholePRServices(InstalledContinueServices):
             return {"sha": self.translated}
         if relative.startswith("/git/refs"):
             self.events.append((method, path))
+            if method == "DELETE":
+                self.branch_head = None
+                return {}
             self.files.update(self.published)
             self.branch_head = payload["sha"]
             return {}
@@ -357,7 +360,8 @@ def test_merged_source_uses_workflow_pinned_base_after_branch_advances() -> None
         provenance,
     )
     assert source.context.current_head == pinned_base.commit_sha
-    assert source.context.expected_branch_head == previous_translation_head
+    assert source.context.expected_branch_head is None
+    assert services.branch_head is None
     assert source.inventory.source_base_sha == GitSha(services.base)
     assert source.inventory.source_head_sha == GitSha(services.source)
     assert source.source_change_snapshot.commit_sha == GitSha(services.source)
@@ -418,7 +422,8 @@ def test_shipped_composition_translates_then_verifies_current_pr_without_retrans
     pulls = next(
         i for i, event in enumerate(events) if event == ("POST", "/repos/ydb-platform/ydb/pulls")
     )
-    assert soft_publish < critic < pulls
+    # Soft-publish creates the ref and PR before critic (§5.1 / first-push PR).
+    assert soft_publish < critic and soft_publish < pulls
     services.events = []
     services.semantic_responses = [
         {"files": {"ydb/docs/en/core/page.md": "# Translated\n"}},
@@ -2256,15 +2261,15 @@ def test_critic_edit_is_validated_then_published_once_before_pr():
         if method in {"CRITIC", "REPAIR", "MODEL"}
         or (method == "POST" and path.endswith(("/git/commits", "/pulls")))
     ]
-    # Soft-publish commit, critic edit + immediate push, arbiter, final publish, PR.
+    # Soft-publish commit + PR, critic edit + immediate push, arbiter, final publish.
     assert significant == [
         "MODEL",
         "commits",
+        "pulls",
         "CRITIC",
         "commits",
         "MODEL",
         "commits",
-        "pulls",
     ]
     assert "Стоимость запуска: 0.05 RUB" in services.comments[0]["body"]
 

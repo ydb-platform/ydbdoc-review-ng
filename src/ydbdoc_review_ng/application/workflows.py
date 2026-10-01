@@ -34,6 +34,18 @@ if TYPE_CHECKING:
     )
 
 
+def _verify_source_pr(context: object, fallback_pr: int) -> int:
+    """Read source PR from verify authorization context when available."""
+    if (
+        isinstance(context, tuple)
+        and len(context) >= 2
+        and type(context[1]) is int
+        and context[1] > 0
+    ):
+        return context[1]
+    return fallback_pr
+
+
 class WorkflowStage(str, Enum):
     AUDIT_START = "audit_start"
     AUTHORIZE = "authorize"
@@ -254,6 +266,8 @@ class WorkflowPersistencePort(Protocol):
     ) -> ContinuationCheckpoint: ...
 
     def close_checkpoint(self, continuation_id: str, /) -> None: ...
+
+    def close_open_checkpoints(self, *, source_pr: int, translation_branch: str) -> None: ...
 
     def consume_checkpoint(
         self, checkpoint: ContinuationCheckpoint, job_id: str, /, *, now: datetime
@@ -496,6 +510,11 @@ class LinearWorkflows:
         try:
             authorization = self._source.authorize_translate(request)
             self._require_mode(authorization.mode, mode)
+            # §5.1: wipe prior translation recovery before the clean-branch snapshot.
+            self._persistence.close_open_checkpoints(
+                source_pr=request.pr_number,
+                translation_branch=authorization.branch,
+            )
             stage = WorkflowStage.SNAPSHOT
             snapshot = self._source.snapshot_translate(authorization)
             self._require_snapshot(snapshot, authorization, mode)
@@ -603,6 +622,13 @@ class LinearWorkflows:
                     capture, job_id, request.pr_number, mode, audit_started_at
                 )
                 semantic_terminal = True
+            else:
+                # §4.2 / §5.2: GREEN/YELLOW close the prior RED recovery checkpoint.
+                source_pr = _verify_source_pr(authorization.context, request.pr_number)
+                self._persistence.close_open_checkpoints(
+                    source_pr=source_pr,
+                    translation_branch=snapshot.branch,
+                )
             result = WorkflowResult(
                 job_id,
                 mode,

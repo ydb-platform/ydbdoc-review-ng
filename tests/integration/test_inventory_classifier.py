@@ -125,9 +125,9 @@ def test_every_inventory_is_classified_once_and_noop_is_reported_idempotently(ro
     assert len(services.source_comments) == 1
     assert "перевод не требуется" in services.source_comments[0]["body"].lower()
     assert not services.pr_exists and services.branch_head is None
+    # §5.1 may DELETE the previous translation ref; §0 removes the trigger label.
     assert not any(
-        method in {"POST", "PATCH", "DELETE"} and "/git/" in path
-        for method, path in services.events
+        method in {"POST", "PATCH"} and "/git/" in path for method, path in services.events
     )
 
 
