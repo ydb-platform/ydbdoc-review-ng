@@ -16,11 +16,10 @@ from ydbdoc_review_ng.continuation import (
     ContinuationStage,
     ContinuationStateError,
     RestoredPlan,
-    candidate_sha256,
     checkpoint_scope_sha256,
     validate_restored_documents,
 )
-from ydbdoc_review_ng.domain import GitSha, RepoPath
+from ydbdoc_review_ng.domain import GitSha, RepoPath, SnapshotRef
 from ydbdoc_review_ng.persistence import ContinuationCheckpoint
 from ydbdoc_review_ng.runtime_github import GitHubBackend, RuntimeBoundaryError
 from ydbdoc_review_ng.scope import FileOperation
@@ -78,16 +77,35 @@ class ContinueReplay:
     accepted_maps: tuple[AcceptedMap, ...]
 
 
+def _load_accepted_from_branch(
+    content: RuntimeContent,
+    plans: FrozenSourcePlans,
+    target_sha: GitSha,
+    paths: set[RepoPath],
+) -> tuple[AcceptedDocument, ...]:
+    published = SnapshotRef(plans.preparation.snapshots.source_snapshot.repository, target_sha)
+    accepted: list[AcceptedDocument] = []
+    for path in sorted(paths, key=lambda item: item.value):
+        raw = content.source.github.read_bytes(published, path)
+        if raw is None:
+            continue
+        try:
+            accepted.append(AcceptedDocument(path, raw.decode("utf-8")))
+        except UnicodeError as error:
+            raise ContinuationStateError() from error
+    return tuple(accepted)
+
+
 def replay_continue(
     content: RuntimeContent, checkpoint: ContinuationCheckpoint, /
 ) -> ContinueReplay:
-    """Rebuild and validate saved plans. No workflow execution or model calls."""
+    """Rebuild and validate saved plans. Candidate bytes come from branch target_sha."""
     snapshot = content.source.snapshot_continue(checkpoint)
     preparation = content.prepare_source(snapshot)
     state = checkpoint.state
     if state.stage is ContinuationStage.DIRECTION:
         return ContinueReplay(preparation, None, (), ())
-    referenced = {item.target_path for item in state.accepted_documents} | set(state.pending_paths)
+    referenced = set(state.pending_paths) | set(state.review_paths)
     potential = next(
         (scope for scope in preparation.potential.scopes if scope.direction is state.direction),
         None,
@@ -140,18 +158,30 @@ def replay_continue(
     reviewable = {document.entry.pair.target_path for document in plans.documents} | set(
         metadata_paths
     )
-    if (
-        not required <= referenced <= reviewable
-        or (state.stage is not ContinuationStage.REVIEW and required != referenced)
-        or not set(state.review_paths).issubset(reviewable)
-    ):
-        raise ContinuationStateError()
-    accepted_maps = content.restore_accepted_documents(plans, state.accepted_documents)
-    if state.stage is ContinuationStage.REVIEW:
-        candidate = content.assemble_documents(plans, state.accepted_documents, accepted_maps)
-        if candidate_sha256(candidate.content) != state.candidate_sha256:
+    if state.stage is ContinuationStage.TRANSLATION:
+        if not set(state.pending_paths).issubset(required) or not referenced <= reviewable:
             raise ContinuationStateError()
-    return ContinueReplay(preparation, plans, state.accepted_documents, accepted_maps)
+        accepted_paths = required - set(state.pending_paths)
+        if state.target_sha is None:
+            if accepted_paths:
+                raise ContinuationStateError()
+            accepted_documents: tuple[AcceptedDocument, ...] = ()
+        else:
+            accepted_documents = _load_accepted_from_branch(
+                content, plans, state.target_sha, accepted_paths
+            )
+            if {item.target_path for item in accepted_documents} != accepted_paths:
+                raise ContinuationStateError()
+    elif state.stage is ContinuationStage.REVIEW:
+        if state.target_sha is None or not set(state.review_paths).issubset(reviewable):
+            raise ContinuationStateError()
+        accepted_documents = _load_accepted_from_branch(content, plans, state.target_sha, reviewable)
+        if not required.issubset({item.target_path for item in accepted_documents}):
+            raise ContinuationStateError()
+    else:
+        raise ContinuationStateError()
+    accepted_maps = content.restore_accepted_documents(plans, accepted_documents)
+    return ContinueReplay(preparation, plans, accepted_documents, accepted_maps)
 
 
 def _command_context(body: str) -> str | None:

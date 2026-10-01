@@ -15,6 +15,9 @@
 
 ## Код
 
-Срезы 1 и 6 закрыты. Whole-file: один документ = один translate call, adaptive
-content-filter split удалён. Остаётся continuation v2, старый `select_direction`
-рядом с classifier, TOC/dependency polish — см. `debt-map.md`.
+Срезы 1, 3, 6, 7 закрыты на local `main`. Continuation state v3: нет
+`accepted_documents`/`candidate_sha256` в YDB; candidate читается с
+`target_sha` ветки. TOC §3 пока append-only (coverage tests фиксируют gaps).
+Остаётся: dependency polish, полный TOC delta, soft-publish частичных
+translation success, удаление мёртвого `select_direction`, `doc_verify`/budget —
+см. `debt-map.md`.

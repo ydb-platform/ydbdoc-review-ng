@@ -24,7 +24,6 @@ from ydbdoc_review_ng.continuation import (
     ContinuationStateError,
     SourceChangeInventory,
     SourceSemanticAction,
-    candidate_sha256,
     checkpoint_scope_sha256,
 )
 from ydbdoc_review_ng.dependencies import (
@@ -117,6 +116,7 @@ from ydbdoc_review_ng.translation_plan import (
     PathKind,
     TranslationPlan,
     TranslationPlanError,
+    _complete_pairs,
     build_translation_plan,
     classify_path,
     mirror_classified_files,
@@ -936,11 +936,21 @@ class RuntimeContent:
             if selected_direction is not None:
                 if not preparation.inventories:
                     raise TranslationPlanError("translation_plan_direction_missing")
+                complete = {
+                    RepoPath(relative)
+                    for kind, relative in _complete_pairs(preparation.inventory, self.roots)
+                    if kind is PathKind.MARKDOWN
+                }
                 direction = DirectionSelectionResult(
                     DirectionSelectionState.SELECTED,
                     selected_direction,
                     tuple(
-                        DirectionPairDecision(pair, DirectionPairVerdict(selected_direction.value))
+                        DirectionPairDecision(
+                            pair,
+                            DirectionPairVerdict.COMPLETE_PAIR
+                            if pair.key.relative_path in complete
+                            else DirectionPairVerdict(selected_direction.value),
+                        )
                         for pair in preparation.inventories
                     ),
                     None,
@@ -951,7 +961,7 @@ class RuntimeContent:
                 DIRECTION_UNDETERMINED_WARNING + "\n" + DIRECTION_UNDETERMINED_ACTION,
             )
             state = ContinuationState(
-                STATE_VERSION, ContinuationStage.DIRECTION, None, None, (), (), (), None
+                STATE_VERSION, ContinuationStage.DIRECTION, None, None, None, (), ()
             )
             raise SemanticCheckpointStop(self._capture(preparation, state))
         selection = freeze_scope_manifest(preparation.potential, direction)
@@ -1245,18 +1255,17 @@ class RuntimeContent:
         if checkpoint.state.stage is ContinuationStage.REVIEW:
             if plans is None:
                 raise RuntimeBoundaryError("continue_review_plans_missing")
-            candidate = self.assemble_documents(
-                plans, replay.accepted_documents, replay.accepted_maps
-            )
-            if candidate_sha256(candidate.content) != checkpoint.state.candidate_sha256:
-                raise RuntimeBoundaryError("continue_review_candidate_mismatch")
-            # Source reconstruction and its hash are checked before reading the
-            # exact published candidate. Target never supplies assembly fragments.
+            if checkpoint.state.target_sha is None:
+                raise RuntimeBoundaryError("continue_review_target_missing")
+            # Source reconstruction is checked before reading the exact published
+            # candidate. Target branch owns accepted document bytes in v3.
             if self.source.github.head(checkpoint.translation_branch) != checkpoint.target_sha:
                 raise RuntimeBoundaryError("continue_translation_head_mismatch")
-            assert checkpoint.target_sha is not None
             published = SnapshotRef(
                 plans.preparation.snapshots.source_snapshot.repository, checkpoint.target_sha
+            )
+            candidate = self.assemble_documents(
+                plans, replay.accepted_documents, replay.accepted_maps
             )
             for path, expected in unpack(candidate.content).items():
                 if self.source.github.read_bytes(published, RepoPath(path)) != expected:
@@ -1297,6 +1306,7 @@ class RuntimeContent:
         accepted_full = list(accepted_documents)
         self.accepted_documents = accepted_documents
         self.accepted_maps = accepted_maps
+        self.pending_translation_paths: tuple[RepoPath, ...] = ()
         for index, document in enumerate(documents):
             try:
                 with traced(
@@ -1313,6 +1323,8 @@ class RuntimeContent:
                     accepted.append(accepted_map)
             except InvalidTranslationResponse:
                 assert plans.manifest is not None
+                # Soft-publish of partial successes lands in a later debt-map slice.
+                # Until then reopen the whole current batch without storing file bytes.
                 state = ContinuationState(
                     STATE_VERSION,
                     ContinuationStage.TRANSLATION,
@@ -1322,11 +1334,11 @@ class RuntimeContent:
                         plans.preparation.inventory,
                         translation_plan_sha256(plans.translation_plan),
                     ),
-                    self.accepted_documents,
-                    tuple(doc.entry.pair.target_path for doc in documents[index:]),
-                    (),
                     None,
+                    tuple(item.entry.pair.target_path for item in documents),
+                    (),
                 )
+                self.pending_translation_paths = state.pending_paths
                 raise SemanticCheckpointStop(
                     self._capture(plans.preparation, state, plans)
                 ) from None
@@ -1335,6 +1347,7 @@ class RuntimeContent:
             self.accepted_documents = tuple(
                 sorted(accepted_full, key=lambda item: item.target_path.value)
             )
+        self.pending_translation_paths = ()
         return self.assemble_documents(plans, self.accepted_documents, self.accepted_maps)
 
     def load_verification_candidate(self, snapshot: ImmutableRunSnapshot, /) -> WorkflowCandidate:
@@ -1964,15 +1977,6 @@ class RuntimeContent:
         }
         if not set(review_paths).issubset(reviewable):
             raise RuntimeBoundaryError("review_checkpoint_path_mismatch")
-        files = unpack(review.final_candidate)
-        accepted_documents = tuple(
-            AcceptedDocument(
-                path,
-                cast(bytes, files[path.value]).decode("utf-8"),
-            )
-            for path in reviewable
-            if files.get(path.value) is not None
-        )
         state = ContinuationState(
             STATE_VERSION,
             ContinuationStage.REVIEW,
@@ -1982,9 +1986,8 @@ class RuntimeContent:
                 plans.preparation.inventory,
                 translation_plan_sha256(plans.translation_plan),
             ),
-            tuple(sorted(accepted_documents, key=lambda item: item.target_path.value)),
+            target_sha,
             (),
             review_paths,
-            candidate_sha256(review.final_candidate),
         )
         return self._capture(plans.preparation, state, plans, target_sha)

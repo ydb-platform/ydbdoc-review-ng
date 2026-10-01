@@ -346,8 +346,16 @@ def _source_and_target_roots(
 def _complete_pairs(
     inventory: SourceChangeInventory, roots: LocaleRoots
 ) -> frozenset[tuple[PathKind, str]]:
-    localized = [classify_path(roots, change.path) for change in inventory.files]
-    seen = {(item.locale, item.kind, item.relative) for item in localized if item.locale is not None}
+    localized = [
+        (classify_path(roots, change.path), change.status)
+        for change in inventory.files
+        if change.status in {"added", "modified"}
+    ]
+    seen = {
+        (item.locale, item.kind, item.relative)
+        for item, _status in localized
+        if item.locale is not None
+    }
     return frozenset(
         (kind, relative)
         for locale, kind, relative in seen
@@ -446,6 +454,7 @@ def mirror_classified_files(
     if direction is None:
         return tuple(ClassifiedFile(change, "none", None) for change in inventory.files)
     source_locale, _source_root, target_root = _source_and_target_roots(roots, direction)
+    complete = _complete_pairs(inventory, roots)
     mirrored: list[ClassifiedFile] = []
     for change in inventory.files:
         current = classify_path(roots, change.path)
@@ -460,7 +469,10 @@ def mirror_classified_files(
             mirrored.append(ClassifiedFile(change, "none", None))
             continue
         if current.kind is PathKind.MARKDOWN:
-            mirrored.append(ClassifiedFile(change, "page", None))
+            if (current.kind, current.relative) in complete:
+                mirrored.append(ClassifiedFile(change, "none", None))
+            else:
+                mirrored.append(ClassifiedFile(change, "page", None))
         elif current.kind is PathKind.TOC:
             mirrored.append(
                 ClassifiedFile(change, "toc_delta", "Apply navigation delta from source PR.")

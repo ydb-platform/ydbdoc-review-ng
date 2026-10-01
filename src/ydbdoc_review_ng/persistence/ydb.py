@@ -152,37 +152,25 @@ class ContinuationCheckpoint:
             raise PersistenceError("invalid continuation state") from None
         if self.state.stage is ContinuationStage.REVIEW and self.target_sha is None:
             raise PersistenceError("review checkpoint requires target SHA")
+        if (
+            self.state.target_sha is not None
+            and self.target_sha is not None
+            and self.state.target_sha != self.target_sha
+        ):
+            raise PersistenceError("continuation target SHA mismatch")
         if (self.state.stage is ContinuationStage.DIRECTION) != (not self.scope_target_paths):
             raise PersistenceError("continuation scope selection incompatible with stage")
-        referenced = (
-            {item.target_path for item in self.state.accepted_documents}
-            | set(self.state.pending_paths)
-            | set(self.state.review_paths)
-        )
-        metadata = set()
-        selected = {path.value for path in self.scope_target_paths}
-        if self.state.stage is ContinuationStage.REVIEW:
-            from ydbdoc_review_ng.runtime_github import RuntimeBoundaryError
-            from ydbdoc_review_ng.runtime_metadata import _toc
-
-            try:
-                for accepted in self.state.accepted_documents:
-                    path = accepted.target_path
-                    if not re.fullmatch(
-                        r"toc(?:_[A-Za-z0-9-]+)?\.ya?ml", posixpath.basename(path.value)
-                    ):
-                        continue
-                    toc = _toc(accepted.translated_markdown.encode("utf-8"), "invalid_checkpoint_toc")
-                    if any(
-                        posixpath.normpath(posixpath.join(posixpath.dirname(path.value), node.value))
-                        in selected
-                        for node in toc.hrefs
-                    ):
-                        metadata.add(path)
-            except (RuntimeBoundaryError, UnicodeError):
-                raise PersistenceError("invalid continuation metadata") from None
-        # The manifest lists document operations, not their TOCs. Replay binds
-        # these full-content records to exact deterministic metadata outputs.
+        referenced = set(self.state.pending_paths) | set(self.state.review_paths)
+        # TOC metadata outputs are not always listed in the document manifest.
+        # Replay discovers them from the published branch; envelope validation
+        # only permits toc*.ya?ml basenames outside the selected scope.
+        metadata = {
+            path
+            for path in referenced
+            if re.fullmatch(
+                r"toc(?:_[A-Za-z0-9-]+)?\.ya?ml", posixpath.basename(path.value)
+            )
+        }
         if not referenced.issubset(set(self.scope_target_paths) | metadata):
             raise PersistenceError("continuation scope selection omits state paths")
 

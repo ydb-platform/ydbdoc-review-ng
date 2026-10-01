@@ -55,9 +55,9 @@ class AdmissionServices:
             "stage": "direction",
             "status": "open",
             "created_at": NOW - timedelta(days=1),
-            "state": b'{"state_version":2,"stage":"direction","direction":null,'
-            b'"scope_sha256":null,"accepted_documents":{},"pending_paths":[], '
-            b'"review_paths":[],"candidate_sha256":null}',
+            "state": b'{"state_version":3,"stage":"direction","direction":null,'
+            b'"scope_sha256":null,"target_sha":null,"pending_paths":[],'
+            b'"review_paths":[]}',
         }
         self.job = {
             "job_id": "original-job",

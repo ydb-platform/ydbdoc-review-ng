@@ -38,17 +38,16 @@ __all__ = [
     "validate_restored_documents",
 ]
 
-STATE_VERSION = 2
+STATE_VERSION = 3
 _STATE_KEYS = frozenset(
     {
         "state_version",
         "stage",
         "direction",
         "scope_sha256",
-        "accepted_documents",
+        "target_sha",
         "pending_paths",
         "review_paths",
-        "candidate_sha256",
     }
 )
 
@@ -369,10 +368,9 @@ class ContinuationState:
     stage: ContinuationStage
     direction: Direction | None
     scope_sha256: ContentHash | None
-    accepted_documents: tuple[AcceptedDocument, ...]
+    target_sha: GitSha | None
     pending_paths: tuple[RepoPath, ...]
     review_paths: tuple[RepoPath, ...]
-    candidate_sha256: ContentHash | None
 
     def __post_init__(self) -> None:
         _exact(self.state_version, int)
@@ -383,30 +381,19 @@ class ContinuationState:
             _exact(self.direction, Direction)
         if self.scope_sha256 is not None:
             _exact(self.scope_sha256, ContentHash)
-        _exact(self.accepted_documents, tuple)
-        if any(type(item) is not AcceptedDocument for item in self.accepted_documents):
-            raise _fail()
-        accepted_paths = tuple(item.target_path for item in self.accepted_documents)
-        if accepted_paths != tuple(sorted(accepted_paths, key=lambda item: item.value)):
-            raise _fail()
-        if len(accepted_paths) != len(set(accepted_paths)):
-            raise _fail()
+        if self.target_sha is not None:
+            _exact(self.target_sha, GitSha)
         pending = _exact_paths(self.pending_paths)
         review = _exact_paths(self.review_paths)
-        if set(accepted_paths) & set(pending):
-            raise _fail()
-        if self.candidate_sha256 is not None:
-            _exact(self.candidate_sha256, ContentHash)
 
         if self.stage is ContinuationStage.DIRECTION:
             if any(
                 (
                     self.direction is not None,
                     self.scope_sha256 is not None,
-                    bool(self.accepted_documents),
+                    self.target_sha is not None,
                     bool(pending),
                     bool(review),
-                    self.candidate_sha256 is not None,
                 )
             ):
                 raise _fail()
@@ -416,16 +403,18 @@ class ContinuationState:
                 or self.scope_sha256 is None
                 or not pending
                 or review
-                or self.candidate_sha256 is not None
             ):
                 raise _fail()
-        elif (
-            self.direction is None
-            or self.scope_sha256 is None
-            or pending
-            or not review
-            or self.candidate_sha256 is None
-        ):
+        elif self.stage is ContinuationStage.REVIEW:
+            if (
+                self.direction is None
+                or self.scope_sha256 is None
+                or self.target_sha is None
+                or pending
+                or not review
+            ):
+                raise _fail()
+        else:
             raise _fail()
 
 
@@ -495,16 +484,18 @@ def _path_list(value: object) -> tuple[RepoPath, ...]:
     return tuple(_path(item) for item in cast(list[object], value))
 
 
-def _accepted_documents(value: object) -> tuple[AcceptedDocument, ...]:
-    accepted: list[AcceptedDocument] = []
-    for target_path, raw_markdown in _pairs(value):
-        _exact(raw_markdown, str)
-        accepted.append(AcceptedDocument(_path(target_path), cast(str, raw_markdown)))
-    return tuple(sorted(accepted, key=lambda item: item.target_path.value))
+def _optional_sha(value: object) -> GitSha | None:
+    if value is None:
+        return None
+    _exact(value, str)
+    try:
+        return GitSha(cast(str, value))
+    except ValueError:
+        raise _fail() from None
 
 
 def decode_state(raw: str | bytes, /) -> ContinuationState:
-    """Decode state v2 while rejecting duplicate keys and all schema drift."""
+    """Decode state v3 while rejecting duplicate keys and all schema drift."""
     if type(raw) not in {str, bytes}:
         raise _fail()
     try:
@@ -524,10 +515,9 @@ def decode_state(raw: str | bytes, /) -> ContinuationState:
             cast(ContinuationStage, _enum(ContinuationStage, values["stage"])),
             direction,
             _optional_hash(values["scope_sha256"]),
-            _accepted_documents(values["accepted_documents"]),
+            _optional_sha(values["target_sha"]),
             _path_list(values["pending_paths"]),
             _path_list(values["review_paths"]),
-            _optional_hash(values["candidate_sha256"]),
         )
     except (json.JSONDecodeError, UnicodeDecodeError, KeyError, TypeError, ValueError):
         raise _fail() from None
@@ -541,15 +531,9 @@ def encode_state(state: ContinuationState, /) -> str:
         "stage": state.stage.value,
         "direction": None if state.direction is None else state.direction.value,
         "scope_sha256": None if state.scope_sha256 is None else state.scope_sha256.value,
-        "accepted_documents": {
-            item.target_path.value: item.translated_markdown
-            for item in state.accepted_documents
-        },
+        "target_sha": None if state.target_sha is None else state.target_sha.value,
         "pending_paths": [item.value for item in state.pending_paths],
         "review_paths": [item.value for item in state.review_paths],
-        "candidate_sha256": (
-            None if state.candidate_sha256 is None else state.candidate_sha256.value
-        ),
     }
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
@@ -618,7 +602,7 @@ def validate_restored_documents(
     *,
     metadata_paths: tuple[RepoPath, ...] = (),
 ) -> None:
-    """Bind every saved full-document path back to an authoritative source plan."""
+    """Bind every pending/review path back to an authoritative source plan."""
     _exact(state, ContinuationState)
     _exact(restored_plans, tuple)
     if any(type(item) is not RestoredPlan for item in restored_plans):
@@ -626,16 +610,7 @@ def validate_restored_documents(
     plans = {item.target_path: item for item in restored_plans}
     if len(plans) != len(restored_plans):
         raise _fail()
-    referenced = (
-        {item.target_path for item in state.accepted_documents}
-        | set(state.pending_paths)
-        | set(state.review_paths)
-    )
+    referenced = set(state.pending_paths) | set(state.review_paths)
     metadata = set(_exact_paths(metadata_paths))
     if not referenced.issubset(set(plans) | metadata) or set(state.pending_paths) & metadata:
         raise _fail()
-    try:
-        for accepted in state.accepted_documents:
-            accepted.translated_markdown.encode("utf-8")
-    except (KeyError, TypeError, UnicodeError, ValueError):
-        raise _fail() from None

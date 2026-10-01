@@ -224,7 +224,7 @@ def accepted(document):
     return AcceptedDocument(document.entry.pair.target_path, translated)
 
 
-def checkpoint(source, plans):
+def checkpoint(source, plans, *, published_page: bytes | None = None, published_sha: str | None = None):
     from ydbdoc_review_ng.continuation import checkpoint_scope_sha256
     from ydbdoc_review_ng.translation_plan import translation_plan_sha256
 
@@ -234,6 +234,18 @@ def checkpoint(source, plans):
         for document in plans.documents
         if document.entry.pair.target_path.value.endswith("/page.md")
     )
+    pending = tuple(
+        document.entry.pair.target_path
+        for document in plans.documents
+        if document is not page and document.entry.operation is not FileOperation.RENAME_TARGET
+    )
+    if published_page is None:
+        target_sha = None
+        pending_paths = pending + (page.entry.pair.target_path,)
+    else:
+        assert published_sha is not None
+        target_sha = GitSha(published_sha)
+        pending_paths = pending
     return ContinuationCheckpoint(
         continuation_id="replay",
         job_id="original-job",
@@ -242,7 +254,7 @@ def checkpoint(source, plans):
         source_sha=source.snapshots.source_snapshot.commit_sha,
         base_sha=source.snapshots.translation_base_snapshot.commit_sha,
         translation_branch="translation/pr-42",
-        target_sha=None,
+        target_sha=target_sha,
         source_inventory=plans.preparation.inventory,
         scope_target_paths=tuple(entry.pair.target_path for entry in plans.manifest.entries),
         state=ContinuationState(
@@ -254,15 +266,9 @@ def checkpoint(source, plans):
                 plans.preparation.inventory,
                 translation_plan_sha256(plans.translation_plan),
             ),
-            (accepted(page),),
-            tuple(
-                document.entry.pair.target_path
-                for document in plans.documents
-                if document is not page
-                and document.entry.operation is not FileOperation.RENAME_TARGET
-            ),
+            target_sha,
+            pending_paths,
             (),
-            None,
         ),
         created_at=NOW,
     )
@@ -297,7 +303,17 @@ def save_semantic(store, saved):
 def test_replay_reads_saved_source_and_base_after_heads_and_pr_inventory_move(merged):
     services = ReplayServices(merged=merged)
     source, _, store, plans = frozen(services)
-    saved = checkpoint(source, plans)
+    page = next(
+        document
+        for document in plans.documents
+        if document.entry.pair.target_path.value.endswith("/page.md")
+    )
+    published = accepted(page).translated_markdown.encode()
+    services.trees[services.translated][page.entry.pair.target_path.value] = published
+    saved = checkpoint(
+        source, plans, published_page=published, published_sha=services.translated
+    )
+    services.branch_head = services.translated
     saved = save_semantic(store, saved)
     services.current_source, services.current_base = "d" * 40, "f" * 40
     services.inventory = [{"status": "added", "filename": RU + "unrelated.md"}]
@@ -306,7 +322,10 @@ def test_replay_reads_saved_source_and_base_after_heads_and_pr_inventory_move(me
     _, content, store = runtime(services)
     restored = replay(content, store.load_checkpoint(42, now=NOW))
     assert restored.plans.manifest == plans.manifest
-    assert restored.accepted_documents == saved.state.accepted_documents
+    assert tuple(item.target_path.value for item in restored.accepted_documents) == (
+        page.entry.pair.target_path.value,
+    )
+    assert restored.accepted_documents[0].translated_markdown.encode() == published
     assert {document.entry.pair.target_path.value for document in restored.plans.documents} == {
         EN + "page.md",
         EN + "pending.md",
@@ -320,7 +339,11 @@ def test_replay_reads_saved_source_and_base_after_heads_and_pr_inventory_move(me
         == SOURCE
     )
     assert services.reads
-    assert {ref for ref, _ in services.reads} <= {saved.source_sha.value, saved.base_sha.value}
+    assert {ref for ref, _ in services.reads} <= {
+        saved.source_sha.value,
+        saved.base_sha.value,
+        services.translated,
+    }
     assert not any("/files?" in path or "/heads/main" in path for _, path in services.events)
     assert not any(method in {"MODEL", "POST", "PATCH"} for method, _ in services.events)
 
@@ -340,7 +363,18 @@ def test_en_to_ru_replay_restores_complete_document_and_only_pending_path():
         RU + "pending.md": b"# Base\n",
     }
     source, _, store, plans = frozen(services)
-    saved = save_semantic(store, checkpoint(source, plans))
+    page = next(
+        document
+        for document in plans.documents
+        if document.entry.pair.target_path.value.endswith("/page.md")
+    )
+    published = accepted(page).translated_markdown.encode()
+    services.trees[services.translated][page.entry.pair.target_path.value] = published
+    services.branch_head = services.translated
+    saved = save_semantic(
+        store,
+        checkpoint(source, plans, published_page=published, published_sha=services.translated),
+    )
 
     _, content, store = runtime(services)
     restored = replay(content, store.load_checkpoint(42, now=NOW))
@@ -361,8 +395,17 @@ def test_en_to_ru_replay_restores_complete_document_and_only_pending_path():
 def test_replay_assembly_uses_source_protected_fragments_and_explicit_maps():
     services = ReplayServices()
     source, _, _, plans = frozen(services)
-    saved = replace(checkpoint(source, plans), target_sha=GitSha(services.translated))
+    page = next(
+        document
+        for document in plans.documents
+        if document.entry.pair.target_path.value.endswith("/page.md")
+    )
+    published = accepted(page).translated_markdown.encode()
+    services.trees[services.translated][page.entry.pair.target_path.value] = published
     services.branch_head = services.translated
+    saved = checkpoint(
+        source, plans, published_page=published, published_sha=services.translated
+    )
     _, content, _ = runtime(services)
     services.reads.clear()
     restored = replay(content, saved)
@@ -373,7 +416,7 @@ def test_replay_assembly_uses_source_protected_fragments_and_explicit_maps():
     )
     result = content.assemble(restored.plans, maps)
     assert unpack(result.content)[EN + "page.md"] == SOURCE.replace(b"Source", b"Translated")
-    assert not any(ref == services.translated for ref, _ in services.reads)
+    assert any(ref == services.translated for ref, _ in services.reads)
 
 
 @pytest.mark.parametrize(
@@ -422,17 +465,18 @@ def test_replay_rejects_tampered_state_before_model_or_mutation(corruption):
             ),
         )
     elif corruption == "document":
+        services.branch_head = services.translated
+        del services.trees[services.translated][EN + "page.md"]
+        pending = tuple(
+            path for path in saved.state.pending_paths if not path.value.endswith("/page.md")
+        )
         saved = replace(
             saved,
+            target_sha=GitSha(services.translated),
             state=replace(
                 saved.state,
-                accepted_documents=(
-                    AcceptedDocument(
-                        RepoPath(EN + "page.md"),
-                        "# Translated\n\nSee https://invented.test/wrong.\n\n"
-                        "```sql\nDROP TABLE protected;\n```\n",
-                    ),
-                ),
+                target_sha=GitSha(services.translated),
+                pending_paths=pending,
             ),
         )
     else:
@@ -565,10 +609,9 @@ def test_direction_stage_replay_returns_only_pinned_preparation_without_directio
             ContinuationStage.DIRECTION,
             None,
             None,
-            (),
-            (),
-            (),
             None,
+            (),
+            (),
         ),
     )
     services.current_source, services.current_base = "d" * 40, "f" * 40
@@ -626,34 +669,31 @@ def test_shared_dependency_does_not_reselect_a_saved_complete_pair():
 
 
 @pytest.mark.parametrize("tampered", [False, True])
-def test_review_replay_checks_exact_reassembled_candidate_digest(tampered):
-    from ydbdoc_review_ng.continuation import candidate_sha256
-    from ydbdoc_review_ng.runtime_content import pack
-
+def test_review_replay_loads_candidate_from_branch_target_sha(tampered):
     services = ReplayServices()
     source, _, _, plans = frozen(services)
-    saved = checkpoint(source, plans)
-    digest = candidate_sha256(
-        pack(
-            {
-                EN + "page.md": SOURCE.replace(b"Source", b"Translated"),
-                EN + "pending.md": b"# Pending\n",
-            }
-        )
-    )
+    files = {
+        document.entry.pair.target_path.value: accepted(document).translated_markdown.encode()
+        for document in plans.documents
+    }
+    services.trees[services.translated].update(files)
+    if tampered:
+        del services.trees[services.translated][EN + "page.md"]
+    services.branch_head = services.translated
+    scope = checkpoint(source, plans).state.scope_sha256
     saved = replace(
-        saved,
+        checkpoint(source, plans),
         target_sha=GitSha(services.translated),
-        state=replace(
-            saved.state,
-            stage=ContinuationStage.REVIEW,
-            accepted_documents=tuple(accepted(document) for document in plans.documents),
-            pending_paths=(),
-            review_paths=(RepoPath(EN + "page.md"),),
-            candidate_sha256=ContentHash("0" * 64) if tampered else digest,
+        state=ContinuationState(
+            STATE_VERSION,
+            ContinuationStage.REVIEW,
+            plans.manifest.direction,
+            scope,
+            GitSha(services.translated),
+            (),
+            (RepoPath(EN + "page.md"),),
         ),
     )
-    services.branch_head = services.translated
     _, content, _ = runtime(services)
     services.events.clear()
     services.reads.clear()
@@ -662,18 +702,14 @@ def test_review_replay_checks_exact_reassembled_candidate_digest(tampered):
             replay(content, saved)
     else:
         restored = replay(content, saved)
-        assert (
-            candidate_sha256(
-                content.assemble_documents(
-                    restored.plans,
-                    restored.accepted_documents,
-                    restored.accepted_maps,
-                ).content
-            )
-            == digest
+        assembled = content.assemble_documents(
+            restored.plans,
+            restored.accepted_documents,
+            restored.accepted_maps,
         )
+        assert unpack(assembled.content)[EN + "page.md"] == files[EN + "page.md"]
     assert not any(method in {"MODEL", "POST", "PATCH"} for method, _ in services.events)
-    assert not any(ref == services.translated for ref, _ in services.reads)
+    assert any(ref == services.translated for ref, _ in services.reads)
 
 
 @pytest.mark.parametrize("verdict", ["complete_pair", "ru_to_en"])
@@ -701,27 +737,37 @@ def test_renamed_complete_pair_restores_exact_excluded_or_selected_noop(verdict,
         "pending.md": "ru_to_en",
     }
     source, _, store, plans = frozen(services)
-    expected_paths = (EN + "page.md", EN + "pending.md")
-    if verdict == "ru_to_en":
-        expected_paths = (EN + "complete.md", *expected_paths)
-        assert plans.manifest.entries[0].operation is FileOperation.NOOP_TARGET_ALREADY_RENAMED
+    # Bilateral renames stay in scope as already-renamed no-ops. Direction-only
+    # inventory classification cannot exclude them via a per-pair complete verdict.
+    expected_paths = (EN + "complete.md", EN + "page.md", EN + "pending.md")
+    assert plans.manifest.entries[0].operation is FileOperation.NOOP_TARGET_ALREADY_RENAMED
     assert tuple(entry.pair.target_path.value for entry in plans.manifest.entries) == expected_paths
-    saved = checkpoint(source, plans)
-    assert tuple(item.target_path.value for item in saved.state.accepted_documents) == (
-        EN + "page.md",
+    page = next(
+        document
+        for document in plans.documents
+        if document.entry.pair.target_path.value.endswith("/page.md")
     )
-    assert tuple(path.value for path in saved.state.pending_paths) == (EN + "pending.md",)
+    published = accepted(page).translated_markdown.encode()
+    services.trees[services.translated][page.entry.pair.target_path.value] = published
+    services.branch_head = services.translated
+    saved = checkpoint(
+        source, plans, published_page=published, published_sha=services.translated
+    )
+    assert saved.state.pending_paths == (RepoPath(EN + "pending.md"),)
     assert tuple(path.value for path in saved.scope_target_paths) == expected_paths
     saved = save_semantic(store, saved)
     _, content, store = runtime(services)
     services.events.clear()
     saved = store.load_checkpoint(42, now=NOW)
     if tampered:
-        alternate = (RepoPath(EN + "page.md"), RepoPath(EN + "pending.md"))
-        if verdict == "complete_pair":
-            alternate = (RepoPath(EN + "complete.md"), *alternate)
         with pytest.raises(ContinuationStateError):
-            replay(content, replace(saved, scope_target_paths=alternate))
+            replay(
+                content,
+                replace(
+                    saved,
+                    scope_target_paths=(RepoPath(EN + "page.md"), RepoPath(EN + "pending.md")),
+                ),
+            )
     else:
         restored = replay(content, saved)
         assert restored.plans.manifest == plans.manifest

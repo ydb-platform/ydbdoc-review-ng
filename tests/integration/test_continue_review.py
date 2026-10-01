@@ -209,10 +209,8 @@ def test_continue_preserves_complete_corrected_toc_with_residual_finding(toc_nam
     assert services.resume().verdict is Verdict.RED
     following = services.checkpoint()
     assert following.expires_at == saved.expires_at
-    assert {
-        item.target_path.value: item.translated_markdown
-        for item in following.state.accepted_documents
-    }[EN + toc_name] == corrected
+    assert following.state.target_sha == following.target_sha
+    assert services.files[EN + toc_name].decode() == corrected
     services.repair_payload = None
     services.prompts.clear()
     assert services.resume().verdict is Verdict.GREEN
@@ -226,25 +224,16 @@ def test_continue_preserves_complete_corrected_toc_with_residual_finding(toc_nam
 
 @pytest.mark.parametrize("fault", ["navigation", "invalid_yaml", "outside", "binary"])
 def test_review_metadata_replay_rejects_tampering_before_models(fault):
-    from ydbdoc_review_ng.continuation import candidate_sha256
-    from ydbdoc_review_ng.runtime_content import pack
-
     services = metadata_review_services()
     saved = services.start_review()
-    row = services.rows[saved.continuation_id]
-    state = json.loads(row["state"])
-    documents = state["accepted_documents"]
+    snapshot = services.snapshots[saved.target_sha.value]
     if fault == "navigation":
-        documents[EN + "toc.yaml"] = documents[EN + "toc.yaml"].replace("a.md", "outside.md")
+        snapshot[EN + "toc.yaml"] = snapshot[EN + "toc.yaml"].replace(b"a.md", b"outside.md")
     elif fault == "invalid_yaml":
-        documents[EN + "toc.yaml"] = "items: ["
+        snapshot[EN + "toc.yaml"] = b"items: ["
     else:
         path = EN + ("toc_other.yaml" if fault == "outside" else "asset.png")
-        documents[path] = documents.pop(EN + "toc.yaml")
-    candidate = {path: text.encode() for path, text in documents.items()}
-    state["candidate_sha256"] = candidate_sha256(pack(candidate)).value
-    services.snapshots[saved.target_sha.value].update(candidate)
-    row["state"] = json.dumps(state).encode()
+        snapshot[path] = snapshot.pop(EN + "toc.yaml")
     with pytest.raises(application.WorkflowError):
         services.resume()
     assert services.roles == []
@@ -396,9 +385,8 @@ def test_repeated_red_preserves_unresolved_path_order_for_the_next_continue():
     assert result.verdict is Verdict.RED
     following = services.checkpoint()
     assert [p.value for p in following.state.review_paths] == [EN + "c.md", EN + "b.md"]
-    assert following.state.accepted_documents == saved.state.accepted_documents
+    assert following.state.target_sha == saved.state.target_sha
     assert following.target_sha == saved.target_sha
-    assert following.state.candidate_sha256 == saved.state.candidate_sha256
     assert services.resume().verdict is Verdict.GREEN
     assert [paths for _, paths, _ in services.calls] == [
         (EN + "a.md", EN + "b.md", EN + "c.md")
@@ -425,11 +413,9 @@ def test_pinned_rename_review_never_derives_maps_from_target_and_replays_metadat
         tree[EN + "old.md"] = pinned
         tree[EN + "toc.yaml"] = b"items:\n  - name: Old\n    href: old.md\n"
     saved = services.start_review()
-    assert [item.target_path.value for item in saved.state.accepted_documents] == [
-        EN + "a.md",
-        EN + "b.md",
-        EN + "toc.yaml",
-    ]
+    assert saved.state.target_sha == saved.target_sha
+    assert saved.state.review_paths
+    assert EN + "toc.yaml" in services.snapshots[saved.target_sha.value]
     metadata = {path: value for path, value in services.files.items() if path.endswith(".yaml")}
 
     from ydbdoc_review_ng.quality.repair import _derive_target_translations
@@ -464,7 +450,7 @@ def test_pinned_rename_review_never_derives_maps_from_target_and_replays_metadat
     else:
         following = services.checkpoint()
         assert following.state.review_paths == saved.state.review_paths[:1]
-        assert len(following.state.accepted_documents) == 3
+        assert following.state.target_sha == saved.state.target_sha
         assert services.resume().verdict is Verdict.GREEN
 
 
@@ -477,9 +463,9 @@ def test_admission_rejects_stale_or_unreconstructible_candidate_before_models(fa
     if fault == "head":
         services.branch_head = "f" * 40
     elif fault == "hash":
-        state["candidate_sha256"] = "0" * 64
+        state["target_sha"] = "0" * 40
     elif fault == "document":
-        state["accepted_documents"][EN + "a.md"] = "# Wrong\n"
+        services.snapshots[services.branch_head][EN + "a.md"] = b"# Wrong\n"
     elif fault == "candidate":
         services.snapshots[services.branch_head][EN + "a.md"] = b"# Tampered\n"
     else:
@@ -540,7 +526,7 @@ def test_invalid_critic_edit_fails_closed_without_arbiter():
         services.resume()
     assert services.roles == ["critic"]
     assert services.files == before and services.commits == services.initial_commits
-    assert services.checkpoint().state.accepted_documents == saved.state.accepted_documents
+    assert services.checkpoint().state.target_sha == saved.state.target_sha
 
 
 def test_byte_identical_selected_repair_reports_existing_sha_without_empty_commit():
@@ -724,7 +710,7 @@ def test_review_red_handoff_preserves_one_logical_checkpoint_after_boundary_faul
     )
     assert eligible.target_sha == saved.target_sha
     assert eligible.expires_at == saved.expires_at
-    assert eligible.state.accepted_documents == saved.state.accepted_documents
+    assert eligible.state.target_sha == saved.state.target_sha
     assert services.roles == ["critic", "arbiter"]
     assert services.resume().verdict is Verdict.GREEN
     with pytest.raises(application.WorkflowError):

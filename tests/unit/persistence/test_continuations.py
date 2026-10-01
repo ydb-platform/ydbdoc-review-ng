@@ -10,7 +10,6 @@ import pytest
 
 from ydbdoc_review_ng.continuation import (
     STATE_VERSION,
-    AcceptedDocument,
     ContinuationStage,
     ContinuationState,
     SourceChangeInventory,
@@ -85,7 +84,7 @@ def checkpoint():
         source_inventory=SourceChangeInventory((), GitSha("b" * 40), GitSha("a" * 40)),
         scope_target_paths=(),
         state=ContinuationState(
-            STATE_VERSION, ContinuationStage.DIRECTION, None, None, (), (), (), None
+            STATE_VERSION, ContinuationStage.DIRECTION, None, None, None, (), ()
         ),
         created_at=NOW,
     )
@@ -241,13 +240,15 @@ def test_exact_checkpoint_consumption_ignores_other_live_lineages() -> None:
     selected = save_semantic(
         store, selected_checkpoint(ContinuationStage.REVIEW), now=NOW
     )
+    other_base = selected_checkpoint(ContinuationStage.REVIEW)
     other = replace(
-        selected_checkpoint(ContinuationStage.REVIEW),
+        other_base,
         continuation_id="checkpoint-2",
         job_id="other-job",
         trigger_pr=53,
         source_sha=GitSha("c" * 40),
         target_sha=GitSha("d" * 40),
+        state=replace(other_base.state, target_sha=GitSha("d" * 40)),
     )
     executor.jobs[other.job_id] = {
         "job_id": other.job_id,
@@ -354,10 +355,9 @@ def test_later_semantic_stop_keeps_original_creation_and_expiry() -> None:
         ContinuationStage.TRANSLATION,
         Direction.RU_TO_EN,
         ContentHash("d" * 64),
-        (),
+        None,
         (RepoPath("en/a.md"),),
         (),
-        None,
     )
     save_semantic(
         store,
@@ -641,10 +641,9 @@ def selected_checkpoint(stage=ContinuationStage.TRANSLATION):
         stage,
         Direction.RU_TO_EN,
         ContentHash("d" * 64),
-        (AcceptedDocument(path, "# Text\n"),) if review else (),
+        GitSha("c" * 40) if review else None,
         () if review else (path,),
         (path,) if review else (),
-        ContentHash("e" * 64) if review else None,
     )
     return replace(
         checkpoint(),

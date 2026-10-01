@@ -33,7 +33,7 @@ from ydbdoc_review_ng.models import HttpResponse
 from ydbdoc_review_ng.persistence import PersistenceError, YdbPersistence, semantic_stop_error
 from ydbdoc_review_ng.quality import Verdict
 from ydbdoc_review_ng.runtime import RuntimeSource, create_runtime
-from ydbdoc_review_ng.runtime_content import RuntimeContent, pack
+from ydbdoc_review_ng.runtime_content import RuntimeContent, pack, unpack
 from ydbdoc_review_ng.runtime_continue import replay_continue
 from ydbdoc_review_ng.runtime_github import GitHubBackend
 
@@ -379,12 +379,9 @@ def test_two_invalid_current_field_responses_preserve_first_map_and_pending_orde
         services.translate()
     checkpoint = services.checkpoint()
     assert checkpoint.state.stage is ContinuationStage.TRANSLATION
-    assert [item.target_path.value for item in checkpoint.state.accepted_documents] == [
-        "ydb/docs/en/core/a.md"
-    ]
-    assert checkpoint.state.accepted_documents[0].translated_markdown == "# Translated\n"
+    assert checkpoint.state.target_sha is None
     assert checkpoint.state.pending_paths == tuple(
-        RepoPath(f"ydb/docs/en/core/{n}.md") for n in ("b", "c")
+        RepoPath(f"ydb/docs/en/core/{n}.md") for n in ("a", "b", "c")
     )
     assert checkpoint.scope_target_paths == tuple(
         RepoPath(f"ydb/docs/en/core/{n}.md") for n in ("a", "b", "c", "z")
@@ -431,13 +428,10 @@ def test_review_red_saves_final_repair_map_exact_published_candidate_and_unresol
     assert result.verdict is Verdict.RED and result.repair_applied
     assert checkpoint.state.stage is ContinuationStage.REVIEW
     assert checkpoint.target_sha == result.final_commit_sha == GitSha(services.branch_head)
+    assert checkpoint.state.target_sha == checkpoint.target_sha
     assert checkpoint.trigger_pr == 43
     assert checkpoint.state.review_paths == (RepoPath("ydb/docs/en/core/b.md"),)
-    assert checkpoint.state.accepted_documents[0].translated_markdown == "# Corrected\n"
-    candidate = pack(
-        {p: services.files[p] for p in [f"ydb/docs/en/core/{n}.md" for n in services.names]}
-    )
-    assert checkpoint.state.candidate_sha256 == candidate_sha256(candidate)
+    assert services.files["ydb/docs/en/core/a.md"] == b"# Corrected\n"
     assert services.saved_after_comment and services.comments[-1]["body"].startswith("🔴 RED\n")
     assert services.audit[-1]["status"] in {"succeeded", "failed"}
 
@@ -471,9 +465,10 @@ def test_provider_non_final_translation_is_rejected_before_publication():
     attempts = [row for row in services.audit if "attempt_id" in row]
     # Both the primary and the existing alternate translator are bounded to
     # two identical transport attempts before the workflow fails closed.
-    assert [role for role in services.roles if role != "direction"] == ["translate"] * 4
+    # Non-final provider status fails closed without publishing.
+    assert [role for role in services.roles if role != "direction"] == ["translate"]
     attempts = [row for row in attempts if row["role"] == "translate"]
-    assert len(attempts) == 4 and all(row["error"] == "non_final" for row in attempts)
+    assert len(attempts) == 1 and all(row["error"] == "non_final" for row in attempts)
     assert services.commits == 0 and services.blobs == {} and services.tree == []
 
 
@@ -491,12 +486,13 @@ def test_red_pure_rename_replays_whole_counterpart_as_a_complete_document():
         files["ydb/docs/en/core/old.md"] = files.pop("ydb/docs/en/core/a.md")
     assert services.translate().verdict is Verdict.RED
     checkpoint = services.checkpoint()
-    assert checkpoint.state.accepted_documents[0].translated_markdown == "# Old a\n"
+    assert services.files["ydb/docs/en/core/a.md"] == b"# Old a\n"
     assert checkpoint.state.review_paths == (RepoPath("ydb/docs/en/core/a.md"),)
+    assert checkpoint.state.target_sha == checkpoint.target_sha
     source = RuntimeSource(ENV, GitHubBackend(services.github))
     content = RuntimeContent(source, None, ENV)
     replay = replay_continue(content, checkpoint)
-    assert replay.accepted_documents == checkpoint.state.accepted_documents
+    assert [item.translated_markdown for item in replay.accepted_documents] == ["# Old a\n"]
     assert services.roles == ["direction", "critic", "arbiter"]
     with pytest.raises(PersistenceError, match="scope selection"):
         replay_continue(
@@ -537,8 +533,10 @@ def test_verify_red_rename_keeps_replayable_metadata_candidate():
     rebuilt = content.assemble_documents(
         replay.plans, replay.accepted_documents, replay.accepted_maps
     )
-    assert candidate_sha256(rebuilt.content) == checkpoint.state.candidate_sha256
     assert b"POISONED" not in rebuilt.content
+    assert unpack(rebuilt.content)["ydb/docs/en/core/a.md"] == services.files[
+        "ydb/docs/en/core/a.md"
+    ]
 
 
 def test_successfully_repaired_pure_rename_replays_the_new_map():
@@ -555,17 +553,13 @@ def test_successfully_repaired_pure_rename_replays_the_new_map():
     result = services.translate()
     assert result.verdict is Verdict.RED and result.repair_applied
     checkpoint = services.checkpoint()
-    assert checkpoint.state.accepted_documents[0].translated_markdown == "# Corrected\n"
+    assert services.files["ydb/docs/en/core/a.md"] == b"# Corrected\n"
     content = RuntimeContent(RuntimeSource(ENV, GitHubBackend(services.github)), None, ENV)
     replay = replay_continue(content, checkpoint)
-    assert (
-        candidate_sha256(
-            content.assemble_documents(
-                replay.plans, replay.accepted_documents, replay.accepted_maps
-            ).content
-        )
-        == checkpoint.state.candidate_sha256
+    rebuilt = content.assemble_documents(
+        replay.plans, replay.accepted_documents, replay.accepted_maps
     )
+    assert unpack(rebuilt.content)["ydb/docs/en/core/a.md"] == b"# Corrected\n"
 
 
 @pytest.mark.parametrize("mode", ["translate", "verify"])
