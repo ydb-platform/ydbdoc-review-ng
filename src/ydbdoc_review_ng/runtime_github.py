@@ -95,9 +95,27 @@ def _timestamp(value: Any) -> datetime:
 def _single_page(value: Any) -> list[Any]:
     if not isinstance(value, list):
         raise TypeError
-    if len(value) > 100:
-        raise RuntimeBoundaryError("github_result_exceeds_single_page")
     return value
+
+
+def _next_link_path(link_header: str) -> str | None:
+    """Return the api.github.com request path for rel=next, if present."""
+    for part in link_header.split(","):
+        section = part.strip()
+        if 'rel="next"' not in section:
+            continue
+        start = section.find("<")
+        end = section.find(">", start + 1)
+        if start < 0 or end < 0:
+            return None
+        parsed = urllib.parse.urlparse(section[start + 1 : end])
+        if parsed.netloc not in {"api.github.com", ""}:
+            return None
+        path = parsed.path
+        if parsed.query:
+            path += "?" + parsed.query
+        return path
+    return None
 
 
 def _translation_provenance(body: str) -> TranslationProvenance | None:
@@ -125,45 +143,73 @@ class GitHubHTTP:
     def __call__(self, method: str, path: str, payload: object) -> Any:
         endpoint = path.split("?", 1)[0]
         with traced("github", "request", method=method, endpoint=endpoint):
-            token = (
-                self._read_token
-                if method == "GET" and path != "/user"
-                else self._mutation_token
-            )
-            if not token:
-                raise RuntimeBoundaryError("github_credentials_missing")
-            request = urllib.request.Request(
-                "https://api.github.com" + path,
-                data=None if payload is None else json.dumps(payload).encode(),
-                method=method,
-                headers={
-                    "Authorization": "Bearer " + token,
-                    "Accept": "application/vnd.github+json",
-                    "X-GitHub-Api-Version": "2022-11-28",
-                    "Content-Type": "application/json",
-                },
-            )
-            for attempt in range(len(_GITHUB_GET_RETRY_DELAYS) + 1):
-                try:
-                    with urllib.request.urlopen(request, timeout=60) as response:
-                        # Do not silently publish a truncated scope or duplicate a comment.
-                        if 'rel="next"' in response.headers.get("Link", ""):
-                            raise RuntimeBoundaryError("github_result_exceeds_single_page")
-                        body = response.read()
-                        # GitHub DELETE often returns 204 No Content with an empty body.
-                        if not body:
-                            return None
-                        return json.loads(body)
-                except urllib.error.HTTPError as error:
-                    if error.code == 404 and method in {"GET", "DELETE"}:
-                        return None
-                    retryable = method == "GET" and error.code in _RETRYABLE_GITHUB_STATUSES
-                except (OSError, ValueError):
-                    retryable = method == "GET"
-                if not retryable or attempt == len(_GITHUB_GET_RETRY_DELAYS):
-                    raise RuntimeBoundaryError("github_request_failed") from None
-                self._sleep(_GITHUB_GET_RETRY_DELAYS[attempt])
-            raise AssertionError("bounded GitHub GET retry exhausted")
+            if method == "GET":
+                return self._get_following_pages(path)
+            return self._request_once(method, path, payload)
+
+    def _get_following_pages(self, path: str) -> Any:
+        # §1.1 / §5.3: authoritative inventory and continue admission need every page.
+        collected: list[Any] | None = None
+        next_path: str | None = path
+        while next_path is not None:
+            body, link = self._request_once("GET", next_path, None, with_link=True)
+            next_path = _next_link_path(link)
+            if not isinstance(body, list):
+                if collected is not None:
+                    raise RuntimeBoundaryError("github_request_failed")
+                return body
+            if collected is None:
+                collected = []
+            collected.extend(body)
+        return [] if collected is None else collected
+
+    def _request_once(
+        self,
+        method: str,
+        path: str,
+        payload: object,
+        *,
+        with_link: bool = False,
+    ) -> Any:
+        token = (
+            self._read_token
+            if method == "GET" and path != "/user"
+            else self._mutation_token
+        )
+        if not token:
+            raise RuntimeBoundaryError("github_credentials_missing")
+        request = urllib.request.Request(
+            "https://api.github.com" + path,
+            data=None if payload is None else json.dumps(payload).encode(),
+            method=method,
+            headers={
+                "Authorization": "Bearer " + token,
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+                "Content-Type": "application/json",
+            },
+        )
+        for attempt in range(len(_GITHUB_GET_RETRY_DELAYS) + 1):
+            try:
+                with urllib.request.urlopen(request, timeout=60) as response:
+                    link = response.headers.get("Link", "")
+                    body = response.read()
+                    # GitHub DELETE often returns 204 No Content with an empty body.
+                    if not body:
+                        parsed: Any = None
+                    else:
+                        parsed = json.loads(body)
+                    return (parsed, link) if with_link else parsed
+            except urllib.error.HTTPError as error:
+                if error.code == 404 and method in {"GET", "DELETE"}:
+                    return (None, "") if with_link else None
+                retryable = method == "GET" and error.code in _RETRYABLE_GITHUB_STATUSES
+            except (OSError, ValueError):
+                retryable = method == "GET"
+            if not retryable or attempt == len(_GITHUB_GET_RETRY_DELAYS):
+                raise RuntimeBoundaryError("github_request_failed") from None
+            self._sleep(_GITHUB_GET_RETRY_DELAYS[attempt])
+        raise AssertionError("bounded GitHub GET retry exhausted")
 
 
 class GitHubBackend:

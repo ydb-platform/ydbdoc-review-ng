@@ -118,6 +118,7 @@ def test_scope_failure_is_reported_once_in_source_pr_and_updated_on_retry():
     body = backend.comments[7].body
     assert "🔴 Перевод PR не запущен" in body
     assert "Лимит: 250000 символов" in body
+    assert "Переменная: `YDBDOC_MAX_SOURCE_CHARACTERS`." in body
     assert "doc_translate" in body
 
     qa.report_failure(50858, "source_character_limit_exceeded", 250000)
@@ -161,6 +162,7 @@ def test_runtime_scope_failure_comment_uses_actual_configured_limit(
     runtime_reporter.report_failure(50858, diagnostic)
 
     assert expected in backend.comments[7].body
+    assert f"Переменная: `{variable}`." in backend.comments[7].body
     assert backend.events == [("create_comment", 50858), ("update_comment", 50858, 7)]
 
 
