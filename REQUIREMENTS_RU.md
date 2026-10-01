@@ -349,7 +349,9 @@ code по-прежнему защищены. Семантическую неиз
    source-файлы всей frozen-группы перевода: исходные файлы PR, рекурсивно
    добавленные зависимости и все созданные или изменённые TOC. Файлы, для
    которых уже найден существующий target-перевод и на которых рекурсия
-   остановилась, в review scope не входят.
+   остановилась, в review scope не входят. Для каждого изменённого TOC critic и
+   arbiter дополнительно получают полные source-версии до и после PR, чтобы
+   видеть точную навигационную дельту.
 2. Берём полные соответствующие target-файлы всей frozen-группы из переводного
    PR. Если переводчик
    не смог создать обязательный target-файл, critic получает полный source-файл
@@ -442,6 +444,10 @@ You receive:
 3. Every complete paired YDB glossary section relevant to the supplied source
    or translated files.
 
+For every changed TOC file, you also receive its complete source content before
+and after the source pull request. Use that pair as the authoritative navigation
+delta.
+
 Your task is to compare the complete source files with the complete translated
 files and correct every translation error you find.
 
@@ -530,6 +536,10 @@ You receive:
 2. Complete final target-language files from the translation branch.
    A required target file can be represented by JSON null if it is missing.
 3. Every complete paired YDB glossary section relevant to the supplied files.
+
+For every changed TOC file, you also receive its complete source content before
+and after the source pull request. Use that pair as the authoritative navigation
+delta.
 
 Review all supplied source/target file pairs together as one chunk.
 
@@ -634,7 +644,9 @@ target `target_line` является положительным integer, а `se
    только для scope/link-проверок и не является контекстом модели.
 5. Перевести документ одним вызовом, восстановить protected fragments и проверить
    собранный Markdown/YFM. Для невалидного результата разрешена одна техническая
-   повторная попытка по правилам раздела 4.
+   повторная попытка по правилам раздела 4. Отдельно обработать каждый изменённый
+   TOC по разделу 8: Python вычисляет и применяет структурную дельту, а DeepSeek
+   переводит только новые или изменённые пользовательские строки.
 6. Сначала попытаться перевести весь выбранный набор страниц. Отдельные
    переведённые страницы до завершения всего translator stage не публикуются.
    Затем все успешно переведённые файлы публикуются одним commit/push в
@@ -846,16 +858,27 @@ gate не выполняется. Конкурентная атомарная re
   навигации из этого следуют. Классификация не разрешает потерять файл из полного
   inventory и проверяется runtime.
 - Все поддерживаемые TOC-файлы обрабатываются отдельно от обычного whole-file
-  перевода. Для существующего target TOC модель применяет только навигационные
-  операции текущего PR к полному актуальному target TOC, сохраняя несвязанные
-  записи target-ветки. Она может исправлять любые ошибки TOC, включая names,
-  href, hierarchy, includes, conditions и другие поля; ограничение только на
-  `name/title` запрещено. Если удаляемая или переименовываемая source PR запись
-  уже отсутствует в существующем target TOC, операция считается уже выполненной
-  и не является ошибкой. Если добавляемая или изменяемая запись уже существует
-  в target TOC с тем же итоговым `href`, модель обновляет эту запись по данным
+  перевода. Python парсит полные source TOC до и после PR, вычисляет структурную
+  дельту и применяет её к полному текущему target TOC. Python владеет добавлением,
+  удалением, изменением и переименованием записей, `href`, hierarchy, includes,
+  conditions и прочими нетекстовыми полями и сохраняет несвязанные записи
+  target-ветки. Если удаляемая или переименовываемая source PR запись уже
+  отсутствует в существующем target TOC, операция считается уже выполненной и
+  не является ошибкой. Если добавляемая или изменяемая запись уже существует в
+  target TOC с тем же итоговым `href`, Python обновляет эту запись по данным
   текущего PR и не создаёт вторую. Дублирующиеся итоговые `href` в одном TOC
   запрещены.
+- DeepSeek получает только новые или изменённые пользовательские строки TOC,
+  включая `name`, `title`, `label` и другие видимые текстовые поля, вместе с
+  контекстом соответствующих записей и релевантными парными секциями glossary.
+  Он возвращает строгую JSON-карту всех запрошенных IDs ровно по одному разу;
+  Python вставляет переводы в заранее вычисленные позиции и не разрешает модели
+  менять структуру или пути. При provider error или невалидном ответе выполняется
+  ровно одна повторная попытка. После второй ошибки TOC отмечается pending, его
+  невалидный результат не публикуется, а остальные файлы продолжают обработку.
+  Critic затем получает полный source TOC до и после PR и текущий target TOC либо
+  `null`, может вернуть полный исправленный TOC, после чего runtime снова
+  выполняет все TOC-проверки.
 - Если соответствующего target TOC совсем нет, но source PR изменяет
   существующий source TOC, создаётся новый валидный target TOC. В него
   переносятся только навигационные изменения самого source PR: добавленные
