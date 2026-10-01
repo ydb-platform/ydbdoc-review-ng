@@ -17,8 +17,13 @@
 | 7 | Continuation state v3 | done |
 | 8 | Soft-publish частичных translation success до critic | done |
 | 9 | `doc_verify` | done |
-| 10 | Budget / reporting | pending |
+| 10 | Budget / reporting | done |
 | 11 | Full suite + live PR | pending |
+
+> [!note] Pre-existing continue_review drift
+> Несколько integration assertions ещё ждут timeline/commits после critic
+> immediate push (`test_critic_editor_*`, pinned branch/publish failures).
+> Не регрессия TOC string map; чинить отдельным срезом или вместе с live PR.
 
 ## Известные расхождения в коде
 
@@ -47,5 +52,8 @@
   Structural applicator `toc_delta.apply_toc_delta`: add/delete/rename/change,
   href, hierarchy, includes, conditions; unrelated target entries preserved;
   delete-only without target TOC creates no file. DeepSeek JSON-ID string
-  translation for new/changed visible labels still provisional (source text /
-  translation map hook); wire model call remains a follow-up under reporting.
+  translation for new/changed `name`/`title`/`label`: one retry; map failure →
+  TOC pending null, other files continue (same soft-publish path as docs).
+- ~~Reporting: public findings capped by files (10), not by findings (25).~~
+  QA comment caps at 25 findings with omitted counter; GREEN/YELLOW/RED icons,
+  cost (unknown ≠ 0), YELLOW success recipe (`doc_verify`).

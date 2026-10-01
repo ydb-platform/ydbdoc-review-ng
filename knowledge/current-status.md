@@ -15,6 +15,8 @@
 
 ## Код
 
-Срезы 1–9 закрыты на local `main` (включая TOC §3 structural delta applicator).
-Остаётся: DeepSeek TOC string JSON-ID call (проvisional source/map), budget/
-reporting, full suite/live PR — см. `debt-map.md`.
+Срезы 1–10 закрыты на local `main` (TOC §3 structural + DeepSeek string ID-map,
+reporting §7 findings cap). Остаётся: full suite / live PR — см. `debt-map.md`.
+
+Известный pre-existing drift в части continue_review assertions (timeline/commits
+после critic immediate push) — не блокер этого среза; live PR не заявляем.
