@@ -58,6 +58,9 @@ def test_arbiter_renders_exact_canonical_prompt() -> None:
             "{{ " + placeholder + " }}",
             json.dumps({path: text.decode() for path, text in files.items()}, ensure_ascii=False),
         )
+    approved = approved.replace("{{ SOURCE_TOC_SNAPSHOTS }}", "{}").replace(
+        "{{ BINARY_MANIFEST }}", "{}"
+    )
     assert request().prompt == approved
     # Canonical arbiter prompt lives in the package (REQUIREMENTS no longer embeds it).
     assert "{{ SOURCE_PR_FILES }}" in packaged

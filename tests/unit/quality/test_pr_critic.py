@@ -65,6 +65,8 @@ def test_critic_renders_exact_shipped_prompt_template() -> None:
                 {path: text.decode() for path, text in GLOSSARY_FILES.items()}, ensure_ascii=False
             ),
         )
+        .replace("{{ SOURCE_TOC_SNAPSHOTS }}", "{}")
+        .replace("{{ BINARY_MANIFEST }}", "{}")
     )
     assert request().prompt == expected
 

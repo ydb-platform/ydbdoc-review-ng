@@ -194,13 +194,19 @@ def build_pr_arbiter_request(
     )
     if operator_context is not None:
         prompt += "\n<operator-context>\n" + operator_context + "</operator-context>"
+    # §4.1/§4.2: resource-only scope still needs reportable finding paths.
+    allowed_paths = list(translated_files)
+    if binary_manifest:
+        for path in binary_manifest:
+            if path not in allowed_paths:
+                allowed_paths.append(path)
     schema = {
         "type": "object",
         "properties": {
             "verdict": {"type": "string", "enum": ["GREEN", "YELLOW", "RED"]},
             "findings": {
                 "type": "array",
-                "items": _finding_schema({"type": "string", "enum": list(translated_files)}),
+                "items": _finding_schema({"type": "string", "enum": allowed_paths}),
             },
         },
         "required": ["verdict", "findings"],

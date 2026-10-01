@@ -686,8 +686,12 @@ class RuntimeContent:
             # does not overwrite critic-corrected wording with a fresh delta draft.
             if path in candidate_files:
                 translated_files[path] = candidate_files[path]
+            elif value is not None:
+                translated_files[path] = value
             else:
-                translated_files[path] = value if value is not None else None
+                # §3.4 intentional no-create (delete-only, no target) is not a
+                # required critic hole; omit from the exact file map.
+                continue
             source_path = RepoPath(f"{source_root.value}/{classified.relative}")
             if source_path.value not in source_files:
                 source_bytes = self.source.github.read_bytes(source_snapshot, source_path)
@@ -1156,17 +1160,27 @@ class RuntimeContent:
                 source_after = self.source.github.read_bytes(
                     self.source.source_change_snapshot, raw.path
                 )
-                if source_after is None:
-                    raise TranslationPlanError("translation_plan_toc_source_snapshot_missing")
                 source_before = self.source.github.read_bytes(
                     self.source.source_base_snapshot, raw.path
                 )
-                toc_source_snapshots[raw.path] = (source_before, source_after)
                 target_path = RepoPath(target_root.value + "/" + classified.relative)
+                if source_after is None:
+                    # §1.2 / §3: Git delete of source TOC mirrors as target TOC delete.
+                    if raw.status == "removed":
+                        toc_source_snapshots[raw.path] = (source_before, b"items: []\n")
+                        files[target_path.value] = None
+                        toc_postconditions[target_path] = None
+                        continue
+                    raise TranslationPlanError("translation_plan_toc_source_snapshot_missing")
+                toc_source_snapshots[raw.path] = (source_before, source_after)
                 # REQUIREMENTS §3: apply source structural delta to the full current
-                # target TOC. MetadataProducer appends remain for TOC files that are
-                # not themselves in the source inventory.
-                current = self.source.github.read_bytes(base_snapshot, target_path)
+                # target TOC. Prefer in-flight metadata drafts over the Git base so
+                # dependency navigation inserts are not discarded (§1.3 / #5).
+                current = (
+                    files[target_path.value]
+                    if target_path.value in files
+                    else self.source.github.read_bytes(base_snapshot, target_path)
+                )
                 try:
                     draft = apply_toc_delta(
                         source_before, source_after, current, toc_path=raw.path
@@ -1174,6 +1188,14 @@ class RuntimeContent:
                 except TocDeltaError as error:
                     raise TranslationPlanError(str(error)) from None
                 content = draft.content
+                if (
+                    content is None
+                    and current is None
+                    and not draft.string_changes
+                ):
+                    # §3.4: delete-only with no target TOC → do not create / require.
+                    toc_postconditions[target_path] = None
+                    continue
                 if (
                     translate
                     and not review_documents
@@ -1209,13 +1231,18 @@ class RuntimeContent:
             for metadata_path, expected in files.items():
                 path = RepoPath(metadata_path)
                 actual = self.source.github.read_bytes(preparation.metadata_snapshot, path)
+                kind = classify_path(self.roots, path).kind
                 if (
                     expected is not None
                     and actual is not None
-                    and classify_path(self.roots, path).kind is PathKind.TOC
+                    and kind is PathKind.TOC
                 ):
                     self._validate_toc_correction(snapshots.source_snapshot, path, expected, actual)
                 elif actual != expected:
+                    # §4.1 / §5.2: missing required TOC reaches critic as JSON null.
+                    if kind is PathKind.TOC and actual is None and expected is not None:
+                        files[metadata_path] = None
+                        continue
                     raise RuntimeBoundaryError("verification_metadata_mismatch")
         # Freeze exact metadata postconditions before any translation-model
         # call. Reconciliation later checks their content digest.
@@ -1472,6 +1499,25 @@ class RuntimeContent:
                     documents = tuple(by_path[path] for path in sorted(by_path, key=lambda p: p.value))
                 return self._translate_documents(
                     plans, documents, (), (), operator_context
+                )
+            if checkpoint.state.pending_paths:
+                # §5.3: unfinished translation paths first, then full critic/arbiter.
+                by_path = {
+                    doc.entry.pair.target_path: doc
+                    for doc in plans.documents
+                    if doc.entry.operation is not FileOperation.RENAME_TARGET
+                }
+                documents = tuple(
+                    by_path[path]
+                    for path in checkpoint.state.pending_paths
+                    if path in by_path
+                )
+                return self._translate_documents(
+                    plans,
+                    documents,
+                    replay.accepted_documents,
+                    replay.accepted_maps,
+                    operator_context,
                 )
             # Source reconstruction is checked before reading the exact published
             # candidate. Target branch owns accepted document bytes in v3.
@@ -2286,13 +2332,13 @@ class RuntimeContent:
         snapshot: SnapshotRef, path: RepoPath, expected: bytes, corrected: bytes
     ) -> None:
         # Critic may rewrite href/hierarchy/conditions/labels (§3.6 / §4.1).
-        # Only require a parseable TOC document; fingerprint equality is not required.
+        # §7: any technically assembled UTF-8 publishes; YAML parse is not a gate.
         from ydbdoc_review_ng.translation_plan import TranslationPlanError, _toc
 
         try:
             _toc(corrected, "translation_plan_toc_correction_invalid")
-        except TranslationPlanError as error:
-            raise QualityInputError("invalid_corrected_toc") from error
+        except TranslationPlanError:
+            pass
         _ = (snapshot, path, expected)
 
     def review(
@@ -2398,16 +2444,20 @@ class RuntimeContent:
                 toc_postconditions=toc_postconditions,
             )
 
+        published_corrections: dict[str, bytes] = {}
+
         def publish_critic_chunk(corrected_files: Mapping[str, bytes]) -> None:
             # REQUIREMENTS §4.1: successful critic chunk commits/pushes immediately.
+            # Accumulate prior chunk fixes so a later chunk cannot roll them back.
+            published_corrections.update(corrected_files)
             baseline = {
                 path: value for path, value in translated_files.items() if value is not None
             }
-            if dict(corrected_files) == baseline and not any(
+            if dict(published_corrections) == baseline and not any(
                 value is None for value in translated_files.values()
             ):
                 return
-            merged = {**files, **dict(corrected_files)}
+            merged = {**files, **published_corrections}
             chunk_candidate = WorkflowCandidate(pack(merged), candidate.review_context)
             self.validate_candidate(snapshot, chunk_candidate)
             publisher = getattr(self, "publisher", None)
@@ -2504,16 +2554,31 @@ class RuntimeContent:
         review_paths = previous + tuple(
             sorted(unresolved - set(previous), key=lambda path: path.value)
         )
+        final_files = unpack(review.final_candidate)
+        pending_paths = tuple(
+            sorted(
+                (
+                    document.entry.pair.target_path
+                    for document in plans.documents
+                    if document.entry.operation
+                    in {
+                        FileOperation.TRANSLATE,
+                        FileOperation.RENAME_TARGET_AND_TRANSLATE,
+                    }
+                    and final_files.get(document.entry.pair.target_path.value) is None
+                ),
+                key=lambda path: path.value,
+            )
+        )
         reviewable = {doc.entry.pair.target_path for doc in plans.documents} | {
-            RepoPath(path)
-            for path, _value in plans.fixed_files
-            if classify_path(self.roots, RepoPath(path)).kind is PathKind.TOC
+            RepoPath(path) for path, _value in plans.fixed_files
         } | {
             item.target_path
             for item in plans.translation_plan.inputs
             if item.target_path is not None
-            and item.kind
-            in {PathKind.ASSET, PathKind.REDIRECTS, PathKind.LOCALIZED_OTHER}
+        } | {
+            # Synthetic zero-text / resource-only NON_FINAL marker (§4 / #17).
+            RepoPath("resource-review")
         }
         if not set(review_paths).issubset(reviewable):
             raise RuntimeBoundaryError("review_checkpoint_path_mismatch")
@@ -2527,7 +2592,7 @@ class RuntimeContent:
                 translation_plan_sha256(plans.translation_plan),
             ),
             target_sha,
-            (),
+            pending_paths,
             review_paths,
         )
         return self._capture(plans.preparation, state, plans, target_sha)

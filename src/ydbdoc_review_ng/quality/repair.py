@@ -196,6 +196,7 @@ def review_pr(
         critic = build_critic(chunk_pairs)
         target_paths = tuple(target for _source, target in chunk_pairs)
         response = None
+        saw_non_final = False
         for attempt in (1, 2):
             if before_model_call is not None:
                 before_model_call()
@@ -215,10 +216,13 @@ def review_pr(
                 if on_successful_critic_chunk is not None:
                     on_successful_critic_chunk(chunk_corrected)
                 break
+            if response.failure is AttemptError.NON_FINAL:
+                # §4: NON_FINAL survives a differently-failed retry → chunk unreviewed.
+                saw_non_final = True
             if attempt == 2:
-                # §4: NON_FINAL marks the chunk unreviewed → RED. Ordinary provider
-                # failure keeps draft bytes for arbiter and is not itself RED.
-                if response.failure is AttemptError.NON_FINAL:
+                # Ordinary provider failure keeps draft bytes for arbiter and is not
+                # itself RED, unless a NON_FINAL attempt already marked the chunk.
+                if saw_non_final:
                     unreviewed.update(target_paths)
                     if not pairs:
                         resource_review_unresolved = True
@@ -257,6 +261,9 @@ def review_pr(
             before_model_call()
         response = executor.invoke(arbiter)
         chunk_files = {target: arbiter_targets[target] for _source, target in chunk_pairs}
+        if not chunk_pairs and binary_manifest:
+            # §4.1: resource-only arbiter findings reference manifest paths.
+            chunk_files = {path: None for path in binary_manifest}
         if not response.success or response.text is None:
             # §4: NON_FINAL → unreviewed RED with report, never a bare abort.
             if response.failure is AttemptError.NON_FINAL:
@@ -280,8 +287,15 @@ def review_pr(
                 resource_review_unresolved = True
 
     findings = [finding for result in results for finding in result.findings]
+    finding_paths = {finding.target_path for finding in findings}
+    # §4.2: missing required target is a hole → RED with null coordinates.
+    for path, value in arbiter_targets.items():
+        if value is None:
+            unreviewed.add(path)
     for path in sorted(unreviewed):
-        findings.append(_unreviewed_finding(path))
+        if path not in finding_paths:
+            findings.append(_unreviewed_finding(path))
+            finding_paths.add(path)
     if resource_review_unresolved and not findings:
         # Resource-only / zero-text NON_FINAL still needs a publishable finding (§4/§7).
         marker = next(iter(sorted(binary_manifest or ())), "resource-review")
