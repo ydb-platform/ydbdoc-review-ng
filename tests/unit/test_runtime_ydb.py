@@ -66,14 +66,21 @@ def test_sdk_naive_utc_timestamp_is_returned_as_aware_utc(monkeypatch) -> None:
 
 
 @pytest.mark.parametrize(
-    ("job_id", "declaration", "value_type"),
+    ("parameter", "value", "declaration", "value_type"),
     [
-        ("job-1", "DECLARE $job_id AS Utf8;", "Utf8"),
-        (None, "DECLARE $job_id AS Utf8?;", "Optional<Utf8>"),
+        ("job_id", "job-1", "DECLARE $job_id AS Utf8;", "Utf8"),
+        ("job_id", None, "DECLARE $job_id AS Utf8?;", "Optional<Utf8>"),
+        (
+            "target_path",
+            "en/concepts/overview.md",
+            "DECLARE $target_path AS Utf8;",
+            "Utf8",
+        ),
+        ("target_path", None, "DECLARE $target_path AS Utf8?;", "Optional<Utf8>"),
     ],
 )
-def test_sdk_executor_binds_job_id_by_nullability(
-    monkeypatch, job_id, declaration, value_type
+def test_sdk_executor_binds_attempt_parameters_by_nullability(
+    monkeypatch, parameter, value, declaration, value_type
 ) -> None:
     calls = []
     pool = SimpleNamespace(
@@ -90,11 +97,11 @@ def test_sdk_executor_binds_job_id_by_nullability(
     monkeypatch.setitem(sys.modules, "ydb", sdk)
 
     SDKExecutor("grpcs://example.test", "/database", "secret").execute(
-        "SELECT $job_id", {"job_id": job_id}
+        f"SELECT ${parameter}", {parameter: value}
     )
 
     assert declaration in calls[0][0]
-    assert calls[0][1] == {"$job_id": (job_id, value_type)}
+    assert calls[0][1] == {f"${parameter}": (value, value_type)}
 
 
 def test_sdk_executor_stops_pool_and_driver_once(monkeypatch) -> None:
