@@ -29,11 +29,11 @@
   "presentation_inline_code": [
     "BS_CONTROLLER",
     "POOL_NAME",
-    "CREATE_FAILED"
-  ],
-  "presentation_leaves_bare": [
+    "CREATE_FAILED",
     "--name",
     "NEW",
-    "WORKING"
-  ]
+    "WORKING",
+    "gen:counter"
+  ],
+  "presentation_leaves_bare": []
 }

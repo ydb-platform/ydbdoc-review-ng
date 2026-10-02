@@ -52,3 +52,43 @@ def test_apply_prefers_unescaped_forms_from_old_en() -> None:
     styles = build_presentation_map(old_en, source_snapshot=SNAPSHOT, source_path=PATH)
     draft = b"Status CREATE\\_FAILED.\n"
     assert _apply(draft, styles) == b"Status CREATE_FAILED.\n"
+
+
+def test_build_maps_cli_flags_and_short_allcaps_from_old_en_backticks() -> None:
+    old_en = (
+        b"* `--name` unique\n"
+        b"* `--hive-id=N` hive\n"
+        b"* `NEW` waiting\n"
+        b"* `WORKING` ready\n"
+        b"* format `gen:counter => collect_gen:collect_step` barrier\n"
+    )
+    styles = build_presentation_map(old_en, source_snapshot=SNAPSHOT, source_path=PATH)
+    assert styles["--name"].inline_code is True
+    assert styles["--hive-id=N"].inline_code is True
+    assert styles["NEW"].inline_code is True
+    assert styles["WORKING"].inline_code is True
+    assert styles["gen:counter"].inline_code is True
+    assert styles["collect_gen:collect_step"].inline_code is True
+
+
+def test_apply_wraps_cli_flags_short_states_and_colon_tokens() -> None:
+    old_en = (
+        b"* `--name` unique\n"
+        b"* `NEW` waiting\n"
+        b"* `WORKING` ready\n"
+        b"* format `gen:counter => collect_gen:collect_step` barrier\n"
+    )
+    styles = build_presentation_map(old_en, source_snapshot=SNAPSHOT, source_path=PATH)
+    draft = (
+        b"* --name unique\n"
+        b"* NEW waiting\n"
+        b"* WORKING ready\n"
+        b"* format gen:counter => collect\\_gen:collect\\_step barrier\n"
+    )
+    applied = _apply(draft, styles)
+    assert b"* `--name` unique\n" in applied
+    assert b"* `NEW` waiting\n" in applied
+    assert b"* `WORKING` ready\n" in applied
+    assert b"`gen:counter`" in applied
+    assert b"`collect_gen:collect_step`" in applied
+    assert b"collect\\_gen" not in applied

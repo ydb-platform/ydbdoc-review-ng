@@ -74,6 +74,9 @@ _DECIMAL = re.compile(rb"-?[0-9]+\.[0-9]+(?:[eE][+-]?[0-9]+)?")
 _IDENTIFIER = re.compile(
     rb"[A-Za-z_](?:[A-Za-z0-9_]|\\_)*(?:::[A-Za-z_](?:[A-Za-z0-9_]|\\_)*)*"
 )
+# Product CamelCase (BlobDepot, LogoBlob): keep opaque so models cannot emit
+# spaced translations like «Blob depot».
+_CAMEL_CASE_PRODUCT = re.compile(rb"[A-Z][a-z]+(?:[A-Z][a-zA-Z0-9]*)+")
 _URI_AUTOLINK = re.compile(rb"<[A-Za-z][A-Za-z0-9+.-]{1,31}:[\x21-\x3b\x3d\x3f-\x7e]+>")
 _EMAIL_AUTOLINK = re.compile(
     rb"<[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+)*@"
@@ -789,7 +792,8 @@ def _inline_regions(
                 and canonical[1] == 95
                 and b"\\_" not in raw[:2]
             )
-            qualified = (b"_" in canonical or b"::" in raw) and not marker_run
+            camel = _CAMEL_CASE_PRODUCT.fullmatch(canonical) is not None
+            qualified = ((b"_" in canonical or b"::" in raw) and not marker_run) or camel
             if (
                 qualified
                 and (before is None or before not in boundary)
@@ -805,7 +809,8 @@ def _inline_regions(
                 cursor = match.end()
                 continue
             # Skip whole unqualified letter runs (no "_" / "::") to avoid O(n²)
-            # rescans on long prose tokens such as "x" * 16000.
+            # rescans on long prose tokens such as "x" * 16000. CamelCase that
+            # failed boundary checks also advances past the whole match.
             if b"_" not in canonical and b"::" not in raw:
                 cursor = match.end()
                 continue

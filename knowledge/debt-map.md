@@ -21,7 +21,8 @@
 | 11 | Identifier atoms + presentation map + draft/reviewed gate | **done** (P0+P1) |
 | 12 | BlobDepot golden harness (P2) | **done** |
 | 13 | Full suite after redesign | **done** (2168 passed) |
-| 14 | Live PR after redesign | pending |
+| 14 | Live PR after redesign | critic fell on 180s timeout; quality hotfix next |
+| 15 | Critic HTTP timeout 180→600 + presentation/CLI/CamelCase | **done** (2026-10-02) |
 
 ## CI translation redesign (2026-10-02)
 

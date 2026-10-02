@@ -60,6 +60,20 @@ def test_unescaped_identifiers_still_atomic() -> None:
     ]
 
 
+def test_camelcase_product_name_is_one_identifier_atom() -> None:
+    """BlobDepot must stay opaque so the model cannot emit «Blob depot»."""
+    source = b"BlobDepot extends storage. See also LogoBlob.\n"
+    assert _regions(source) == [
+        (ProtectedKind.IDENTIFIER, b"BlobDepot"),
+        (ProtectedKind.IDENTIFIER, b"LogoBlob"),
+    ]
+    prepared = prepare_document(source, _plan(source))
+    prepared_text = prepared.chunks[0].text
+    assert "BlobDepot" not in prepared_text
+    assert "LogoBlob" not in prepared_text
+    assert "Blob" not in prepared_text
+
+
 def test_inline_code_identifier_stays_inline_code() -> None:
     source = b"Use `POOL_NAME` now.\n"
     assert _regions(source) == [(ProtectedKind.INLINE_CODE, b"`POOL_NAME`")]

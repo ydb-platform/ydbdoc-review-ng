@@ -80,7 +80,7 @@ def test_blobdepot_identifier_atoms_survive_prepare_and_restore() -> None:
 
 
 def test_blobdepot_presentation_map_wraps_atoms_from_old_en() -> None:
-    """When old EN is present, map wraps matching identifier atoms; CLI flag stays bare."""
+    """When old EN is present, map wraps matching atoms, CLI flags, and short states."""
     old_en = _load_bytes("old.en.md")
     expect = _expectations()
     styles = build_presentation_map(old_en, source_snapshot=SNAPSHOT, source_path=EN_PATH)
@@ -97,6 +97,7 @@ def test_blobdepot_presentation_map_wraps_atoms_from_old_en() -> None:
         b"* CREATE_FAILED - error\n"
         b"* CREATE\\_FAILED escaped\n\n"
         b"Monitoring page BS_CONTROLLER.\n"
+        b"Format gen:counter => collect\\_gen:collect\\_step.\n"
     )
     applied = apply_presentation_map(
         draft, styles, source_snapshot=SNAPSHOT, source_path=EN_PATH
@@ -104,9 +105,11 @@ def test_blobdepot_presentation_map_wraps_atoms_from_old_en() -> None:
     for token in expect["presentation_inline_code"]:
         assert (b"`" + token.encode("utf-8") + b"`") in applied
     assert b"CREATE\\_FAILED" not in applied
-    assert b"* --name unique name\n" in applied
-    assert b"* NEW - waiting\n" in applied
-    assert b"* WORKING - ready\n" in applied
+    assert b"* `--name` unique name\n" in applied
+    assert b"* `NEW` - waiting\n" in applied
+    assert b"* `WORKING` - ready\n" in applied
+    assert b"`gen:counter`" in applied
+    assert b"collect\\_gen" not in applied
 
 
 def test_blobdepot_absent_old_en_presentation_apply_is_noop() -> None:

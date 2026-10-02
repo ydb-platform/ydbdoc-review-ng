@@ -18,6 +18,7 @@ and `ydb_executor`. No separate deployment Python module must be authored.
 | `YDBDOC_MODEL_CRITIC` | Semantic critic-editor, default `yandexgpt-5.1`, independently selected from the translator. |
 | `YDBDOC_MODEL_ARBITER` | Independent read-only arbiter, default `YDBDOC_MODEL`. Reviews the final complete result and returns GREEN/YELLOW/RED by degree of problems. Residual findings go directly to the report. |
 | `YDBDOC_MODEL_FALLBACK` | Optional fallback model name, default `yandexgpt-5.1`. Used when the primary model returns a provider failure or content filter. |
+| `YDBDOC_MODEL_HTTP_TIMEOUT_SECONDS` | Optional urllib timeout for every model HTTP call. Default `600` (was `180`; critic with `reasoning_effort=high` regularly exceeded that wall). Constructor `timeout_seconds` remains the unit-test override. |
 | `YDB_ENDPOINT`, `YDB_DATABASE`, `YDB_TOKEN` | Optional YDB endpoint, database path and access token. Connection is lazy. |
 | `YDB_SA_KEY` | Existing inline Yandex Cloud service-account JSON. Used when `YDB_TOKEN` is absent; endpoint/database default to the deployed documentation database and remain overridable by `YDB_ENDPOINT`/`YDB_DATABASE`. |
 | `YDBDOC_DAILY_BUDGET_RUB` | Passed only to translate as `--budget-rub`; verify and continue have no gate. |

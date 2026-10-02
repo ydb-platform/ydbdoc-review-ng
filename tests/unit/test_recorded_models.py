@@ -116,6 +116,32 @@ def test_non_final_has_one_persisted_attempt() -> None:
     assert len(executor.calls) == len(transport.requests) == 1
 
 
+def test_recorded_models_default_http_timeout_is_600_and_env_override_applies() -> None:
+    default_transport = FakeTransport(openai_response())
+    default_models = RecordedModels(
+        {"YANDEX_API_KEY": "test", "YANDEX_FOLDER_ID": "folder"},
+        YdbPersistence(FakeExecutor()),
+        default_transport,
+    )
+    default_models.bind_job("job")
+    default_models.invoke(ModelRequest(ModelRole.CRITIC, "deepseek-v4-flash", "review", None))
+    assert default_transport.requests[0].timeout_seconds == 600.0
+
+    override_transport = FakeTransport(openai_response())
+    override_models = RecordedModels(
+        {
+            "YANDEX_API_KEY": "test",
+            "YANDEX_FOLDER_ID": "folder",
+            "YDBDOC_MODEL_HTTP_TIMEOUT_SECONDS": "900",
+        },
+        YdbPersistence(FakeExecutor()),
+        override_transport,
+    )
+    override_models.bind_job("job")
+    override_models.invoke(ModelRequest(ModelRole.CRITIC, "deepseek-v4-flash", "review", None))
+    assert override_transport.requests[0].timeout_seconds == 900.0
+
+
 def test_filtered_translation_stops_after_two_audit_rows_without_fallback_or_split() -> None:
     executor = FakeExecutor()
     filtered = openai_response(status="content_filter")

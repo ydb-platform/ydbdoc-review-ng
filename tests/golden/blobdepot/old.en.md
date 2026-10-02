@@ -40,3 +40,5 @@ On the `BS_CONTROLLER` monitoring page there is a special Virtual groups tab.
 State | Blob depot state; can be NEW, WORKING, CREATED_FAILED.
 
 ErrorReason | For `CREATE_FAILED` state contains a text description of the creation error reason.
+
+Barrier format: `gen:counter => collect_gen:collect_step`.

@@ -1,7 +1,8 @@
 """Optional presentation transfer from an existing target translation.
 
-Old EN/RU is a formatting reference only: which identifier atoms were wrapped in
-inline code, and that bare underscores are preferred over Markdown escapes.
+Old EN/RU is a formatting reference only: which identifier atoms, CLI flags,
+short ALLCAPS states, and colon-form technical tokens were wrapped in inline
+code, and that bare underscores are preferred over Markdown escapes.
 When the existing target is absent, the map is empty and apply is a no-op.
 """
 
@@ -16,6 +17,18 @@ from ydbdoc_review_ng.parser.markdown import build_markdown_plan
 from ydbdoc_review_ng.plan import ProtectedKind, fields_of
 
 _CANONICAL_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*$")
+_CLI_FLAG = re.compile(r"^--[A-Za-z0-9][A-Za-z0-9_-]*(?:=.*)?$")
+_ALLCAPS_STATE = re.compile(r"^[A-Z][A-Z0-9]{1,63}$")
+_COLON_TECH = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?::[A-Za-z_][A-Za-z0-9_]*)+$")
+# Piece scanner: colon-form and underscore ids before ALLCAPS so BS_CONTROLLER
+# is not split into BS + CONTROLLER, and gen:counter is not split at gen.
+_INLINE_TECH_PIECE = re.compile(
+    r"--[A-Za-z0-9][A-Za-z0-9_-]*(?:=[^\s`]*)?"
+    r"|[A-Za-z_][A-Za-z0-9_]*(?::[A-Za-z_][A-Za-z0-9_]*)+"
+    r"|[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)+"
+    r"|[A-Za-z_][A-Za-z0-9_]*_[A-Za-z0-9_]*(?:_[A-Za-z0-9_]*)*"
+    r"|(?<![A-Za-z0-9_])[A-Z][A-Z0-9]{1,63}(?![A-Za-z0-9_])"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,16 +37,58 @@ class PresentationStyle:
     inline_code: bool
 
 
-def _canonical_identifier(fragment: bytes) -> str | None:
+def _normalize_fragment(fragment: bytes) -> str | None:
     try:
-        text = fragment.replace(b"\\_", b"_").decode("utf-8")
+        return fragment.replace(b"\\_", b"_").decode("utf-8")
     except UnicodeDecodeError:
+        return None
+
+
+def _canonical_identifier(fragment: bytes) -> str | None:
+    text = _normalize_fragment(fragment)
+    if text is None:
         return None
     if _CANONICAL_IDENTIFIER.fullmatch(text) is None:
         return None
     if "_" not in text and "::" not in text:
         return None
     return text
+
+
+def _presentation_token(text: str) -> str | None:
+    if _CLI_FLAG.fullmatch(text) is not None:
+        return text
+    if _ALLCAPS_STATE.fullmatch(text) is not None:
+        return text
+    if _COLON_TECH.fullmatch(text) is not None:
+        return text
+    if _CANONICAL_IDENTIFIER.fullmatch(text) is not None and (
+        "_" in text or "::" in text
+    ):
+        return text
+    return None
+
+
+def _tokens_from_inline_code(inner: bytes) -> tuple[str, ...]:
+    text = _normalize_fragment(inner)
+    if text is None or not text:
+        return ()
+    whole = _presentation_token(text)
+    # Underscore / :: identifiers are atomic: never emit ALLCAPS fragments.
+    if whole is not None and ("_" in whole or "::" in whole or whole.startswith("--")):
+        return (whole,)
+    found: list[str] = []
+    seen: set[str] = set()
+    if whole is not None:
+        found.append(whole)
+        seen.add(whole)
+    for match in _INLINE_TECH_PIECE.finditer(text):
+        token = _presentation_token(match.group(0))
+        if token is None or token in seen:
+            continue
+        found.append(token)
+        seen.add(token)
+    return tuple(found)
 
 
 def build_presentation_map(
@@ -58,10 +113,8 @@ def build_presentation_map(
                     fragment.startswith(b"`") and fragment.endswith(b"`") and len(fragment) >= 2
                 ):
                     continue
-                token = _canonical_identifier(fragment[1:-1])
-                if token is None:
-                    continue
-                styles[token] = PresentationStyle(token, True)
+                for token in _tokens_from_inline_code(fragment[1:-1]):
+                    styles[token] = PresentationStyle(token, True)
             elif region.kind is ProtectedKind.IDENTIFIER:
                 token = _canonical_identifier(fragment)
                 if token is None:
@@ -106,10 +159,12 @@ def apply_presentation_map(
             replacements, key=lambda item: item[0], reverse=True
         ):
             result[start:end] = replacement
-        return bytes(result)
+        text = bytes(result)
+    else:
+        text = draft
 
-    # Fallback for drafts that still contain escaped identifier prose.
-    text = draft
+    # Fallback for drafts that still contain escaped identifier prose, CLI flags,
+    # short ALLCAPS states, and colon-form tokens outside IDENTIFIER regions.
     for token, style in styles.items():
         escaped = token.replace("_", "\\_").encode("utf-8")
         bare = token.encode("utf-8")

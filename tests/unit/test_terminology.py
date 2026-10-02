@@ -120,6 +120,30 @@ def test_equal_relevance_is_ordered_by_anchor() -> None:
     assert context.index('anchor="aardvark"') < context.index('anchor="zebra"')
 
 
+def test_blobdepot_glossary_section_is_selected_when_present_in_both_locales() -> None:
+    """Wiring check for #54797: BlobDepot paired section must reach translator prompts."""
+    from ydbdoc_review_ng.terminology import bilingual_glossary_context
+
+    source = (
+        "#### BlobDepot {#blob-depot}\n\n"
+        "**BlobDepot** — системная таблетка распределённого хранилища.\n"
+    ).encode()
+    target = (
+        b"#### BlobDepot {#blob-depot}\n\n"
+        b"**BlobDepot** is a system tablet in distributed storage.\n"
+    )
+    context = bilingual_glossary_context(
+        "BlobDepot расширяет функциональность виртуальных групп.",
+        source,
+        target,
+    )
+
+    assert context is not None
+    assert 'anchor="blob-depot"' in context
+    assert "**BlobDepot** — системная таблетка" in context
+    assert "**BlobDepot** is a system tablet" in context
+
+
 def test_each_document_selects_only_its_own_relevant_sections() -> None:
     from ydbdoc_review_ng.terminology import bilingual_glossary_context
 

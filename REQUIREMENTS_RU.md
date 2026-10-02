@@ -99,10 +99,12 @@ front matter `title`/`description`, заголовки YFM note/cut/tab, ком�
 Перед вызовом непрозрачные фрагменты → placeholders. URL в link/image:
 подпись видна, destination = URL-token. Markdown-синтаксис модели виден.
 Защищены: URL path/query, **identifier atoms** (целый `BS_CONTROLLER` /
-`CREATE_FAILED` / `POOL_NAME`; не рвать на bare ESCAPE `\_` внутри),
+`CREATE_FAILED` / `POOL_NAME`; CamelCase product names вроде `BlobDepot` /
+`LogoBlob`; не рвать на bare ESCAPE `\_` внутри),
 templates, inline code, код вне комментариев, Mermaid, include, прочий
 front matter, technical HTML. Если old target есть — Python строит
-presentation map (какие атомы были в backticks / без escapes) и накладывает
+presentation map (какие атомы / CLI flags / short ALLCAPS states /
+colon-form tokens были в backticks / без escapes) и накладывает
 её на draft после restore; если нет — apply no-op.
 
 Внутренние YDB URL: только `/docs/ru/` ↔ `/docs/en/`. Для `glossary.md`

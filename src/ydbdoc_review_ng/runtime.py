@@ -89,6 +89,23 @@ _PRODUCTION_PRICING = PerModelPricing(
     }
 )
 
+# Critic/arbiter with reasoning_effort=high need well above the old 180s wall
+# (Actions run 37009373894: TRANSPORT @ ~182s, http_status=null).
+_DEFAULT_MODEL_HTTP_TIMEOUT_SECONDS = 600.0
+
+
+def _model_http_timeout_seconds(environment: Mapping[str, str]) -> float:
+    raw = environment.get("YDBDOC_MODEL_HTTP_TIMEOUT_SECONDS", "").strip()
+    if not raw:
+        return _DEFAULT_MODEL_HTTP_TIMEOUT_SECONDS
+    try:
+        value = float(raw)
+    except ValueError as error:
+        raise RuntimeBoundaryError("model_http_timeout_invalid") from error
+    if not (value > 0):
+        raise RuntimeBoundaryError("model_http_timeout_invalid")
+    return value
+
 
 class SystemClock:
     def now(self) -> datetime:
@@ -133,6 +150,7 @@ class RecordedModels:
             self.record,
             pricing=_PRODUCTION_PRICING,
             execution=ExecutionConfig(max_attempts=1 if request.role is ModelRole.DIRECTION else 2),
+            timeout_seconds=_model_http_timeout_seconds(self.environment),
         )
         return client.prepare_request(request)
 
@@ -153,6 +171,7 @@ class RecordedModels:
             self.record,
             pricing=_PRODUCTION_PRICING,
             execution=ExecutionConfig(max_attempts=1 if request.role is ModelRole.DIRECTION else 2),
+            timeout_seconds=_model_http_timeout_seconds(self.environment),
         )
         details: dict[str, object] = {
             "model_role": request.role.value,

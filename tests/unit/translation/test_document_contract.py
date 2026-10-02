@@ -240,15 +240,18 @@ def test_link_boundaries_prevent_model_from_merging_two_links() -> None:
 
     request = prepare_document(source, plan)
     tokens = tuple(item.token for item in request.placeholders)
-
-    assert tokens == ("[[YDBDOC_URL_0001]]", "[[YDBDOC_URL_0002]]")
+    assert len(tokens) == 3
+    assert tokens[0].startswith("[[YDBDOC_URL_")
+    assert tokens[2].startswith("[[YDBDOC_URL_")
+    scheme = next(item for item in request.placeholders if item.source_bytes == b"SchemeShard")
+    assert scheme.token in tokens
     assert request.chunks[0].text == (
         f"* [Оптимизировано]({tokens[0]}) потребление CPU репликами "
-        f"[SchemeShard]({tokens[1]}).\n"
+        f"[{scheme.token}]({tokens[2]}).\n"
     )
     translated = (
         f"* [CPU consumption has been optimized]({tokens[0]}) by "
-        f"[SchemeShard]({tokens[1]}) replicas.\n"
+        f"[{scheme.token}]({tokens[2]}) replicas.\n"
     )
     assert restore_document(source, plan, request, (translated,)) == (
         b"* [CPU consumption has been optimized](release.md) by "

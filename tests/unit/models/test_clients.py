@@ -278,8 +278,10 @@ def test_yandex_clients_use_validated_default_request_timeout() -> None:
     native_client(native_transport, []).invoke(request())
     openai_client(openai_transport, []).invoke(request("deepseek-v4-flash/latest"))
 
-    assert native_transport.requests[0].timeout_seconds == 180.0
-    assert openai_transport.requests[0].timeout_seconds == 180.0
+    # Critic/arbiter with reasoning_effort=high regularly exceed 180s wall
+    # (run 37009373894: transport @ ~182s). Default must be far above that.
+    assert native_transport.requests[0].timeout_seconds == 600.0
+    assert openai_transport.requests[0].timeout_seconds == 600.0
 
 
 def test_yandex_client_preserves_explicit_request_timeout() -> None:
@@ -294,6 +296,20 @@ def test_yandex_client_preserves_explicit_request_timeout() -> None:
     client.invoke(request())
 
     assert transport.requests[0].timeout_seconds == 12.5
+
+
+def test_yandex_openai_client_timeout_is_constructor_configurable() -> None:
+    transport = FakeTransport(openai_response())
+    client = YandexOpenAIClient(
+        YandexCredentials(SECRET, FOLDER),
+        transport,
+        lambda _attempt: None,
+        timeout_seconds=900.0,
+    )
+
+    client.invoke(request("deepseek-v4-flash/latest"))
+
+    assert transport.requests[0].timeout_seconds == 900.0
 
 
 def test_success_preserves_roles_models_usage_raw_response_and_decimal_cost() -> None:
