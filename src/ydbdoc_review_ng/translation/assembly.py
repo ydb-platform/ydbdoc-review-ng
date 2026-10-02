@@ -100,6 +100,16 @@ def validate_translation_values(
         _validated_value(translations[item.field_id], item)
 
 
+def _canonical_protected_bytes(kind: ProtectedKind, fragment: bytes) -> bytes:
+    """Treat escaped and bare underscores inside identifiers as the same atom."""
+    if kind is ProtectedKind.IDENTIFIER:
+        return fragment.replace(b"\\_", b"_")
+    if kind is ProtectedKind.INLINE_CODE and fragment.startswith(b"`") and fragment.endswith(b"`"):
+        inner = fragment[1:-1].replace(b"\\_", b"_")
+        return b"`" + inner + b"`"
+    return fragment
+
+
 def _protected_signature(data: bytes, plan: SourcePlan, position: int) -> tuple[object, ...]:
     field = fields_of(plan)[position]
     ordered_singles: list[tuple[str, bytes]] = []
@@ -108,7 +118,10 @@ def _protected_signature(data: bytes, plan: SourcePlan, position: int) -> tuple[
     for region in field.protected_regions:
         if region.kind is ProtectedKind.MARKDOWN_SYNTAX:
             continue
-        entry = (region.kind.value, data[region.span.start : region.span.end])
+        fragment = _canonical_protected_bytes(
+            region.kind, data[region.span.start : region.span.end]
+        )
+        entry = (region.kind.value, fragment)
         if region.group is None:
             if region.kind in {ProtectedKind.INLINE_CODE, ProtectedKind.TEMPLATE}:
                 movable_singles.append(entry)
@@ -134,7 +147,10 @@ def _block_protected_signature(data: bytes, block: Block) -> _ProtectedBlockSign
     for region in regions:
         if region.kind is ProtectedKind.MARKDOWN_SYNTAX:
             continue
-        entry = (region.kind.value, data[region.span.start : region.span.end])
+        fragment = _canonical_protected_bytes(
+            region.kind, data[region.span.start : region.span.end]
+        )
+        entry = (region.kind.value, fragment)
         if region.group is None:
             if region.kind in {ProtectedKind.INLINE_CODE, ProtectedKind.TEMPLATE}:
                 movable_singles.append(entry)

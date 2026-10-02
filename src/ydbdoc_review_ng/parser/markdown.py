@@ -69,7 +69,11 @@ _PATH = re.compile(
     rb"|" + _FILENAME.pattern
 )
 _DECIMAL = re.compile(rb"-?[0-9]+\.[0-9]+(?:[eE][+-]?[0-9]+)?")
-_IDENTIFIER = re.compile(rb"[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*")
+# Identifier atoms may include Markdown-escaped underscores (BS\_CONTROLLER).
+# Matching them before bare ESCAPE prevents splitting technical tokens.
+_IDENTIFIER = re.compile(
+    rb"[A-Za-z_](?:[A-Za-z0-9_]|\\_)*(?:::[A-Za-z_](?:[A-Za-z0-9_]|\\_)*)*"
+)
 _URI_AUTOLINK = re.compile(rb"<[A-Za-z][A-Za-z0-9+.-]{1,31}:[\x21-\x3b\x3d\x3f-\x7e]+>")
 _EMAIL_AUTOLINK = re.compile(
     rb"<[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+)*@"
@@ -718,6 +722,35 @@ def _inline_regions(
             )
             cursor = anchor.end()
             continue
+        # Identifier atoms before bare ESCAPE so BS\_CONTROLLER stays one token.
+        match = _IDENTIFIER.match(data, cursor)
+        if match is not None:
+            raw = match.group()
+            before = data[cursor - 1] if cursor else None
+            after = data[match.end()] if match.end() < len(data) else None
+            boundary = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_:"
+            canonical = raw.replace(b"\\_", b"_")
+            marker_run = (
+                canonical.startswith(b"_")
+                and len(canonical) > 1
+                and canonical[1] == 95
+                and b"\\_" not in raw[:2]
+            )
+            qualified = (b"_" in canonical or b"::" in raw) and not marker_run
+            if (
+                qualified
+                and (before is None or before not in boundary)
+                and (after is None or after not in boundary)
+            ):
+                append(
+                    ProtectedRegion(
+                        ProtectedKind.IDENTIFIER,
+                        ByteSpan(span.start + match.start(), span.start + match.end()),
+                        None,
+                    )
+                )
+                cursor = match.end()
+                continue
         if data[cursor : cursor + 1] == b"\\" and cursor + 1 < len(data):
             escaped = data[cursor + 1]
             if (
@@ -782,28 +815,6 @@ def _inline_regions(
                     )
                 )
                 cursor = end
-                continue
-        match = _IDENTIFIER.match(data, cursor)
-        if match is not None:
-            raw = match.group()
-            before = data[cursor - 1] if cursor else None
-            after = data[match.end()] if match.end() < len(data) else None
-            boundary = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_:"
-            marker_run = raw.startswith(b"_") and len(raw) > 1 and raw[1] == 95
-            qualified = (b"_" in raw or b"::" in raw) and not marker_run
-            if (
-                qualified
-                and (before is None or before not in boundary)
-                and (after is None or after not in boundary)
-            ):
-                append(
-                    ProtectedRegion(
-                        ProtectedKind.IDENTIFIER,
-                        ByteSpan(span.start + match.start(), span.start + match.end()),
-                        None,
-                    )
-                )
-                cursor = match.end()
                 continue
         cursor += 1
 

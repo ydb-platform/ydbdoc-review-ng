@@ -761,6 +761,10 @@ def prepare_document(
                         replacement = link_resolver(text).encode("utf-8")
                 except UnicodeError:
                     pass
+            # Identifier atoms restore as canonical unescaped forms so ESCAPE
+            # underscores inside BS\_CONTROLLER never resurface as split prose.
+            if kind is ProtectedKind.IDENTIFIER:
+                replacement = replacement.replace(b"\\_", b"_")
             raw_regions.append((start, end, kind, replacement))
     raw_regions.extend(
         (start, end, ProtectedKind.MARKDOWN_SYNTAX, source[start:end])
