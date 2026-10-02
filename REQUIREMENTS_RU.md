@@ -221,10 +221,11 @@ GREEN → `findings: []`. YELLOW/RED → ≥1 finding. Missing/unreviewed target
 
 Общий verdict = худший по чанкам. Findings всех YELLOW/RED чанков
 объединяются (не более 25 в публичном комментарии, остальные — счётчиком).
-Невалидный ответ arbiter, включая неверную пару `target_line` /
-`searchable_snippet`, означает непроверенный чанк: остальные чанки продолжают
-проверяться, общий verdict = RED, а невалидные findings не публикуются. Это же
-правило действует, когда arbiter chunk единственный.
+Любой неуспешный ответ arbiter, включая transport/provider failure и неверную
+пару `target_line` / `searchable_snippet`, означает непроверенный чанк:
+остальные чанки продолжают проверяться, общий verdict = RED, а невалидные
+findings не публикуются. Это же правило действует, когда arbiter chunk
+единственный.
 
 Смысл цветов:
 

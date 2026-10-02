@@ -271,8 +271,6 @@ def review_pr(
                 if not chunk_pairs:
                     resource_review_unresolved = True
                 continue
-            if len(arbiter_chunks) <= 1 and not unreviewed and not resource_review_unresolved:
-                raise QualityExecutionError("arbiter")
             unreviewed.update(target for _source, target in chunk_pairs)
             if not chunk_pairs:
                 resource_review_unresolved = True

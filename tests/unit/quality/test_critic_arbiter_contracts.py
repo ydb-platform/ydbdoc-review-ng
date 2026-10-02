@@ -206,6 +206,36 @@ def test_single_arbiter_invalid_finding_produces_unreviewed_red_report() -> None
     assert final.findings[0].searchable_snippet is None
 
 
+def test_single_arbiter_transport_failure_produces_unreviewed_red_report() -> None:
+    """A transport failure cannot abort the only arbiter chunk without a QA verdict."""
+    source = {"docs/ru/a.md": b"# A\n"}
+    translated = {"docs/en/a.md": b"# Draft\n"}
+    models = _Scripted(
+        [
+            json.dumps({"files": {"docs/en/a.md": "# Draft\n"}}),
+            ModelCallResult(None, AttemptError.TRANSPORT, ()),
+        ]
+    )
+
+    corrected, final = review_pr(
+        models,
+        critic_model="critic",
+        arbiter_model="arbiter",
+        source_files=source,
+        translated_files=translated,
+        glossary_files={},
+        validate_files=lambda files: None,
+    )
+
+    assert corrected == translated
+    assert [call.role for call in models.calls] == [ModelRole.CRITIC, ModelRole.ARBITER]
+    assert final.verdict is Verdict.RED
+    assert len(final.findings) == 1
+    assert final.findings[0].target_path == "docs/en/a.md"
+    assert final.findings[0].target_line is None
+    assert final.findings[0].searchable_snippet is None
+
+
 def test_zero_text_arbiter_non_final_is_red_not_green() -> None:
     """REQUIREMENTS §4: resource-only NON_FINAL must not invent GREEN (#2)."""
     models = _Scripted(
