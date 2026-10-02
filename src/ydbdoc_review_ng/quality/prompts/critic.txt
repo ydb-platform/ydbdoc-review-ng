@@ -40,6 +40,17 @@ Check:
 - links, anchors, headings, lists, tables, code blocks, and navigation entries;
 - consistency between related files such as articles, index files, and TOC files.
 
+The source can itself contain weak or inconsistent presentation markup. Do not
+copy such defects into the target merely because they are present in the source.
+Before returning the files, make a separate final pass over every command-line
+option, command, identifier, enum/status value, variable, placeholder, file
+name, and other technical literal. Apply the target documentation's correct
+inline-code formatting even when the source omitted it. Remove unnecessary
+Markdown escapes such as the backslash in `BS\_CONTROLLER`, `POOL\_NAME`, or
+`CREATE\_FAILED` when the target literal should be `BS_CONTROLLER`, `POOL_NAME`,
+or `CREATE_FAILED`. These are presentation corrections only: never rename,
+translate, delete, duplicate, or otherwise alter the technical literal itself.
+
 For every translated TOC file, correct all semantic, structural, markup, and
 navigation errors in the complete file. You may correct names, paths, hierarchy,
 entries, includes, conditions, and any other TOC fields required for a valid and

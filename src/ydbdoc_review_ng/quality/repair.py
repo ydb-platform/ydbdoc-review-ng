@@ -280,8 +280,6 @@ def review_pr(
         try:
             results.append(parse_pr_arbiter_response(response.text, target_files=chunk_files))
         except Exception:
-            if len(arbiter_chunks) <= 1 and not unreviewed and not resource_review_unresolved:
-                raise
             unreviewed.update(target for _source, target in chunk_pairs)
             if not chunk_pairs:
                 resource_review_unresolved = True

@@ -63,6 +63,11 @@ For every finding in an existing target file, provide:
 For a missing target file, use its expected target_path and return null for
 target_line and searchable_snippet.
 
+Before returning, verify every finding against the exact final target bytes:
+`target_line` must be the actual one-based line number and
+`searchable_snippet` must be copied verbatim from that exact line. Never
+paraphrase a snippet or take it from the source file.
+
 Return only this strict JSON object:
 
 {
