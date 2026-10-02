@@ -170,7 +170,9 @@ def _index(items: list[Any]) -> dict[str, dict[str, Any]]:
 
 
 def _copy_structure(value: Any) -> Any:
-    return yaml.safe_load(yaml.safe_dump(value, allow_unicode=True))
+    return yaml.safe_load(
+        yaml.safe_dump(value, allow_unicode=True, sort_keys=False)
+    )
 
 
 def _match_rename(

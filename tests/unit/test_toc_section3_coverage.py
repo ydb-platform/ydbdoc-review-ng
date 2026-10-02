@@ -182,3 +182,23 @@ def test_section3_comment_only_rewrite_preserves_target() -> None:
     result = apply_toc_delta(before, after, target, toc_path=TOC)
     assert result.content == target
     assert result.string_changes == ()
+
+
+def test_apply_toc_delta_preserves_name_before_href_key_order() -> None:
+    """Surgical delta must not rewrite untouched nodes by YAML key sort alone."""
+    before = b"items:\n- name: Existing\n  href: existing.md\n"
+    after = before + b"- name: New\n  href: new.md\n"
+    target = (
+        b"items:\n"
+        b"- name: Existing EN\n"
+        b"  href: existing.md\n"
+        b"- name: Extra EN\n"
+        b"  href: extra.md\n"
+    )
+    result = apply_toc_delta(before, after, target, toc_path=TOC)
+    assert result.content is not None
+    text = result.content.decode("utf-8")
+    assert "- name: Existing EN\n  href: existing.md\n" in text
+    assert "- name: Extra EN\n  href: extra.md\n" in text
+    assert "- name: New\n  href: new.md\n" in text
+    assert "- href:" not in text

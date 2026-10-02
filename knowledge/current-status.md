@@ -27,5 +27,15 @@ Semantic flow в `REQUIREMENTS_RU.md`:
 | P2 BlobDepot golden harness | **DONE** — `tests/golden/test_blobdepot_golden.py` |
 
 Offline redesign surface (atoms + presentation map + draft/reviewed gate +
-BlobDepot golden) is ready. Live `doc_translate` re-proof on a known source PR
-is still pending (credentials + model quality on real #50839).
+BlobDepot golden) is ready.
+
+Live re-proof in flight 2026-10-02: `v1.0.1` → tip below, source PR #50839,
+run [37001145507](https://github.com/ydb-platform/ydb/actions/runs/37001145507),
+translation PR [#54820](https://github.com/ydb-platform/ydb/pull/54820)
+(stale #54801 closed by §5.1). Critic/arbiter verdict pending.
+
+**TOC serialization fix (2026-10-02):** `_copy_structure` used
+`yaml.safe_dump` with default `sort_keys=True`, rewriting untouched
+`name`/`href` key order after surgical `apply_toc_delta` (matched PR #54820
+commit byte-for-byte). Fixed with `sort_keys=False` (aligned with `_dump_root`).
+Witness: `test_apply_toc_delta_preserves_name_before_href_key_order`.
