@@ -383,7 +383,10 @@ class QAReporter:
                 self._backend.create_comment(number, body)
             else:
                 self._backend.update_comment(number, existing.id, body)
-            if mode in {Mode.DOC_TRANSLATE, Mode.DOC_CONTINUE} and report_context.source_pr_number is not None:
+            if (
+                mode in {Mode.DOC_TRANSLATE, Mode.DOC_CONTINUE, Mode.DOC_VERIFY}
+                and report_context.source_pr_number is not None
+            ):
                 source_pr = report_context.source_pr_number
                 source_body = (
                     "Перевод этого PR: "
@@ -391,18 +394,17 @@ class QAReporter:
                     f"{TRANSLATION_LINK_MARKER}"
                 )
                 source_comments = self._backend.list_comments(source_pr)
-                source_link = next(
-                    (
-                        comment
-                        for comment in source_comments
-                        if comment.authored_by_publisher
-                        and TRANSLATION_LINK_MARKER in comment.body
-                    ),
-                    None,
-                )
+                source_links = [
+                    comment
+                    for comment in source_comments
+                    if comment.authored_by_publisher
+                    and TRANSLATION_LINK_MARKER in comment.body
+                ]
                 # §7: once a translation PR exists, the one current QA lives there.
                 # An earlier zero-commit RED on the source PR must not keep the
                 # current-QA marker or contradictory RED next to the PR link.
+                # Keep idempotent markers on every rewritten source comment so a
+                # later clean translate can find and update them to the latest PR.
                 source_qa = next(
                     (
                         comment
@@ -413,21 +415,30 @@ class QAReporter:
                     ),
                     None,
                 )
-                if source_link is None and source_qa is not None:
+                # Also rewrite unmarked legacy «Актуальный…/pull/N» leftovers that
+                # older builds left without idempotent markers (§7).
+                unmarked_links = [
+                    comment
+                    for comment in source_comments
+                    if comment.authored_by_publisher
+                    and TRANSLATION_LINK_MARKER not in comment.body
+                    and QA_MARKER not in comment.body
+                    and (
+                        "Актуальный QA-отчёт" in comment.body
+                        or "Перевод этого PR:" in comment.body
+                    )
+                ]
+                if not source_links and source_qa is not None:
                     self._backend.update_comment(source_pr, source_qa.id, source_body)
-                elif source_link is None:
+                elif not source_links and not unmarked_links:
                     self._backend.create_comment(source_pr, source_body)
                 else:
-                    self._backend.update_comment(source_pr, source_link.id, source_body)
+                    for link in source_links:
+                        self._backend.update_comment(source_pr, link.id, source_body)
+                    for legacy in unmarked_links:
+                        self._backend.update_comment(source_pr, legacy.id, source_body)
                     if source_qa is not None:
-                        self._backend.update_comment(
-                            source_pr,
-                            source_qa.id,
-                            (
-                                "Актуальный QA-отчёт опубликован в translation PR: "
-                                f"https://github.com/{context.repository}/pull/{number}\n"
-                            ),
-                        )
+                        self._backend.update_comment(source_pr, source_qa.id, source_body)
             # The SHA-labelled comment may have been written during a ref race.
             # Do not acknowledge reporting success or allow checkpoint handoff.
             if self._current_head is not None and self._current_head() != commit_sha:

@@ -134,6 +134,16 @@ Independent verify of A/B/C **PASS**; adversary found two adjacent lifecycle hol
 | 1 | `doc_verify` re-requires already-absent intentional TOC delete | **fixed** | Verify `only_targets` demoted source TOC Git delete to `none`, so `DELETE_TARGET` was lost and `load_verification_candidate` re-injected null → force RED + bad checkpoint. Preserve TOC removals through mirror; inventory fallback in `_pr_review_inputs`. `test_verify_already_absent_intentional_toc_delete_*` |
 | 2 | Multi-continue leaves stale source-only RED QA | **fixed** | After translation PR exists, reporter updated link only and left zero-commit `<!-- ydbdoc-current-qa -->` RED on source. Neutralize/replace source QA when publishing translation-PR verdict (§7). `test_multi_continue_removes_stale_source_zero_commit_red_qa` |
 
+## Tip lifecycle bugs on 56d6bff (2026-10-02)
+
+Adversary against public/main tip `56d6bff` found three production lifecycle holes.
+
+| # | Hole | Status | Notes / witness |
+|---|---|---|---|
+| 1 | Repeated verify RED leaves two open checkpoints | **fixed** | Second `doc_verify` RED opened another open row without closing the prior → `/ydbdoc continue` → `continue_checkpoint_missing_or_ambiguous`. Close same-provenance open checkpoints before opening the new RED. `test_repeated_verify_red_keeps_continue_unambiguous` |
+| 2 | Stale unmarked «Актуальный…#N» after next translate | **fixed** | Rewriting zero-commit source RED stripped markers, so later clean translate updated only the marked link and left stale #44 text. Rewrite to canonical marked link and update all marked source-link comments. `test_stale_unmarked_aktualny_is_updated_on_next_translation_link` |
+| 3 | `doc_verify` never reconciles leftover source RED | **fixed** | Source reconcile ran only for `DOC_TRANSLATE`/`DOC_CONTINUE`. After partial report failure left source RED + translation PR, verify GREEN/YELLOW left source stuck. Include `DOC_VERIFY` in §7 source reconcile. `test_doc_verify_reconciles_leftover_source_red_when_translation_pr_exists` |
+
 ## Известные расхождения в коде
 
 - Complete-pair Git heuristic removed; both-locale edits stay in translate scope.

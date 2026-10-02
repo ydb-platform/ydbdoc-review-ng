@@ -658,6 +658,13 @@ class LinearWorkflows:
             )
             if review.final.verdict is Verdict.RED and review.accepted_maps is not None:
                 stage = WorkflowStage.CHECKPOINT
+                # §5.2/§5.3: close any prior open recovery for this provenance before
+                # opening the new RED checkpoint so `/ydbdoc continue` stays unique.
+                source_pr = _verify_source_pr(authorization.context, request.pr_number)
+                self._persistence.close_open_checkpoints(
+                    source_pr=source_pr,
+                    translation_branch=snapshot.branch,
+                )
                 capture = self._content.review_checkpoint(snapshot, review, final_sha)
                 self._complete_semantic_handoff(
                     capture, job_id, request.pr_number, mode, audit_started_at
