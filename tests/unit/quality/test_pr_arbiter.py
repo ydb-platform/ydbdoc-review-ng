@@ -28,7 +28,6 @@ FINDING = {
     "expected_correction": "Используйте одно название в статье и TOC.",
     "searchable_snippet": "Article",
     "target_path": "docs/en/toc.yaml",
-    "target_line": 2,
 }
 
 
@@ -101,7 +100,7 @@ def test_arbiter_renders_missing_target_and_preserves_literal_template_tokens() 
     assert json.loads(targets) == {"target.md": None}
 
 
-def test_arbiter_schema_requests_only_strict_verdict_and_five_finding_fields() -> None:
+def test_arbiter_schema_requests_only_strict_verdict_and_four_finding_fields() -> None:
     schema = mutable_json(request().schema)
     assert set(schema["properties"]) == {"verdict", "findings"}
     assert schema["required"] == ["verdict", "findings"]
@@ -112,7 +111,6 @@ def test_arbiter_schema_requests_only_strict_verdict_and_five_finding_fields() -
     assert set(finding["required"]) == set(FINDING)
     assert finding["additionalProperties"] is False
     assert finding["properties"]["target_path"] == {"type": "string", "enum": list(FINAL_FILES)}
-    assert finding["properties"]["target_line"] == {"type": ["integer", "null"], "minimum": 1}
     assert finding["properties"]["searchable_snippet"] == {
         "type": ["string", "null"],
         "minLength": 1,
@@ -147,7 +145,7 @@ def test_arbiter_accepts_exact_existing_target_finding(verdict: str) -> None:
 
 
 def test_arbiter_accepts_missing_target_with_null_location() -> None:
-    finding = {**FINDING, "target_line": None, "searchable_snippet": None}
+    finding = {**FINDING, "searchable_snippet": None}
     result = quality.parse_pr_arbiter_response(
         json.dumps({"verdict": "RED", "findings": [finding]}),
         target_files={"docs/en/toc.yaml": None},
@@ -175,24 +173,10 @@ def test_arbiter_rejects_verdict_inconsistent_with_findings(
     [
         {"target_path": "docs/en/unknown.md"},
         {"target_path": None},
-        {"target_line": True},
-        {"target_line": 0},
-        {"target_line": -1},
-        {"target_line": 2.0},
-        {"target_line": "2"},
-        {"target_line": 1},
-        {"target_line": 10},
-        {"target_line": None},
         {"reason": " "},
         {"reason": None},
         {"expected_correction": ""},
         {"expected_correction": None},
-        {"searchable_snippet": ""},
-        {"searchable_snippet": "article"},
-        {"searchable_snippet": " Article "},
-        {"searchable_snippet": "Article\n    href"},
-        {"searchable_snippet": None},
-        {"target_line": None, "searchable_snippet": None},
         {"repairable": True},
         {"field_ids": []},
         {"files": {}},
@@ -214,14 +198,10 @@ def test_arbiter_rejects_each_missing_finding_field(field: str) -> None:
         )
 
 
-@pytest.mark.parametrize("line,snippet", [(2, "Article"), (None, "Article"), (2, None)])
-def test_arbiter_rejects_nonnull_location_for_missing_target(
-    line: int | None, snippet: str | None
-) -> None:
-    finding = {**FINDING, "target_line": line, "searchable_snippet": snippet}
+def test_arbiter_rejects_nonnull_snippet_for_missing_target() -> None:
     with pytest.raises(quality.CriticResponseError):
         quality.parse_pr_arbiter_response(
-            json.dumps({"verdict": "RED", "findings": [finding]}),
+            json.dumps({"verdict": "RED", "findings": [FINDING]}),
             target_files={"docs/en/toc.yaml": None},
         )
 
@@ -230,22 +210,67 @@ def test_arbiter_rejects_nonnull_location_for_missing_target(
 def test_arbiter_checks_current_final_bytes_and_does_not_treat_empty_as_missing(
     content: bytes,
 ) -> None:
-    for finding in (FINDING, {**FINDING, "target_line": None, "searchable_snippet": None}):
-        with pytest.raises(quality.CriticResponseError):
-            quality.parse_pr_arbiter_response(
-                json.dumps({"verdict": "RED", "findings": [finding]}),
-                target_files={"docs/en/toc.yaml": content},
-            )
+    result = quality.parse_pr_arbiter_response(
+        json.dumps({"verdict": "RED", "findings": [FINDING]}),
+        target_files={"docs/en/toc.yaml": content},
+    )
+    assert result.verdict is quality.Verdict.RED
+    assert result.findings[0].target_line is None
+    assert result.findings[0].searchable_snippet is None
+    assert result.findings[0].reason == (
+        "Арбитр не привязал замечание к единственному фрагменту итогового файла."
+    )
+    assert result.findings[0].expected_correction == "Повторите проверку файла."
+
+
+@pytest.mark.parametrize("snippet", ["", None])
+def test_arbiter_turns_missing_existing_target_snippet_into_unreviewed_red(
+    snippet: str | None,
+) -> None:
+    finding = {**FINDING, "searchable_snippet": snippet}
+    result = quality.parse_pr_arbiter_response(
+        json.dumps({"verdict": "YELLOW", "findings": [finding]}),
+        target_files=FINAL_FILES,
+    )
+
+    assert result.verdict is quality.Verdict.RED
+    assert result.findings[0].target_path == "docs/en/toc.yaml"
+    assert result.findings[0].target_line is None
+    assert result.findings[0].searchable_snippet is None
 
 
 def test_arbiter_checks_unicode_snippet_on_crlf_line_without_normalization() -> None:
-    finding = {**FINDING, "target_line": 2, "searchable_snippet": "Ошибка 🙂"}
+    finding = {**FINDING, "searchable_snippet": "Ошибка 🙂"}
     result = quality.parse_pr_arbiter_response(
         json.dumps({"verdict": "RED", "findings": [finding]}),
         target_files={"docs/en/toc.yaml": "Первая строка\r\nОшибка 🙂\r\n".encode()},
     )
     assert result.findings[0].searchable_snippet == "Ошибка 🙂"
     assert result.findings[0].target_line == 2
+
+
+def test_arbiter_keeps_valid_sibling_when_another_snippet_is_ambiguous() -> None:
+    valid = {
+        **FINDING,
+        "target_path": "docs/en/article.md",
+        "searchable_snippet": "complete corrected text",
+    }
+    ambiguous = {**FINDING, "searchable_snippet": "Article"}
+    result = quality.parse_pr_arbiter_response(
+        json.dumps({"verdict": "YELLOW", "findings": [valid, ambiguous]}),
+        target_files={
+            "docs/en/article.md": FINAL_FILES["docs/en/article.md"],
+            "docs/en/toc.yaml": b"Article and Article\n",
+        },
+    )
+
+    assert result.verdict is quality.Verdict.RED
+    assert result.findings[0].target_path == "docs/en/article.md"
+    assert result.findings[0].target_line == 3
+    assert result.findings[0].searchable_snippet == "complete corrected text"
+    assert result.findings[1].target_path == "docs/en/toc.yaml"
+    assert result.findings[1].target_line is None
+    assert result.findings[1].searchable_snippet is None
 
 
 @pytest.mark.parametrize(
@@ -277,7 +302,7 @@ def test_arbiter_rejects_malformed_or_correcting_responses(raw: str) -> None:
     [
         '{"verdict":"GREEN","verdict":"RED","findings":[]}',
         '{"verdict":"GREEN","findings":[],"findings":[]}',
-        '{"verdict":"RED","findings":[{"target_line":1,"target_line":2}]}',
+        '{"verdict":"RED","findings":[{"searchable_snippet":"a","searchable_snippet":"b"}]}',
         '{"verdict":"RED","findings":[{"unexpected":{"x":1,"x":2}}]}',
     ],
 )

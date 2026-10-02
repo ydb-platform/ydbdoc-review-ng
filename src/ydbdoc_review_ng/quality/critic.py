@@ -241,10 +241,8 @@ def parse_pr_arbiter_response(
     except (json.JSONDecodeError, UnicodeError):
         raise CriticResponseError(CriticResponseErrorReason.MALFORMED_JSON) from None
     try:
-        target_lines = {
-            path: [line.decode("utf-8") for line in content.splitlines()]
-            if content is not None
-            else None
+        target_texts = {
+            path: content.decode("utf-8") if content is not None else None
             for path, content in target_files.items()
         }
     except UnicodeDecodeError:
@@ -257,10 +255,12 @@ def parse_pr_arbiter_response(
     raw_verdict = document["verdict"]
     if type(raw_verdict) is not str or raw_verdict not in {"GREEN", "YELLOW", "RED"}:
         raise CriticResponseError(CriticResponseErrorReason.INVALID_VERDICT)
-    findings = _parse_findings(document["findings"], target_lines)
-    if (raw_verdict == "GREEN") != (not findings):
+    raw_findings = document["findings"]
+    findings, has_unresolved_location = _parse_findings(raw_findings, target_texts)
+    if (raw_verdict == "GREEN") != (type(raw_findings) is list and not raw_findings):
         raise CriticResponseError(CriticResponseErrorReason.INCONSISTENT_RESULT)
-    return CriticResult(Verdict(raw_verdict), findings)
+    verdict = Verdict.RED if has_unresolved_location else Verdict(raw_verdict)
+    return CriticResult(verdict, findings)
 
 
 def _finding_schema(target_path_schema: dict[str, object]) -> dict[str, object]:
@@ -269,7 +269,6 @@ def _finding_schema(target_path_schema: dict[str, object]) -> dict[str, object]:
         "expected_correction": {"type": "string", "minLength": 1},
         "searchable_snippet": {"type": ["string", "null"], "minLength": 1},
         "target_path": target_path_schema,
-        "target_line": {"type": ["integer", "null"], "minimum": 1},
     }
     return {
         "type": "object",
@@ -281,13 +280,14 @@ def _finding_schema(target_path_schema: dict[str, object]) -> dict[str, object]:
 
 def _parse_findings(
     raw_findings: object,
-    target_lines: Mapping[str, list[str] | None],
-) -> tuple[Finding, ...]:
+    target_texts: Mapping[str, str | None],
+) -> tuple[tuple[Finding, ...], bool]:
     if type(raw_findings) is not list:
         raise CriticResponseError(CriticResponseErrorReason.INVALID_FINDING)
     findings: list[Finding] = []
+    has_unresolved_location = False
     required = frozenset(
-        {"reason", "expected_correction", "searchable_snippet", "target_path", "target_line"}
+        {"reason", "expected_correction", "searchable_snippet", "target_path"}
     )
     for raw_finding in raw_findings:
         item = _object(raw_finding, required)
@@ -303,31 +303,44 @@ def _parse_findings(
         except UnicodeEncodeError:
             raise CriticResponseError(CriticResponseErrorReason.INVALID_FINDING) from None
         finding_path = item["target_path"]
-        if type(finding_path) is not str or finding_path not in target_lines:
+        if type(finding_path) is not str or finding_path not in target_texts:
             raise CriticResponseError(CriticResponseErrorReason.INVALID_FINDING)
-        lines = target_lines[finding_path]
-        target_line = item["target_line"]
+        target_text = target_texts[finding_path]
         snippet = item["searchable_snippet"]
-        if lines is None:
-            if target_line is not None or snippet is not None:
+        if target_text is None:
+            if snippet is not None:
                 raise CriticResponseError(CriticResponseErrorReason.INVALID_FINDING)
-        elif (
-            type(target_line) is not int
-            or target_line < 1
-            or target_line > len(lines)
-            or type(snippet) is not str
-            or not snippet
-            or snippet not in lines[target_line - 1]
-        ):
-            raise CriticResponseError(CriticResponseErrorReason.INVALID_FINDING)
+            target_line = None
+        elif type(snippet) is not str or not snippet:
+            has_unresolved_location = True
+            findings.append(_unresolved_arbiter_location(finding_path))
+            continue
+        else:
+            first = target_text.find(snippet)
+            if first < 0 or target_text.find(snippet, first + 1) >= 0:
+                has_unresolved_location = True
+                findings.append(_unresolved_arbiter_location(finding_path))
+                continue
+            target_line = target_text.count("\n", 0, first) + 1
         findings.append(
             Finding(
                 False,
                 cast(str, item["reason"]),
                 cast(str, item["expected_correction"]),
-                cast(str, snippet),
+                snippet,
                 finding_path,
-                cast(int, target_line),
+                target_line,
             )
         )
-    return tuple(findings)
+    return tuple(findings), has_unresolved_location
+
+
+def _unresolved_arbiter_location(target_path: str) -> Finding:
+    return Finding(
+        False,
+        "Арбитр не привязал замечание к единственному фрагменту итогового файла.",
+        "Повторите проверку файла.",
+        None,
+        target_path,
+        None,
+    )
