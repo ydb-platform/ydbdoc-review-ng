@@ -501,10 +501,13 @@ def test_translate_document_uses_complete_markdown_and_selected_direction(
     )
     assert "# Исходный заголовок" in call.prompt
     assert json.dumps("- Один\n- Два", ensure_ascii=False)[1:-1] in call.prompt
-    assert "guide.md" not in call.prompt
+    prose = call.prompt.split("<PRESENTATION_REFERENCE_", 1)[0]
+    assert "guide.md" not in prose
     assert "[руководством]" in call.prompt
     assert "YDBDOC_URL" not in call.prompt
-    assert "# Old target" not in call.prompt
+    assert "<PRESENTATION_REFERENCE_" in call.prompt
+    assert "# Old target" in call.prompt
+    assert "formatting/presentation reference only" in call.prompt
     assert call.schema is not None
     assert (
         assemble_candidate(document.source, document.plan, document.request, accepted.as_dict())
@@ -713,10 +716,14 @@ def test_existing_target_cannot_override_symmetric_source_link_destination() -> 
 
     _accepted, accepted_document = content_with(models)._translate_document(document)
 
-    assert "(./dev/optimization/hints.md)" not in models.calls[0].prompt
-    assert "[query hints]" in models.calls[0].prompt
-    assert "YDBDOC_URL" not in models.calls[0].prompt
-    assert "(./dev/query-execution-optimization/query-hints.md)" not in models.calls[0].prompt
+    prompt = models.calls[0].prompt
+    prose = prompt.split("<PRESENTATION_REFERENCE_", 1)[0]
+    assert "(./dev/optimization/hints.md)" not in prose
+    assert "[query hints]" in prompt
+    assert "YDBDOC_URL" not in prompt
+    # Old destination may appear only inside the presentation-reference block.
+    assert "(./dev/query-execution-optimization/query-hints.md)" not in prose
+    assert "(./dev/query-execution-optimization/query-hints.md)" in prompt
     assert "(./dev/optimization/hints.md)" in accepted_document.translated_markdown
     assert accepted_document.translated_markdown == (
         "See [query hints](./dev/optimization/hints.md).\n"

@@ -545,18 +545,21 @@ def test_head_movement_blocks_later_models_publication_and_verdict(move_after):
     assert services.rows[saved.continuation_id]["status"] == "open"
 
 
-def test_invalid_critic_edit_retries_then_passes_draft_to_arbiter():
-    """REQUIREMENTS §4.1: malformed critic response retries once, then drafts to arbiter."""
+def test_invalid_critic_edit_retries_then_marks_unreviewed_red():
+    """REQUIREMENTS §4.1: malformed critic after retry → RED, not arbiter on draft."""
     services = ReviewServices(names=("a", "b"))
     saved = services.start_review()
     before = dict(services.files)
     services.repair_payload = json.dumps({})
     result = services.resume()
-    assert result.verdict is Verdict.GREEN
-    assert services.roles == ["critic", "critic", "arbiter"]
+    assert result.verdict is Verdict.RED
+    assert services.roles == ["critic", "critic"]
     assert services.files == before
     assert services.commits == services.initial_commits
-    assert services.rows[saved.continuation_id]["status"] == "closed"
+    # Prior checkpoint is consumed; a fresh RED checkpoint stays open for continue.
+    following = services.checkpoint()
+    assert following.expires_at == saved.expires_at
+    assert services.rows[following.continuation_id]["status"] == "open"
 
 
 def test_byte_identical_selected_repair_reports_existing_sha_without_empty_commit():

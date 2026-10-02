@@ -20,7 +20,8 @@
 | 10 | Budget / reporting | done |
 | 11 | Identifier atoms + presentation map + draft/reviewed gate | **done** (P0+P1) |
 | 12 | BlobDepot golden harness (P2) | stub plan |
-| 13 | Full suite + live PR after redesign | pending |
+| 13 | Full suite after redesign | **done** (2168 passed) |
+| 14 | Live PR after redesign | pending |
 
 ## CI translation redesign (2026-10-02)
 
@@ -33,9 +34,9 @@
 | P1b | Canon §1.2/§2/§4.1/§5.1/§7 | **done** | `REQUIREMENTS_RU.md` |
 | P2 | Offline BlobDepot golden | **stub** | `knowledge/blobdepot-golden-plan.md` |
 
-> [!success] offline suite (2026-10-01)
-> Full non-live `tests/unit` + `tests/integration`: **2137 passed, 0 failed**
-> (1 deselected). Live `doc_translate` gate still needs credentials / push.
+> [!success] offline suite (2026-10-02 redesign)
+> Full non-live `tests/unit` + `tests/integration`: **2168 passed, 0 failed**
+> (1 deselected). Live `doc_translate` gate still needs credentials / push after P2.
 
 ## Neural review triage (2026-10-01)
 
