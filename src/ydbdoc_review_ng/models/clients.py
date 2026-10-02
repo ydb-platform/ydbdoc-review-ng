@@ -458,13 +458,21 @@ class YandexOpenAIClient(_BaseYandexClient):
     def _payload(
         self, request: ModelRequest, model_uri: str, max_tokens: int
     ) -> dict[str, object]:
+        messages: list[dict[str, str]] = []
+        if request.developer_prompt is not None:
+            messages.append({"role": "developer", "content": request.developer_prompt})
+        messages.append({"role": "user", "content": request.prompt})
         payload: dict[str, object] = {
             "model": model_uri,
             "stream": False,
             "temperature": 0,
             "max_tokens": max_tokens,
-            "reasoning_effort": "none",
-            "messages": [{"role": "user", "content": request.prompt}],
+            "reasoning_effort": (
+                "high"
+                if request.role in {ModelRole.CRITIC, ModelRole.ARBITER}
+                else "none"
+            ),
+            "messages": messages,
         }
         if request.schema is not None:
             payload["response_format"] = {

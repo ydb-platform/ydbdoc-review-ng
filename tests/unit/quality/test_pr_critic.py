@@ -46,29 +46,14 @@ def test_critic_renders_exact_shipped_prompt_template() -> None:
         .joinpath("prompts/critic.txt")
         .read_text(encoding="utf-8")
     )
-    expected = (
-        template.replace(
-            "{{ SOURCE_PR_FILES }}",
-            json.dumps(
-                {path: text.decode() for path, text in SOURCE_FILES.items()}, ensure_ascii=False
-            ),
-        )
-        .replace(
-            "{{ TRANSLATION_PR_FILES }}",
-            json.dumps(
-                {path: text.decode() for path, text in TRANSLATED_FILES.items()}, ensure_ascii=False
-            ),
-        )
-        .replace(
-            "{{ PROJECT_GLOSSARY }}",
-            json.dumps(
-                {path: text.decode() for path, text in GLOSSARY_FILES.items()}, ensure_ascii=False
-            ),
-        )
-        .replace("{{ SOURCE_TOC_SNAPSHOTS }}", "{}")
-        .replace("{{ BINARY_MANIFEST }}", "{}")
+    built = request()
+    assert built.developer_prompt == template
+    assert "<source-pr-files>" not in built.developer_prompt
+    assert built.prompt.endswith(
+        "Before answering, check completeness, terminology, technical literals and "
+        "inline-code, damaged sentences, TOC correctness, and the complete requested "
+        "file set."
     )
-    assert request().prompt == expected
 
 
 def test_critic_contains_complete_two_file_inputs_and_glossary() -> None:
@@ -85,6 +70,7 @@ def test_critic_contains_complete_two_file_inputs_and_glossary() -> None:
     assert built.role is ModelRole.CRITIC
     assert built.model == "critic-model"
     assert built.target_path is None
+    assert built.developer_prompt is not None
     assert mutable_json(built.schema) == {
         "type": "object",
         "properties": {
@@ -108,11 +94,11 @@ def test_template_edit_changes_next_request_without_workflow_change(
 ) -> None:
     template = tmp_path / "prompts" / "critic.txt"
     template.parent.mkdir()
-    template.write_text("First instructions: {{ SOURCE_PR_FILES }}", encoding="utf-8")
+    template.write_text("First instructions", encoding="utf-8")
     monkeypatch.setattr(resources, "files", lambda package: tmp_path)
-    assert request().prompt.startswith("First instructions: ")
-    template.write_text("Edited instructions: {{ SOURCE_PR_FILES }}", encoding="utf-8")
-    assert request().prompt.startswith("Edited instructions: ")
+    assert request().developer_prompt == "First instructions"
+    template.write_text("Edited instructions", encoding="utf-8")
+    assert request().developer_prompt == "Edited instructions"
 
 
 def test_template_tokens_in_file_contents_are_not_interpolated() -> None:
@@ -130,10 +116,8 @@ def test_template_tokens_in_file_contents_are_not_interpolated() -> None:
 def test_operator_context_is_separate_from_file_maps() -> None:
     context = "Уточните термин в статье.\nСохраните структуру.\n"
     built = request(operator_context=context)
-    assert (
-        built.prompt
-        == request().prompt + "\n<operator-context>\n" + context + "</operator-context>"
-    )
+    assert f"<operator-context>\n{context}</operator-context>" in built.prompt
+    assert built.prompt.endswith("file set.")
     assert context not in block(built.prompt, "source-pr-files").values()
     assert context not in block(built.prompt, "translation-pr-files").values()
 

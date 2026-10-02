@@ -59,6 +59,7 @@ class ModelRequest:
     prompt: str = field(repr=False)
     schema: FrozenJson | None = field(repr=False)
     target_path: RepoPath | None = None
+    developer_prompt: str | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         if type(self.role) is not ModelRole:
@@ -69,6 +70,10 @@ class ModelRequest:
             raise ValueError("prompt must be a non-empty string")
         if self.target_path is not None and type(self.target_path) is not RepoPath:
             raise TypeError("target_path must be RepoPath or None")
+        if self.developer_prompt is not None and (
+            type(self.developer_prompt) is not str or not self.developer_prompt.strip()
+        ):
+            raise ValueError("developer_prompt must be a non-empty string or None")
         if self.schema is not None:
             object.__setattr__(self, "schema", freeze_json(self.schema))
 

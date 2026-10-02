@@ -92,23 +92,3 @@ Return exactly this JSON object:
 
 Every translated file supplied in <translation-pr-files> must appear exactly
 once in "files". Do not add unknown paths.
-
-<source-pr-files>
-{{ SOURCE_PR_FILES }}
-</source-pr-files>
-
-<translation-pr-files>
-{{ TRANSLATION_PR_FILES }}
-</translation-pr-files>
-
-<project-glossary>
-{{ PROJECT_GLOSSARY }}
-</project-glossary>
-
-<source-toc-snapshots>
-{{ SOURCE_TOC_SNAPSHOTS }}
-</source-toc-snapshots>
-
-<binary-manifest>
-{{ BINARY_MANIFEST }}
-</binary-manifest>

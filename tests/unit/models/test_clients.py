@@ -211,6 +211,30 @@ def test_openai_payload_headers_and_full_model_uri_are_exact() -> None:
     assert result.attempts[0].response_role == "assistant"
 
 
+@pytest.mark.parametrize("role", [ModelRole.CRITIC, ModelRole.ARBITER])
+def test_openai_review_payload_enables_reasoning_and_separates_instructions(
+    role: ModelRole,
+) -> None:
+    transport = FakeTransport(openai_response(reasoning=12))
+    review = ModelRequest(
+        role,
+        "deepseek-v4-flash",
+        "complete source and target files",
+        SCHEMA,
+        developer_prompt="review policy and output contract",
+    )
+
+    result = openai_client(transport, []).invoke(review)
+
+    payload = json.loads(transport.requests[0].body)
+    assert payload["reasoning_effort"] == "high"
+    assert payload["messages"] == [
+        {"role": "developer", "content": "review policy and output contract"},
+        {"role": "user", "content": "complete source and target files"},
+    ]
+    assert result.success
+
+
 def test_native_raw_text_request_omits_json_schema_and_returns_message_text() -> None:
     transport = FakeTransport(native_response(text="# Complete Markdown\n"))
     raw = ModelRequest(

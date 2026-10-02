@@ -86,23 +86,3 @@ Return only this strict JSON object:
 For GREEN, findings must be an empty array.
 Do not return corrected files, patches, explanations, Markdown fences,
 repair instructions for another model, or additional JSON fields.
-
-<source-pr-files>
-{{ SOURCE_PR_FILES }}
-</source-pr-files>
-
-<translation-pr-files>
-{{ TRANSLATION_PR_FILES }}
-</translation-pr-files>
-
-<project-glossary>
-{{ PROJECT_GLOSSARY }}
-</project-glossary>
-
-<source-toc-snapshots>
-{{ SOURCE_TOC_SNAPSHOTS }}
-</source-toc-snapshots>
-
-<binary-manifest>
-{{ BINARY_MANIFEST }}
-</binary-manifest>

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 from collections.abc import Mapping
 from enum import Enum
 from importlib import resources
@@ -36,6 +35,17 @@ class _ObjectPairs(list[tuple[object, object]]):
     pass
 
 
+_CRITIC_CHECKLIST = (
+    "Before answering, check completeness, terminology, technical literals and "
+    "inline-code, damaged sentences, TOC correctness, and the complete requested "
+    "file set."
+)
+_ARBITER_CHECKLIST = (
+    "Before answering, check completeness, terminology, technical literals and "
+    "inline-code, damaged sentences, TOC correctness, and every supplied file."
+)
+
+
 def _has_duplicate(value: object) -> bool:
     if type(value) is _ObjectPairs:
         pairs = value
@@ -60,6 +70,38 @@ def _object(
     return result
 
 
+def _review_user_prompt(
+    *,
+    source_files: Mapping[str, bytes],
+    translated_files: Mapping[str, bytes | None],
+    glossary_files: Mapping[str, bytes],
+    toc_snapshots: Mapping[str, Mapping[str, str | None]] | None,
+    binary_manifest: Mapping[str, Mapping[str, str]] | None,
+    operator_context: str | None,
+    checklist: str,
+) -> str:
+    values: tuple[tuple[str, Mapping[str, object]], ...] = (
+        ("source-pr-files", source_files),
+        ("translation-pr-files", translated_files),
+        ("project-glossary", glossary_files),
+        ("source-toc-snapshots", {} if toc_snapshots is None else toc_snapshots),
+        ("binary-manifest", {} if binary_manifest is None else binary_manifest),
+    )
+    blocks: list[str] = []
+    for tag, files in values:
+        rendered = {
+            path: content.decode("utf-8") if isinstance(content, bytes) else content
+            for path, content in files.items()
+        }
+        blocks.append(
+            f"<{tag}>\n{json.dumps(rendered, ensure_ascii=False)}\n</{tag}>"
+        )
+    if operator_context is not None:
+        blocks.append(f"<operator-context>\n{operator_context}</operator-context>")
+    blocks.append(checklist)
+    return "\n\n".join(blocks)
+
+
 def build_pr_critic_request(
     *,
     model: str,
@@ -75,36 +117,15 @@ def build_pr_critic_request(
         .joinpath("prompts/critic.txt")
         .read_text(encoding="utf-8")
     )
-    values: dict[str, Mapping[str, bytes | None]] = {
-        "SOURCE_PR_FILES": source_files,
-        "TRANSLATION_PR_FILES": translated_files,
-        "PROJECT_GLOSSARY": glossary_files,
-    }
-    rendered = {
-        name: json.dumps(
-            {
-                path: content.decode("utf-8") if content is not None else None
-                for path, content in files.items()
-            },
-            ensure_ascii=False,
-        )
-        for name, files in values.items()
-    }
-    rendered["SOURCE_TOC_SNAPSHOTS"] = json.dumps(
-        {} if toc_snapshots is None else dict(toc_snapshots),
-        ensure_ascii=False,
+    prompt = _review_user_prompt(
+        source_files=source_files,
+        translated_files=translated_files,
+        glossary_files=glossary_files,
+        toc_snapshots=toc_snapshots,
+        binary_manifest=binary_manifest,
+        operator_context=operator_context,
+        checklist=_CRITIC_CHECKLIST,
     )
-    rendered["BINARY_MANIFEST"] = json.dumps(
-        {} if binary_manifest is None else dict(binary_manifest),
-        ensure_ascii=False,
-    )
-    prompt = re.sub(
-        r"\{\{ (SOURCE_PR_FILES|TRANSLATION_PR_FILES|PROJECT_GLOSSARY|SOURCE_TOC_SNAPSHOTS|BINARY_MANIFEST) \}\}",
-        lambda match: rendered[match.group(1)],
-        template,
-    )
-    if operator_context is not None:
-        prompt += "\n<operator-context>\n" + operator_context + "</operator-context>"
     schema = {
         "type": "object",
         "properties": {
@@ -118,7 +139,13 @@ def build_pr_critic_request(
         "required": ["files"],
         "additionalProperties": False,
     }
-    return ModelRequest(ModelRole.CRITIC, model, prompt, cast(FrozenJson, schema))
+    return ModelRequest(
+        ModelRole.CRITIC,
+        model,
+        prompt,
+        cast(FrozenJson, schema),
+        developer_prompt=template,
+    )
 
 
 def parse_pr_critic_response(
@@ -164,36 +191,15 @@ def build_pr_arbiter_request(
         .joinpath("prompts/arbiter.txt")
         .read_text(encoding="utf-8")
     )
-    values = {
-        "SOURCE_PR_FILES": source_files,
-        "TRANSLATION_PR_FILES": translated_files,
-        "PROJECT_GLOSSARY": glossary_files,
-    }
-    rendered = {
-        name: json.dumps(
-            {
-                path: content.decode("utf-8") if content is not None else None
-                for path, content in files.items()
-            },
-            ensure_ascii=False,
-        )
-        for name, files in values.items()
-    }
-    rendered["SOURCE_TOC_SNAPSHOTS"] = json.dumps(
-        {} if toc_snapshots is None else dict(toc_snapshots),
-        ensure_ascii=False,
+    prompt = _review_user_prompt(
+        source_files=source_files,
+        translated_files=translated_files,
+        glossary_files=glossary_files,
+        toc_snapshots=toc_snapshots,
+        binary_manifest=binary_manifest,
+        operator_context=operator_context,
+        checklist=_ARBITER_CHECKLIST,
     )
-    rendered["BINARY_MANIFEST"] = json.dumps(
-        {} if binary_manifest is None else dict(binary_manifest),
-        ensure_ascii=False,
-    )
-    prompt = re.sub(
-        r"\{\{ (SOURCE_PR_FILES|TRANSLATION_PR_FILES|PROJECT_GLOSSARY|SOURCE_TOC_SNAPSHOTS|BINARY_MANIFEST) \}\}",
-        lambda match: rendered[match.group(1)],
-        template,
-    )
-    if operator_context is not None:
-        prompt += "\n<operator-context>\n" + operator_context + "</operator-context>"
     # §4.1/§4.2: resource-only scope still needs reportable finding paths.
     allowed_paths = list(translated_files)
     if binary_manifest:
@@ -212,7 +218,13 @@ def build_pr_arbiter_request(
         "required": ["verdict", "findings"],
         "additionalProperties": False,
     }
-    return ModelRequest(ModelRole.ARBITER, model, prompt, cast(FrozenJson, schema))
+    return ModelRequest(
+        ModelRole.ARBITER,
+        model,
+        prompt,
+        cast(FrozenJson, schema),
+        developer_prompt=template,
+    )
 
 
 def parse_pr_arbiter_response(

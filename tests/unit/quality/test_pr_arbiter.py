@@ -48,24 +48,13 @@ def test_arbiter_renders_exact_canonical_prompt() -> None:
         .joinpath("prompts/arbiter.txt")
         .read_text(encoding="utf-8")
     )
-    approved = packaged
-    for placeholder, files in (
-        ("SOURCE_PR_FILES", SOURCE_FILES),
-        ("TRANSLATION_PR_FILES", FINAL_FILES),
-        ("PROJECT_GLOSSARY", GLOSSARY_FILES),
-    ):
-        approved = approved.replace(
-            "{{ " + placeholder + " }}",
-            json.dumps({path: text.decode() for path, text in files.items()}, ensure_ascii=False),
-        )
-    approved = approved.replace("{{ SOURCE_TOC_SNAPSHOTS }}", "{}").replace(
-        "{{ BINARY_MANIFEST }}", "{}"
+    built = request()
+    assert built.developer_prompt == packaged
+    assert "<source-pr-files>" not in built.developer_prompt
+    assert built.prompt.endswith(
+        "Before answering, check completeness, terminology, technical literals and "
+        "inline-code, damaged sentences, TOC correctness, and every supplied file."
     )
-    assert request().prompt == approved
-    # Canonical arbiter prompt lives in the package (REQUIREMENTS no longer embeds it).
-    assert "{{ SOURCE_PR_FILES }}" in packaged
-    assert "{{ TRANSLATION_PR_FILES }}" in packaged
-    assert "{{ PROJECT_GLOSSARY }}" in packaged
 
 
 def test_arbiter_loads_packaged_prompt_for_each_request(
@@ -73,11 +62,11 @@ def test_arbiter_loads_packaged_prompt_for_each_request(
 ) -> None:
     prompt = tmp_path / "prompts" / "arbiter.txt"
     prompt.parent.mkdir()
-    prompt.write_text("First: {{ TRANSLATION_PR_FILES }}", encoding="utf-8")
+    prompt.write_text("First instructions", encoding="utf-8")
     monkeypatch.setattr(resources, "files", lambda package: tmp_path)
-    assert request().prompt.startswith("First: ")
-    prompt.write_text("Edited: {{ TRANSLATION_PR_FILES }}", encoding="utf-8")
-    assert request().prompt.startswith("Edited: ")
+    assert request().developer_prompt == "First instructions"
+    prompt.write_text("Edited instructions", encoding="utf-8")
+    assert request().developer_prompt == "Edited instructions"
 
 
 def test_arbiter_receives_complete_final_pr_and_glossary() -> None:
@@ -91,9 +80,9 @@ def test_arbiter_receives_complete_final_pr_and_glossary() -> None:
         assert json.loads(content) == {path: text.decode() for path, text in files.items()}
     assert built.role is ModelRole.ARBITER
     assert built.model == "independent-arbiter"
-    assert built.prompt == (
-        request().prompt
-        + "\n<operator-context>\nПроверьте согласованность названия.</operator-context>"
+    assert (
+        "<operator-context>\nПроверьте согласованность названия.</operator-context>"
+        in built.prompt
     )
 
 
