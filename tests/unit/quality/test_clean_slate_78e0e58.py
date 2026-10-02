@@ -87,7 +87,6 @@ def test_resource_only_arbiter_allows_binary_manifest_finding() -> None:
                 "findings": [
                     {
                         "target_path": "ydb/docs/en/core/_assets/a.png",
-                        "target_line": None,
                         "searchable_snippet": None,
                         "reason": "Ресурс скопирован без проверки содержимого.",
                         "expected_correction": "Проверить бинарный ресурс вручную.",

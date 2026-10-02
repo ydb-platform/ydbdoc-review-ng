@@ -49,7 +49,6 @@ def test_semantic_modes_publish_without_build_or_ci(monkeypatch, mode, verdict, 
         "expected_correction": "Restore the intended meaning.",
         "searchable_snippet": "Corrected",
         "target_path": "ydb/docs/en/core/page.md",
-        "target_line": 1,
     }
 
     def runtime():
@@ -175,14 +174,12 @@ class WholePRServices(InstalledContinueServices):
                         "expected_correction": "Clarify alpha detail.",
                         "searchable_snippet": "Correct alpha.",
                         "target_path": "ydb/docs/en/core/a.md",
-                        "target_line": 3,
                     },
                     {
                         "reason": "Residual relationship detail.",
                         "expected_correction": "Clarify relationship detail.",
                         "searchable_snippet": "Correct alpha relationship.",
                         "target_path": "ydb/docs/en/core/b.md",
-                        "target_line": 3,
                     },
                 ],
             },

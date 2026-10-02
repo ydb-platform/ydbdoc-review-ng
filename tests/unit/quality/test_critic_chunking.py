@@ -126,6 +126,8 @@ def test_single_pair_that_does_not_fit_is_left_unreviewed_and_forces_red() -> No
         finding.target_path == "docs/en/huge.md"
         and finding.target_line is None
         and finding.searchable_snippet is None
+        and finding.reason == "Файл не удалось проверить в доступном контексте модели."
+        and "Уменьш" in finding.expected_correction
         for finding in final.findings
     )
     assert [call.role for call in models.calls] == [ModelRole.CRITIC, ModelRole.ARBITER]

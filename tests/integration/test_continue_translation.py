@@ -1122,7 +1122,6 @@ def test_mixed_markdown_and_binary_continue_skips_asset_utf8_restore() -> None:
                             "expected_correction": "Fix translation.",
                             "searchable_snippet": "Translated",
                             "target_path": EN + "a.md",
-                            "target_line": 1,
                         }
                     ],
                 }

@@ -125,7 +125,6 @@ class ReviewServices(LifecycleServices):
                         "expected_correction": "Restore the full meaning.",
                         "searchable_snippet": current.splitlines()[0],
                         "target_path": path,
-                        "target_line": 1,
                     }
                 )
         values = (

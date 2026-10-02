@@ -28,7 +28,6 @@ def test_review_pr_arbiter_validates_findings_against_corrected_final_bytes() ->
                             "findings": [
                                 {
                                     "target_path": "en/a.md",
-                                    "target_line": 1,
                                     "searchable_snippet": "Corrected",
                                     "reason": "Неточно переведён заголовок.",
                                     "expected_correction": "Уточните заголовок по исходному тексту.",

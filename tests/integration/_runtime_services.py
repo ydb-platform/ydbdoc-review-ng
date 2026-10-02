@@ -424,7 +424,6 @@ class InstalledContinueServices(RuntimeServices):
                         "expected_correction": "Confirm the intended source meaning.",
                         "searchable_snippet": "Translated",
                         "target_path": "ydb/docs/en/core/page.md",
-                        "target_line": 1,
                     }
                 ],
             },

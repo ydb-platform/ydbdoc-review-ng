@@ -198,7 +198,6 @@ def test_runtime_reviews_all_files_once_and_preserves_arbiter_verdict(verdict):
                     else [
                         {
                             "target_path": EN + "b.md",
-                            "target_line": 3,
                             "searchable_snippet": "Use `BlobDepot`.",
                             "reason": "Residual terminology issue.",
                             "expected_correction": "Clarify the intended component meaning.",

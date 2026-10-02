@@ -41,7 +41,6 @@ def test_two_file_pr_has_exactly_one_critic_then_one_arbiter(verdict, changed):
         else [
             {
                 "target_path": "en/a.md",
-                "target_line": 1,
                 "searchable_snippet": corrected["en/a.md"].decode().splitlines()[0],
                 "reason": "Meaning needs a clearer term.",
                 "expected_correction": "Use the source term exactly.",

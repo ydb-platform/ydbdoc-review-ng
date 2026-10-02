@@ -123,7 +123,6 @@ class _RoutedComments:
 def _red_finding(path: str = EN + "page.md") -> dict:
     return {
         "target_path": path,
-        "target_line": 1,
         "searchable_snippet": "Translated",
         "reason": "Meaning still incomplete for publication.",
         "expected_correction": "Restore the missing meaning from the source.",
@@ -400,7 +399,6 @@ def test_doc_verify_reconciles_leftover_source_red_when_translation_pr_exists() 
                     text = json.dumps({"verdict": "YELLOW", "findings": [
                         {
                             "target_path": EN + TOC,
-                            "target_line": 3,
                             "searchable_snippet": "Corrected New",
                             "reason": "Minor wording polish remains.",
                             "expected_correction": "Use the glossary label.",

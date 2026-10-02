@@ -268,7 +268,6 @@ class CaptureServices(RuntimeServices):
                             else files[path].splitlines()[0]
                         ),
                         "target_path": path,
-                        "target_line": None if files[path] is None else 1,
                     }
                     for path in paths
                 ],
@@ -325,7 +324,6 @@ class CaptureServices(RuntimeServices):
                         {
                             "repairable": False,
                             "target_path": path,
-                            "target_line": 1,
                         }
                     )
         elif schema["properties"] and all(

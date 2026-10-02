@@ -220,7 +220,6 @@ def test_verify_already_absent_intentional_toc_delete_yellow_no_checkpoint() -> 
                     snippet = page.splitlines()[0] if page else "Translated"
                     finding = {
                         "target_path": EN + "page.md",
-                        "target_line": 1,
                         "searchable_snippet": snippet,
                         "reason": "Minor terminology issue.",
                         "expected_correction": "Align the term with the glossary.",
@@ -308,7 +307,6 @@ def test_multi_continue_removes_stale_source_zero_commit_red_qa() -> None:
                             "findings": [
                                 {
                                     "target_path": EN + TOC,
-                                    "target_line": 3,
                                     "searchable_snippet": "Corrected New",
                                     "reason": "Wording still needs an editorial pass.",
                                     "expected_correction": "Use the approved navigation label.",

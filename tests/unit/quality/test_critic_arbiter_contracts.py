@@ -204,6 +204,8 @@ def test_single_arbiter_invalid_finding_produces_unreviewed_red_report() -> None
     assert final.findings[0].target_path == "docs/en/a.md"
     assert final.findings[0].target_line is None
     assert final.findings[0].searchable_snippet is None
+    assert final.findings[0].reason == "Ответ арбитра не соответствует формату проверки."
+    assert "Уменьш" not in final.findings[0].expected_correction
 
 
 def test_single_arbiter_transport_failure_produces_unreviewed_red_report() -> None:
@@ -234,6 +236,8 @@ def test_single_arbiter_transport_failure_produces_unreviewed_red_report() -> No
     assert final.findings[0].target_path == "docs/en/a.md"
     assert final.findings[0].target_line is None
     assert final.findings[0].searchable_snippet is None
+    assert final.findings[0].reason == "Файл не удалось проверить из-за сбоя модели или провайдера."
+    assert "Уменьш" not in final.findings[0].expected_correction
 
 
 def test_zero_text_arbiter_non_final_is_red_not_green() -> None:

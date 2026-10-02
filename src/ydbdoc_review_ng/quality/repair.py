@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from typing import Protocol
+from typing import Literal, Protocol
 
 import yaml
 
@@ -27,6 +27,7 @@ from ydbdoc_review_ng.translation import (
 from ydbdoc_review_ng.translation.contract import field_request_text
 
 _VERDICT_RANK = {Verdict.GREEN: 0, Verdict.YELLOW: 1, Verdict.RED: 2}
+_UnreviewedReason = Literal["context", "provider", "contract", "missing"]
 
 
 class ModelExecutor(Protocol):
@@ -134,14 +135,33 @@ def _worst_verdict(results: Sequence[CriticResult]) -> Verdict:
     return worst
 
 
-def _unreviewed_finding(target_path: str) -> Finding:
+def _unreviewed_finding(target_path: str, reason: _UnreviewedReason) -> Finding:
+    explanations = {
+        "context": (
+            "Файл не удалось проверить в доступном контексте модели.",
+            "Уменьшите файл или продолжите проверку отдельно.",
+        ),
+        "provider": (
+            "Файл не удалось проверить из-за сбоя модели или провайдера.",
+            "Повторите проверку файла.",
+        ),
+        "contract": (
+            "Ответ арбитра не соответствует формату проверки.",
+            "Повторите проверку файла.",
+        ),
+        "missing": (
+            "Обязательный итоговый файл отсутствует.",
+            "Добавьте перевод этого файла и повторите проверку.",
+        ),
+    }
+    public_reason, correction = explanations[reason]
     return Finding(
         False,
-        "Файл не удалось проверить в доступном контексте модели.",
-        "Уменьшите файл или продолжите проверку отдельно.",
-        None,  # type: ignore[arg-type]
+        public_reason,
+        correction,
+        None,
         target_path,
-        None,  # type: ignore[arg-type]
+        None,
     )
 
 
@@ -166,9 +186,13 @@ def review_pr(
     corrected: dict[str, bytes] = {
         path: content for path, content in translated_files.items() if content is not None
     }
-    unreviewed: set[str] = set()
+    unreviewed: dict[str, _UnreviewedReason] = {}
     # §4: empty Markdown inventory still reviews resources; NON_FINAL cannot invent GREEN.
-    resource_review_unresolved = False
+    resource_review_reason: _UnreviewedReason | None = None
+
+    def mark_unreviewed(paths: Sequence[str], reason: _UnreviewedReason) -> None:
+        for path in paths:
+            unreviewed.setdefault(path, reason)
 
     def build_critic(chunk_pairs: Sequence[tuple[str, str]]) -> ModelRequest:
         return build_pr_critic_request(
@@ -188,7 +212,7 @@ def review_pr(
     packed_targets = {target for chunk in critic_chunks for _source, target in chunk}
     for _source, target in pairs:
         if target not in packed_targets:
-            unreviewed.add(target)
+            mark_unreviewed((target,), "context")
     if not pairs:
         critic_chunks = ((),)
 
@@ -223,9 +247,9 @@ def review_pr(
                 # Ordinary provider failure keeps draft bytes for arbiter and is not
                 # itself RED, unless a NON_FINAL attempt already marked the chunk.
                 if saw_non_final:
-                    unreviewed.update(target_paths)
+                    mark_unreviewed(target_paths, "provider")
                     if not pairs:
-                        resource_review_unresolved = True
+                        resource_review_reason = "provider"
                 break
 
     arbiter_targets: dict[str, bytes | None] = {
@@ -248,12 +272,12 @@ def review_pr(
     packed_arbiter = {target for chunk in arbiter_chunks for _source, target in chunk}
     for _source, target in reviewed_pairs:
         if target not in packed_arbiter:
-            unreviewed.add(target)
+            mark_unreviewed((target,), "context")
 
     results: list[CriticResult] = []
     if not pairs:
         # Zero-text still calls arbiter once, unless critic already marked NON_FINAL.
-        arbiter_chunks = () if resource_review_unresolved else ((),)
+        arbiter_chunks = () if resource_review_reason is not None else ((),)
 
     for chunk_pairs in arbiter_chunks:
         arbiter = build_arbiter(chunk_pairs)
@@ -266,37 +290,32 @@ def review_pr(
             chunk_files = {path: None for path in binary_manifest}
         if not response.success or response.text is None:
             # §4: NON_FINAL → unreviewed RED with report, never a bare abort.
-            if response.failure is AttemptError.NON_FINAL:
-                unreviewed.update(target for _source, target in chunk_pairs)
-                if not chunk_pairs:
-                    resource_review_unresolved = True
-                continue
-            unreviewed.update(target for _source, target in chunk_pairs)
+            mark_unreviewed(tuple(target for _source, target in chunk_pairs), "provider")
             if not chunk_pairs:
-                resource_review_unresolved = True
+                resource_review_reason = "provider"
             continue
         try:
             results.append(parse_pr_arbiter_response(response.text, target_files=chunk_files))
         except Exception:
-            unreviewed.update(target for _source, target in chunk_pairs)
+            mark_unreviewed(tuple(target for _source, target in chunk_pairs), "contract")
             if not chunk_pairs:
-                resource_review_unresolved = True
+                resource_review_reason = "contract"
 
     findings = [finding for result in results for finding in result.findings]
     finding_paths = {finding.target_path for finding in findings}
     # §4.2: missing required target is a hole → RED with null coordinates.
     for path, value in arbiter_targets.items():
         if value is None:
-            unreviewed.add(path)
-    for path in sorted(unreviewed):
+            unreviewed[path] = "missing"
+    for path, reason in sorted(unreviewed.items()):
         if path not in finding_paths:
-            findings.append(_unreviewed_finding(path))
+            findings.append(_unreviewed_finding(path, reason))
             finding_paths.add(path)
-    if resource_review_unresolved and not findings:
+    if resource_review_reason is not None and not findings:
         # Resource-only / zero-text NON_FINAL still needs a publishable finding (§4/§7).
         marker = next(iter(sorted(binary_manifest or ())), "resource-review")
-        findings.append(_unreviewed_finding(marker))
-    if unreviewed or resource_review_unresolved:
+        findings.append(_unreviewed_finding(marker, resource_review_reason))
+    if unreviewed or resource_review_reason is not None:
         verdict = Verdict.RED
     elif results:
         verdict = _worst_verdict(results)
