@@ -751,6 +751,11 @@ def _inline_regions(
                 )
                 cursor = match.end()
                 continue
+            # Skip whole unqualified letter runs (no "_" / "::") to avoid O(n²)
+            # rescans on long prose tokens such as "x" * 16000.
+            if b"_" not in canonical and b"::" not in raw:
+                cursor = match.end()
+                continue
         if data[cursor : cursor + 1] == b"\\" and cursor + 1 < len(data):
             escaped = data[cursor + 1]
             if (

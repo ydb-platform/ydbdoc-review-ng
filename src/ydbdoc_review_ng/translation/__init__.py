@@ -32,6 +32,11 @@ from ydbdoc_review_ng.translation.document import (
     validate_chunk_response,
     verify_document_candidate,
 )
+from ydbdoc_review_ng.translation.presentation import (
+    PresentationStyle,
+    apply_presentation_map,
+    build_presentation_map,
+)
 
 __all__ = [
     "AssemblyError",
@@ -41,15 +46,18 @@ __all__ = [
     "DocumentTranslationError",
     "DocumentTranslationRequest",
     "Placeholder",
+    "PresentationStyle",
     "ProtectedMismatch",
     "ResponseError",
     "ResponseErrorReason",
     "TranslationField",
     "TranslationRequest",
+    "apply_presentation_map",
     "assemble_candidate",
     "build_document_correction_note",
     "build_document_critic_prompt",
     "build_document_prompt",
+    "build_presentation_map",
     "build_translation_request",
     "document_operator_guidance",
     "document_placeholder_context",

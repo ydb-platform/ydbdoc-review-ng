@@ -121,6 +121,8 @@ from ydbdoc_review_ng.translation import (
     build_translation_request,
     document_operator_guidance,
     parse_translation_response,
+    apply_presentation_map,
+    build_presentation_map,
     prepare_document,
     restore_document,
     validate_chunk_response,
@@ -1995,6 +1997,18 @@ class RuntimeContent:
             for token, source_bytes in by_token.items():
                 rendered = rendered.replace(token, source_bytes.decode("utf-8"))
             candidate = rendered.encode("utf-8")
+        # Optional old target is formatting reference only (§1.2 / §2).
+        presentation = build_presentation_map(
+            target_reference_bytes,
+            source_snapshot=document.plan.source_snapshot,
+            source_path=entry.pair.target_path,
+        )
+        candidate = apply_presentation_map(
+            candidate,
+            presentation,
+            source_snapshot=document.plan.source_snapshot,
+            source_path=entry.pair.target_path,
+        )
         try:
             candidate_plan = build_markdown_plan(
                 document.plan.source_snapshot, entry.pair.target_path, candidate
