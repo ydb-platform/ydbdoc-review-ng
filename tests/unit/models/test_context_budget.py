@@ -69,8 +69,9 @@ def test_production_review_roles_use_complete_wire_budget(builder) -> None:
     payload = json.loads(body)
     assert payload["max_tokens"] == 1_048_576 - len(body)
     assert payload["max_tokens"] > 8000
-    assert "Термин" in payload["messages"][0]["content"]
-    assert "Уточните термин" in payload["messages"][0]["content"]
+    assert [message["role"] for message in payload["messages"]] == ["developer", "user"]
+    assert "Термин" in payload["messages"][1]["content"]
+    assert "Уточните термин" in payload["messages"][1]["content"]
     assert "response_format" in payload
 
 

@@ -133,8 +133,13 @@ def validate_target_only_toc_references(
     source_after: bytes, target: bytes, corrected: bytes
 ) -> None:
     """Reject critic output that removes navigation outside the source PR delta."""
-    protected = target_only_toc_references(source_after, target)
-    remaining = target_only_toc_references(source_after, corrected)
+    try:
+        protected = target_only_toc_references(source_after, target)
+        remaining = target_only_toc_references(source_after, corrected)
+    except TocDeltaError:
+        # §2/§7: malformed YAML remains a soft diagnostic. Structural
+        # preservation is enforceable only when all three snapshots parse.
+        return
     if not protected.issubset(remaining):
         raise TocDeltaError("toc_target_only_reference_removed")
 
