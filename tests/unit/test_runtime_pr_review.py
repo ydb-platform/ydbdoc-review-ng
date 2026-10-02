@@ -247,7 +247,7 @@ def test_invalid_second_file_retries_then_passes_draft_to_arbiter(has_document_p
     assert unpack(result.final_candidate)[EN + "b.md"] == b"# Depot\n\nUse `BlobDepot`.\n"
 
 
-@pytest.mark.parametrize("invalid_change", [None, "href"])
+@pytest.mark.parametrize("invalid_change", [None, "href", "delete-target-only"])
 def test_runtime_applies_complete_toc_including_href_corrections(invalid_change):
     """REQUIREMENTS §3.6/§4.1: critic may rewrite TOC href/hierarchy (#7)."""
     from tests.unit.test_translation_plan import (
@@ -299,11 +299,31 @@ def test_runtime_applies_complete_toc_including_href_corrections(invalid_change)
         + label
         + "\n  href: "
         + ("wrong.md" if invalid_change == "href" else "a.md")
-        + "\n- name: Target only\n  href: extra.md\n"
+        + (
+            "\n"
+            if invalid_change == "delete-target-only"
+            else "\n- name: Target only\n  href: extra.md\n"
+        )
     )
-    models = FifoModels([json.dumps({"files": corrected}), '{"verdict":"GREEN","findings":[]}'])
+    critic_response = json.dumps({"files": corrected})
+    models = FifoModels(
+        [critic_response, critic_response, '{"verdict":"GREEN","findings":[]}']
+        if invalid_change == "delete-target-only"
+        else [critic_response, '{"verdict":"GREEN","findings":[]}']
+    )
     content.models = models
     result = content.review(preparation.snapshot, candidate)
+    if invalid_change == "delete-target-only":
+        assert prompt_map(models.calls[2], "translation-pr-files")[EN + "toc.yaml"] == (
+            toc.decode()
+        )
+        assert unpack(result.final_candidate) == unpack(candidate.content)
+        assert [call.role for call in models.calls] == [
+            ModelRole.CRITIC,
+            ModelRole.CRITIC,
+            ModelRole.ARBITER,
+        ]
+        return
     assert prompt_map(models.calls[1], "translation-pr-files") == corrected
     final_files = {path: text.encode() for path, text in corrected.items()}
     assert unpack(result.final_candidate) == final_files

@@ -5,8 +5,10 @@ from __future__ import annotations
 import yaml
 
 from ydbdoc_review_ng.domain import RepoPath
-from ydbdoc_review_ng.toc_delta import apply_toc_delta
-
+from ydbdoc_review_ng.toc_delta import (
+    apply_toc_delta,
+    target_only_toc_references,
+)
 
 TOC = RepoPath("ydb/docs/ru/core/manual/toc_i.yaml")
 
@@ -138,3 +140,17 @@ def test_root_title_change_updates_target_and_string_map() -> None:
     assert loaded["items"] == [{"name": "A EN", "href": "a.md"}]
     assert result.string_changes[0].string_id == "title"
     assert result.string_changes[0].text == "New"
+
+
+def test_target_only_navigation_finds_nested_href_and_include() -> None:
+    source_after = b"items:\n- name: Source\n  href: source.md\n"
+    target = (
+        b"items:\n- name: Source\n  href: source.md\n"
+        b"- name: Target group\n  items:\n"
+        b"  - name: Extra\n    href: replacing_nodes.md\n"
+        b"  - include:\n      path: shared/toc.yaml\n"
+    )
+
+    assert target_only_toc_references(source_after, target) == frozenset(
+        {"href:replacing_nodes.md", "include:shared/toc.yaml"}
+    )

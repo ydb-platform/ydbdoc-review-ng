@@ -105,6 +105,7 @@ from ydbdoc_review_ng.toc_delta import (
     apply_toc_delta,
     build_toc_string_request,
     parse_toc_string_response,
+    validate_target_only_toc_references,
 )
 from ydbdoc_review_ng.trace import traced, write_trace
 from ydbdoc_review_ng.translation import (
@@ -2372,7 +2373,12 @@ class RuntimeContent:
 
     @staticmethod
     def _validate_toc_correction(
-        snapshot: SnapshotRef, path: RepoPath, expected: bytes, corrected: bytes
+        snapshot: SnapshotRef,
+        path: RepoPath,
+        expected: bytes,
+        corrected: bytes,
+        *,
+        source_after: bytes | None = None,
     ) -> None:
         # Critic may rewrite href/hierarchy/conditions/labels (§3.6 / §4.1).
         # §7: any technically assembled UTF-8 publishes; YAML parse is not a gate.
@@ -2383,6 +2389,8 @@ class RuntimeContent:
             _toc(corrected, "translation_plan_toc_correction_invalid")
         except (RuntimeBoundaryError, TranslationPlanError):
             pass
+        if source_after is not None and expected:
+            validate_target_only_toc_references(source_after, expected, corrected)
         _ = (snapshot, path, expected)
 
     def review(
@@ -2409,6 +2417,7 @@ class RuntimeContent:
         source_locale, target_locale = (
             (Locale.RU, Locale.EN) if direction is Direction.RU_TO_EN else (Locale.EN, Locale.RU)
         )
+        source_root = self.roots.ru if direction is Direction.RU_TO_EN else self.roots.en
         documents = {doc.entry.pair.target_path.value: doc for doc in self.documents}
         accepted = {item.target_path: item for item in self.accepted_maps}
         toc_postconditions = {
@@ -2431,11 +2440,25 @@ class RuntimeContent:
                 path = RepoPath(name)
                 kind = classify_path(self.roots, path).kind
                 if kind is PathKind.TOC:
+                    classified = classify_path(self.roots, path)
+                    assert classified.relative is not None
+                    source_toc_path = f"{source_root.value}/{classified.relative}"
+                    source_after_text = (toc_snapshots.get(source_toc_path) or {}).get(
+                        "after"
+                    )
+                    baseline = translated_files.get(name)
+                    if baseline is None:
+                        baseline = toc_postconditions.get(path, b"")
                     self._validate_toc_correction(
                         source_snapshot,
                         path,
-                        toc_postconditions.get(path, translated_files.get(name) or b""),
+                        baseline,
                         target,
+                        source_after=(
+                            None
+                            if source_after_text is None
+                            else source_after_text.encode("utf-8")
+                        ),
                     )
                     continue
                 if kind is not PathKind.MARKDOWN:
