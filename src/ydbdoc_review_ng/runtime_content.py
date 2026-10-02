@@ -685,6 +685,17 @@ class RuntimeContent:
             and item.kind is PathKind.TOC
             and item.action is PlanAction.DELETE_TARGET
         }
+        # Verify may have demoted an already-absent delete to NO_ACTION before the
+        # mirror fix; still treat source TOC Git removals as intentional deletes.
+        for change in preparation.inventory.files:
+            classified = classify_path(self.roots, change.path)
+            if (
+                classified.locale == source_locale
+                and classified.kind is PathKind.TOC
+                and change.status == "removed"
+                and classified.relative is not None
+            ):
+                intentional_toc_deletes.add(f"{target_root.value}/{classified.relative}")
         toc_snapshots: dict[str, dict[str, str | None]] = {}
         for path, value in plans.fixed_files:
             classified = classify_path(self.roots, RepoPath(path))

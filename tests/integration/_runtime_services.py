@@ -326,20 +326,23 @@ class RuntimeServices:
             )
             return {"id": 7}
         if path == "/issues/42/comments":
+            comment_id = 800 + len(self.source_comments)
             self.source_comments.append(
                 {
-                    "id": 8,
+                    "id": comment_id,
                     "user": {"id": 42, "type": "User", "login": "pat-publisher"},
                     "body": payload["body"],
                 }
             )
-            return {"id": 8}
-        if path == "/issues/comments/7":
-            self.comments[0]["body"] = payload["body"]
-            return {}
-        if path == "/issues/comments/8":
-            self.source_comments[0]["body"] = payload["body"]
-            return {}
+            return {"id": comment_id}
+        if path.startswith("/issues/comments/") and method == "PATCH":
+            comment_id = int(path.rsplit("/", 1)[-1])
+            for rows in (self.comments, self.source_comments):
+                for row in rows:
+                    if row["id"] == comment_id:
+                        row["body"] = payload["body"]
+                        return {}
+            raise AssertionError((method, path, "unknown_comment_id"))
         raise AssertionError((method, path))
 
     def model(self, request):

@@ -81,7 +81,7 @@ class CaptureServices(RuntimeServices):
             self.jobs.setdefault(parameters["job_id"], {}).update(parameters)
         if "/continuations`" in statement:
             if "UPSERT" in statement:
-                self.saved_after_comment = bool(self.comments)
+                self.saved_after_comment = bool(self.comments) or bool(self.source_comments)
                 self.rows[parameters["continuation_id"]] = dict(parameters)
                 self.events.append(("CHECKPOINT", parameters["stage"]))
                 if self.failure == "checkpoint":
@@ -170,20 +170,25 @@ class CaptureServices(RuntimeServices):
             self.files = dict(self.snapshots[self.branch_head])
             return {}
         if relative == "/issues/42/comments" and method == "POST":
-            comments = (
-                self.source_comments
-                if "ydbdoc-translation-pr" in payload["body"]
-                else self.comments
-            )
-            comment = {"id": 8, "body": payload["body"]}
-            if comments is self.source_comments:
-                comment["user"] = {
+            # Source PR comments (QA or translation-PR link) stay on PR 42.
+            comment = {
+                "id": 800 + len(self.source_comments),
+                "body": payload["body"],
+                "user": {
                     "id": 42,
                     "type": "User",
                     "login": "pat-publisher",
-                }
-            comments.append(comment)
-            return {"id": 8}
+                },
+            }
+            self.source_comments.append(comment)
+            return {"id": comment["id"]}
+        if method == "PATCH" and relative.startswith("/issues/comments/"):
+            comment_id = int(relative.rsplit("/", 1)[-1])
+            for rows in (self.comments, self.source_comments):
+                for row in rows:
+                    if row.get("id") == comment_id:
+                        row["body"] = payload["body"]
+                        return {}
         result = super().github(method, path, payload)
         if self.failure == "head" and method == "POST" and relative == "/issues/43/comments":
             self.branch_head = "f" * 40
@@ -654,8 +659,10 @@ def test_red_without_commits_opens_source_report_and_null_checkpoint():
         files["ydb/docs/en/core/a.md"] = b"# Translated\n"
     result = services.translate()
     assert result.verdict is Verdict.RED
+    # §4.2 / §7: zero-commit RED QA is published on the source PR.
     assert any(
-        "RED" in comment["body"] or "🔴" in comment["body"] for comment in services.comments
+        "RED" in comment["body"] or "🔴" in comment["body"]
+        for comment in services.source_comments
     )
     open_rows = [row for row in services.rows.values() if row["status"] == "open"]
     assert open_rows

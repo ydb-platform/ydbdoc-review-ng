@@ -125,6 +125,15 @@ Independent verify + adversary against `cbd0632` found three still-open producti
 | B | Intentional TOC DELETE re-injected as required null | **fixed** | Omit `DELETE_TARGET` TOC from `_pr_review_inputs` required map; `test_b_full_source_toc_delete_accepts_arbiter_green` |
 | C | GREEN continue noop leaves stale RED QA | **fixed** | Always update source-PR QA on still-zero-commit continue; `test_c_green_continue_noop_updates_stale_red_qa` |
 
+## Tip residuals after A/B/C at 4f4a393 (2026-10-02)
+
+Independent verify of A/B/C **PASS**; adversary found two adjacent lifecycle holes.
+
+| # | Hole | Status | Notes / witness |
+|---|---|---|---|
+| 1 | `doc_verify` re-requires already-absent intentional TOC delete | **fixed** | Verify `only_targets` demoted source TOC Git delete to `none`, so `DELETE_TARGET` was lost and `load_verification_candidate` re-injected null → force RED + bad checkpoint. Preserve TOC removals through mirror; inventory fallback in `_pr_review_inputs`. `test_verify_already_absent_intentional_toc_delete_*` |
+| 2 | Multi-continue leaves stale source-only RED QA | **fixed** | After translation PR exists, reporter updated link only and left zero-commit `<!-- ydbdoc-current-qa -->` RED on source. Neutralize/replace source QA when publishing translation-PR verdict (§7). `test_multi_continue_removes_stale_source_zero_commit_red_qa` |
+
 ## Известные расхождения в коде
 
 - Complete-pair Git heuristic removed; both-locale edits stay in translate scope.

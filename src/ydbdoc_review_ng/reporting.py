@@ -384,28 +384,50 @@ class QAReporter:
             else:
                 self._backend.update_comment(number, existing.id, body)
             if mode in {Mode.DOC_TRANSLATE, Mode.DOC_CONTINUE} and report_context.source_pr_number is not None:
+                source_pr = report_context.source_pr_number
                 source_body = (
                     "Перевод этого PR: "
                     f"https://github.com/{context.repository}/pull/{number}\n"
                     f"{TRANSLATION_LINK_MARKER}"
                 )
-                source_comment = next(
+                source_comments = self._backend.list_comments(source_pr)
+                source_link = next(
                     (
                         comment
-                        for comment in self._backend.list_comments(
-                            report_context.source_pr_number
-                        )
+                        for comment in source_comments
                         if comment.authored_by_publisher
                         and TRANSLATION_LINK_MARKER in comment.body
                     ),
                     None,
                 )
-                if source_comment is None:
-                    self._backend.create_comment(report_context.source_pr_number, source_body)
+                # §7: once a translation PR exists, the one current QA lives there.
+                # An earlier zero-commit RED on the source PR must not keep the
+                # current-QA marker or contradictory RED next to the PR link.
+                source_qa = next(
+                    (
+                        comment
+                        for comment in source_comments
+                        if comment.authored_by_publisher
+                        and QA_MARKER in comment.body
+                        and TRANSLATION_LINK_MARKER not in comment.body
+                    ),
+                    None,
+                )
+                if source_link is None and source_qa is not None:
+                    self._backend.update_comment(source_pr, source_qa.id, source_body)
+                elif source_link is None:
+                    self._backend.create_comment(source_pr, source_body)
                 else:
-                    self._backend.update_comment(
-                        report_context.source_pr_number, source_comment.id, source_body
-                    )
+                    self._backend.update_comment(source_pr, source_link.id, source_body)
+                    if source_qa is not None:
+                        self._backend.update_comment(
+                            source_pr,
+                            source_qa.id,
+                            (
+                                "Актуальный QA-отчёт опубликован в translation PR: "
+                                f"https://github.com/{context.repository}/pull/{number}\n"
+                            ),
+                        )
             # The SHA-labelled comment may have been written during a ref race.
             # Do not acknowledge reporting success or allow checkpoint handoff.
             if self._current_head is not None and self._current_head() != commit_sha:

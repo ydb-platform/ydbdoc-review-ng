@@ -69,16 +69,24 @@ class ContinueServices(CaptureServices):
             ]
         if self.continuing and method == "GET" and relative.endswith("/comments?per_page=100"):
             self.events.append((method, path))
-            # Operator commands are distinct from the publisher's current QA comment.
-            return self.commands + [
+            # Operator commands authorize continue; keep them on the trigger PR only.
+            # Never mix translation-PR QA into source-PR listings (§7 reporting).
+            if "/issues/42/" in relative:
+                rows = self.source_comments
+            elif "/issues/43/" in relative:
+                rows = self.comments
+            else:
+                rows = []
+            stamped = [
                 {
                     **comment,
                     "created_at": "2026-09-21T12:00:00Z",
                     "updated_at": "2026-09-21T12:00:00Z",
                 }
-                for comment in self.comments
+                for comment in rows
                 if "user" in comment
             ]
+            return self.commands + stamped
         if self.continuing and relative.startswith("/contents/"):
             self.reads.append(relative)
         if relative == "/git/commits" and method == "POST":
@@ -346,10 +354,10 @@ def test_fresh_translate_deletes_previous_branch_and_closes_open_checkpoints():
     services.continuing = False
     services.events.clear()
     # Fresh doc_translate must wipe recovery state (§5.1) before prepare/report.
-    with pytest.raises(application.WorkflowError):
-        services.runtime().doc_translate(
-            TranslateWorkflowInput(42, GitSha(services.source), Decimal(10))
-        )
+    result = services.runtime().doc_translate(
+        TranslateWorkflowInput(42, GitSha(services.source), Decimal(10))
+    )
+    assert result.verdict is Verdict.GREEN
     assert services.rows[saved.continuation_id]["status"] == "closed"
     assert any(
         method == "DELETE" and "/git/refs/heads/translation" in path
@@ -1208,5 +1216,5 @@ def test_continue_still_zero_commit_red_keeps_null_checkpoint_and_reports() -> N
     assert following.state.stage is ContinuationStage.REVIEW
     assert any(
         "<!-- ydbdoc-current-qa -->" in comment["body"] and comment["body"].startswith("🔴 RED")
-        for comment in services.comments
+        for comment in services.source_comments
     )

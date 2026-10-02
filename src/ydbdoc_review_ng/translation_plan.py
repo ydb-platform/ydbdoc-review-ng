@@ -411,8 +411,12 @@ def mirror_classified_files(
         if current.kind is PathKind.MARKDOWN and change.previous_path is not None:
             previous_target = paired_markdown_path(roots, change.previous_path)
         if only_targets is not None and target not in only_targets and previous_target not in only_targets:
-            mirrored.append(ClassifiedFile(change, "none", None))
-            continue
+            # Source TOC Git delete may produce no target-path diff when the EN/RU
+            # counterpart was already absent before translate. Keep mirroring so
+            # DELETE_TARGET survives verify scope restore (§1.2 / §5.2).
+            if not (current.kind is PathKind.TOC and change.status == "removed"):
+                mirrored.append(ClassifiedFile(change, "none", None))
+                continue
         if current.kind is PathKind.MARKDOWN:
             mirrored.append(ClassifiedFile(change, "page", None))
         elif current.kind is PathKind.TOC:
