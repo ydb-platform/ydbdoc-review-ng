@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Mapping, Sequence
 from typing import Literal, Protocol
 
@@ -19,6 +20,7 @@ from ydbdoc_review_ng.quality.critic import (
 )
 from ydbdoc_review_ng.quality.types import CriticResult, Finding, Verdict
 from ydbdoc_review_ng.terminology import bilingual_glossary_context
+from ydbdoc_review_ng.toc_delta import TocDeltaError, target_only_toc_references
 from ydbdoc_review_ng.translation import (
     ProtectedMismatch,
     TranslationRequest,
@@ -150,6 +152,40 @@ def _subset_toc_snapshots(
     return {path: snapshot for path, snapshot in toc_snapshots.items() if path in sources}
 
 
+def _critic_operator_context(
+    base: str | None,
+    pairs: Sequence[tuple[str, str]],
+    translated_files: Mapping[str, bytes | None],
+    toc_snapshots: Mapping[str, Mapping[str, str | None]] | None,
+) -> str | None:
+    if toc_snapshots is None:
+        return base
+    contracts: list[str] = []
+    for source_path, target_path in pairs:
+        snapshot = toc_snapshots.get(source_path)
+        target = translated_files.get(target_path)
+        source_after = None if snapshot is None else snapshot.get("after")
+        if target is None or source_after is None:
+            continue
+        try:
+            protected = sorted(
+                target_only_toc_references(source_after.encode("utf-8"), target)
+            )
+        except (TocDeltaError, UnicodeEncodeError):
+            continue
+        if not protected:
+            continue
+        contracts.append(
+            f"TOC target {target_path} has mandatory preserved target references: "
+            f"{json.dumps(protected)}. The complete returned TOC must still contain "
+            "every listed href/include exactly once."
+        )
+    if not contracts:
+        return base
+    protection = "Runtime-computed TOC preservation contract:\n" + "\n".join(contracts)
+    return protection if base is None else f"{base}\n\n{protection}"
+
+
 def _glossary_locale(path: str) -> str | None:
     if path.startswith("ru/") or "/docs/ru/" in path or "/ru/" in path:
         return "ru"
@@ -263,6 +299,8 @@ def review_pr(
 
     def build_critic(chunk_pairs: Sequence[tuple[str, str]]) -> ModelRequest:
         chunk_sources = _subset_sources(source_files, chunk_pairs)
+        chunk_targets = _subset_targets(translated_files, chunk_pairs)
+        chunk_toc_snapshots = _subset_toc_snapshots(toc_snapshots, chunk_pairs)
         chunk_refs = {
             target: presentation_refs[target]
             for _source, target in chunk_pairs
@@ -271,10 +309,15 @@ def review_pr(
         return build_pr_critic_request(
             model=critic_model,
             source_files=chunk_sources,
-            translated_files=_subset_targets(translated_files, chunk_pairs),
+            translated_files=chunk_targets,
             glossary_files=_relevant_glossary_files(glossary_files, chunk_sources),
-            operator_context=operator_context,
-            toc_snapshots=_subset_toc_snapshots(toc_snapshots, chunk_pairs),
+            operator_context=_critic_operator_context(
+                operator_context,
+                chunk_pairs,
+                chunk_targets,
+                chunk_toc_snapshots,
+            ),
+            toc_snapshots=chunk_toc_snapshots,
             binary_manifest=binary_manifest,
             presentation_reference_files=chunk_refs,
         )

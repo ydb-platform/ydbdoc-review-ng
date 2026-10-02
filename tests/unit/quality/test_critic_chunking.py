@@ -168,6 +168,44 @@ def test_dual_locale_glossary_is_reduced_to_relevant_sections() -> None:
     assert models.calls[0].max_output_tokens <= 32_768
 
 
+def test_toc_critic_receives_runtime_computed_target_only_references() -> None:
+    source_path = "docs/ru/toc.yaml"
+    target_path = "docs/en/toc.yaml"
+    source_before = "items:\n- name: Existing\n  href: existing.md\n"
+    source_after = (
+        source_before + "- name: Added\n  href: added.md\n"
+    )
+    target = (
+        "items:\n"
+        "- name: Existing\n  href: existing.md\n"
+        "- name: Target only\n  href: replacing_nodes.md\n"
+        "- name: Added\n  href: added.md\n"
+    )
+    models = _Scripted(
+        [
+            json.dumps({"files": {target_path: target}}),
+            json.dumps({"verdict": "GREEN", "findings": []}),
+        ]
+    )
+
+    review_pr(
+        models,
+        critic_model="critic",
+        arbiter_model="arbiter",
+        source_files={source_path: source_after.encode()},
+        translated_files={target_path: target.encode()},
+        glossary_files={},
+        validate_files=lambda files: None,
+        toc_snapshots={
+            source_path: {"before": source_before, "after": source_after}
+        },
+    )
+
+    prompt = models.calls[0].prompt
+    assert "mandatory preserved target references" in prompt
+    assert '["href:replacing_nodes.md"]' in prompt
+
+
 def test_single_pair_that_does_not_fit_is_left_unreviewed_and_forces_red() -> None:
     """Pair that never fits stays as-is for arbiter; overall verdict is RED."""
     source = {

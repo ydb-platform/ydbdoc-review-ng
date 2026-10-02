@@ -215,7 +215,7 @@ def test_openai_payload_headers_and_full_model_uri_are_exact() -> None:
     ("role", "expected_effort"),
     [
         (ModelRole.CRITIC, "medium"),
-        (ModelRole.ARBITER, "low"),
+        (ModelRole.ARBITER, "none"),
     ],
 )
 def test_openai_review_payload_enables_reasoning_and_separates_instructions(

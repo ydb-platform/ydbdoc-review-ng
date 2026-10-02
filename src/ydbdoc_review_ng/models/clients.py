@@ -470,7 +470,7 @@ class YandexOpenAIClient(_BaseYandexClient):
             "max_tokens": max_tokens,
             "reasoning_effort": {
                 ModelRole.CRITIC: "medium",
-                ModelRole.ARBITER: "low",
+                ModelRole.ARBITER: "none",
             }.get(request.role, "none"),
             "messages": messages,
         }
