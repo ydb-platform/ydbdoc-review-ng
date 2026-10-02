@@ -60,8 +60,8 @@ class ModelRequest:
     schema: FrozenJson | None = field(repr=False)
     target_path: RepoPath | None = None
     developer_prompt: str | None = field(default=None, repr=False)
-    # Critic/arbiter with reasoning_effort=high + uncapped remainder (~1M) hang
-    # until the provider silent-connection wall (~270s). Cap generation budget.
+    # Review roles can outlive the provider's silent-connection wall when the
+    # generation budget is unbounded. Cap each request at its contract boundary.
     max_output_tokens: int | None = None
 
     def __post_init__(self) -> None:

@@ -468,11 +468,10 @@ class YandexOpenAIClient(_BaseYandexClient):
             "stream": False,
             "temperature": 0,
             "max_tokens": max_tokens,
-            "reasoning_effort": (
-                "high"
-                if request.role in {ModelRole.CRITIC, ModelRole.ARBITER}
-                else "none"
-            ),
+            "reasoning_effort": {
+                ModelRole.CRITIC: "medium",
+                ModelRole.ARBITER: "low",
+            }.get(request.role, "none"),
             "messages": messages,
         }
         if request.schema is not None:

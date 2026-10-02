@@ -44,11 +44,12 @@ _ARBITER_CHECKLIST = (
     "Before answering, check completeness, terminology, technical literals and "
     "inline-code, damaged sentences, TOC correctness, and every supplied file."
 )
-# reasoning_effort=high burns against max_tokens. Uncapped remainder (~700k–900k)
-# lets DeepSeek think past the Yandex silent-connection wall (~270s → TRANSPORT).
-_ARBITER_MAX_OUTPUT_TOKENS = 24_576
-_CRITIC_MAX_OUTPUT_FLOOR = 24_576
-_CRITIC_MAX_OUTPUT_CEILING = 98_304
+# Live full-file probes against DeepSeek showed that larger review budgets let
+# synchronous calls run past the provider's silent-connection wall. These caps
+# leave room for complete files/findings while bounding review latency.
+_ARBITER_MAX_OUTPUT_TOKENS = 12_288
+_CRITIC_MAX_OUTPUT_FLOOR = 16_384
+_CRITIC_MAX_OUTPUT_CEILING = 32_768
 
 
 def _critic_max_output_tokens(translated_files: Mapping[str, bytes | None]) -> int:
@@ -57,7 +58,7 @@ def _critic_max_output_tokens(translated_files: Mapping[str, bytes | None]) -> i
         total += 512 if content is None else len(content)
     return max(
         _CRITIC_MAX_OUTPUT_FLOOR,
-        min(_CRITIC_MAX_OUTPUT_CEILING, total * 3 + 16_384),
+        min(_CRITIC_MAX_OUTPUT_CEILING, total),
     )
 
 

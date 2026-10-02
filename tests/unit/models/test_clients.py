@@ -211,9 +211,15 @@ def test_openai_payload_headers_and_full_model_uri_are_exact() -> None:
     assert result.attempts[0].response_role == "assistant"
 
 
-@pytest.mark.parametrize("role", [ModelRole.CRITIC, ModelRole.ARBITER])
+@pytest.mark.parametrize(
+    ("role", "expected_effort"),
+    [
+        (ModelRole.CRITIC, "medium"),
+        (ModelRole.ARBITER, "low"),
+    ],
+)
 def test_openai_review_payload_enables_reasoning_and_separates_instructions(
-    role: ModelRole,
+    role: ModelRole, expected_effort: str,
 ) -> None:
     transport = FakeTransport(openai_response(reasoning=12))
     review = ModelRequest(
@@ -227,7 +233,7 @@ def test_openai_review_payload_enables_reasoning_and_separates_instructions(
     result = openai_client(transport, []).invoke(review)
 
     payload = json.loads(transport.requests[0].body)
-    assert payload["reasoning_effort"] == "high"
+    assert payload["reasoning_effort"] == expected_effort
     assert payload["messages"] == [
         {"role": "developer", "content": "review policy and output contract"},
         {"role": "user", "content": "complete source and target files"},

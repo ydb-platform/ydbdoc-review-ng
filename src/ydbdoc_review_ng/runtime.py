@@ -89,7 +89,7 @@ _PRODUCTION_PRICING = PerModelPricing(
     }
 )
 
-# Critic/arbiter with reasoning_effort=high need well above the old 180s wall
+# Full-file critic/arbiter calls need well above the old 180s wall
 # (Actions run 37009373894: TRANSPORT @ ~182s, http_status=null).
 _DEFAULT_MODEL_HTTP_TIMEOUT_SECONDS = 600.0
 

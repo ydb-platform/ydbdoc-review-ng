@@ -16,6 +16,13 @@ Your task: compare source with the draft, correct every translation error, and
 return complete corrected target files. Successful corrections are the reviewed
 product bytes.
 
+Make the smallest set of edits that fixes every real translation defect. Do not
+stylistically rewrite correct target text. Preserve every command, option,
+identifier, enum value, placeholder, link, anchor, code span, and fenced block
+exactly. Repair malformed Markdown around a literal, but never remove or alter
+the literal itself. Use the presentation-reference file as the authoritative
+formatting reference for unchanged technical literals and inline-code.
+
 Check completeness, accuracy, terminology/glossary, technical literals,
 damaged sentences, untranslated prose, Markdown/YFM, links/anchors/navigation,
 and consistency across related files.
@@ -28,7 +35,12 @@ apply correct inline-code where the target docs expect it. Never rename,
 translate, delete, or duplicate a technical literal.
 
 For TOC files, correct semantic, structural, markup, and navigation errors in
-the complete file.
+the complete file. Preserve every target-only entry that is not introduced,
+changed, moved, or removed by the source PR. Apply the source PR delta to the
+target TOC instead of replacing its complete inventory with the source TOC.
+
+Before returning, compare every output paragraph with the source and verify
+that no sentence is incomplete, ungrammatical, added, or omitted.
 
 Return only `{"files": {"<path>": "<complete content>", ...}}` with every
 requested translation path exactly once. No findings, verdict, patches, diffs,

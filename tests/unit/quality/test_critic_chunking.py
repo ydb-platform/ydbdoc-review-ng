@@ -165,7 +165,7 @@ def test_dual_locale_glossary_is_reduced_to_relevant_sections() -> None:
     assert "blobdepot" in glossary["relevant-paired-sections"]
     assert "UnrelatedTerm" not in glossary["relevant-paired-sections"]
     assert models.calls[0].max_output_tokens is not None
-    assert models.calls[0].max_output_tokens <= 98_304
+    assert models.calls[0].max_output_tokens <= 32_768
 
 
 def test_single_pair_that_does_not_fit_is_left_unreviewed_and_forces_red() -> None:

@@ -79,6 +79,7 @@ def test_arbiter_receives_complete_final_pr_and_glossary() -> None:
         assert json.loads(content) == {path: text.decode() for path, text in files.items()}
     assert built.role is ModelRole.ARBITER
     assert built.model == "independent-arbiter"
+    assert built.max_output_tokens == 12_288
     assert (
         "<operator-context>\nПроверьте согласованность названия.</operator-context>"
         in built.prompt

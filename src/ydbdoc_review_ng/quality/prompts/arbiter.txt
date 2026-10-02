@@ -15,6 +15,11 @@ Findings go directly to the public report. Provide for each finding in an
 existing target file: target_path, an exact searchable_snippet that occurs
 once in that final target file, reason in Russian, and expected_correction in
 Russian. For a missing target file, use its path and null searchable_snippet.
+Report no more than 25 findings and keep every reason and correction concise.
+Every finding must identify a real source-versus-target defect, not a stylistic
+preference. Inline-code may differ from source markup when the presentation
+reference establishes the target-language style. Before returning, verify that
+every non-null searchable_snippet occurs exactly once in the final target file.
 
 Return only:
 

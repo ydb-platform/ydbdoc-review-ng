@@ -117,8 +117,8 @@ def test_critic_caps_max_tokens_instead_of_burning_full_remainder() -> None:
     result = model.invoke(request)
     body = transport.requests[0].body
     assert result.success
-    assert request.max_output_tokens == 98_304
-    assert json.loads(body)["max_tokens"] == 98_304
+    assert request.max_output_tokens == 32_768
+    assert json.loads(body)["max_tokens"] == 32_768
     assert json.loads(body)["max_tokens"] < 1_048_576 - len(body)
 
 

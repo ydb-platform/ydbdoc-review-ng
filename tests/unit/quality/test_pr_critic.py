@@ -71,6 +71,7 @@ def test_critic_contains_complete_two_file_inputs_and_glossary() -> None:
     assert built.model == "critic-model"
     assert built.target_path is None
     assert built.developer_prompt is not None
+    assert built.max_output_tokens == 16_384
     assert mutable_json(built.schema) == {
         "type": "object",
         "properties": {

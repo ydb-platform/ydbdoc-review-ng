@@ -103,7 +103,7 @@ def _pack_pair_chunks(
 
     Oversized single pairs are omitted (unreviewed). The pair cap exists because
     context-window packing alone still builds one mega critic call under the 1M
-    window, and reasoning_effort=high then exceeds the provider idle wall.
+    window, and an oversized reasoning budget can exceed the provider idle wall.
     """
     if not pairs:
         return ()
