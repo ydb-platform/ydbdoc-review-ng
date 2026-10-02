@@ -154,7 +154,11 @@ diagnostic для critic/arbiter.
    Только delete и target TOC нет → новый файл не создаём.
 5. Ссылка на отсутствующий target-файл в TOC — diagnostic, не gate.
 6. Critic/arbiter получают полный target TOC (или `null`) и source TOC
-   before/after; critic может вернуть полный исправленный TOC.
+   before/after; critic может вернуть полный исправленный TOC. Перед
+   публикацией Python проверяет, что critic не удалил target-записи, которых
+   не касалась source-дельта PR. Нарушение делает ответ critic невалидным и
+   запускает обычную единственную повторную попытку §4.1; после второй ошибки
+   сохраняется TOC, уже построенный Python по дельте, и именно он идёт arbiter.
 
 Покрывается unit/integration tests на дельту, идемпотентность, новый TOC,
 diagnostics.
@@ -164,9 +168,18 @@ diagnostics.
 Модель production: только DeepSeek V4 Flash. Исключение —
 `doc_model_probe` (не переводит и не публикует).
 
+`reasoning_effort`: `high` для critic и arbiter, `none` для остальных
+production-ролей. Critic/arbiter получают постоянные инструкции и выходной
+контракт отдельным `developer` message, а все файлы, glossary, TOC snapshots,
+binary manifest и operator context — `user` message. В конце `user` message
+повторяется короткий обязательный checklist: completeness, terminology,
+technical literals и inline-code, damaged sentences, TOC и полный состав
+файлов.
+
 Контекст: 1 048 576; `max_tokens` = остаток после UTF-8 byte-размера полного
-wire request (1 byte ≈ 1 token для этого расчёта). Будущий response заранее
-не оценивается. `NON_FINAL` → чанк непроверен, остальные идут, итог RED.
+wire request со всеми messages (1 byte ≈ 1 token для этого расчёта). Будущий
+response заранее не оценивается. `NON_FINAL` → чанк непроверен, остальные
+идут, итог RED.
 
 ### 4.1 Critic
 
@@ -207,7 +220,6 @@ critic отдельно проверяет все технические лит�
   "findings": [
     {
       "target_path": "...",
-      "target_line": 1,
       "searchable_snippet": "...",
       "reason": "по-русски",
       "expected_correction": "по-русски"
@@ -217,15 +229,25 @@ critic отдельно проверяет все технические лит�
 ```
 
 GREEN → `findings: []`. YELLOW/RED → ≥1 finding. Missing/unreviewed target →
-`target_line` и `searchable_snippet` = `null`.
+`searchable_snippet = null`.
+
+Для существующего target модель возвращает точный `searchable_snippet`, но не
+считает номер строки. Python ищет snippet в окончательных bytes и вычисляет
+`target_line` для публичного отчёта. Snippet должен встречаться ровно один раз.
+Отсутствующий или неоднозначный snippet делает непроверенным только этот
+finding: остальные валидные findings того же ответа сохраняются, для
+затронутого path добавляется непроверенный finding, общий verdict становится
+RED. Структурно невалидный JSON/contract по-прежнему делает непроверенным весь
+чанк.
 
 Общий verdict = худший по чанкам. Findings всех YELLOW/RED чанков
 объединяются (не более 25 в публичном комментарии, остальные — счётчиком).
-Любой неуспешный ответ arbiter, включая transport/provider failure и неверную
-пару `target_line` / `searchable_snippet`, означает непроверенный чанк:
-остальные чанки продолжают проверяться, общий verdict = RED, а невалидные
-findings не публикуются. Это же правило действует, когда arbiter chunk
-единственный.
+Любой неуспешный ответ arbiter, включая transport/provider failure или
+структурно невалидный contract, означает непроверенный чанк: остальные чанки
+продолжают проверяться, общий verdict = RED. Это же правило действует, когда
+arbiter chunk единственный. Публичная причина различает context overflow,
+transport/provider failure, структурно невалидный ответ и неразрешимый
+snippet; сообщение «уменьшите файл» допустимо только для context overflow.
 
 Смысл цветов:
 
