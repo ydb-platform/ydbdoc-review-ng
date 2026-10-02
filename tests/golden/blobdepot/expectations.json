@@ -1,0 +1,39 @@
+{
+  "provenance": {
+    "source_pr": 50839,
+    "source_path": "ydb/docs/ru/core/maintenance/manual/blobdepot.md",
+    "head_sha": "12c8b806dc4560ff7322cd7464dc2372a1b614c6",
+    "base_sha": "1705aa4cea8caaf8c715b368f57ac7317975af83",
+    "note": "Focused RU excerpt from #50839 BlobDepot; old.en.md is a presentation reference with backticks on identifier atoms the map must transfer"
+  },
+  "required_escaped_atoms_in_source": [
+    "BS\\_CONTROLLER",
+    "POOL\\_NAME",
+    "CREATE\\_FAILED",
+    "CREATED\\_FAILED"
+  ],
+  "canonical_atoms_after_restore": [
+    "BS_CONTROLLER",
+    "POOL_NAME",
+    "CREATE_FAILED",
+    "CREATED_FAILED"
+  ],
+  "forbidden_after_prepare_or_restore": [
+    "page_CONTROLLER",
+    "\\_CONTROLLER",
+    "BS\\_CONTROLLER",
+    "POOL\\_NAME",
+    "CREATE\\_FAILED",
+    "CREATED\\_FAILED"
+  ],
+  "presentation_inline_code": [
+    "BS_CONTROLLER",
+    "POOL_NAME",
+    "CREATE_FAILED"
+  ],
+  "presentation_leaves_bare": [
+    "--name",
+    "NEW",
+    "WORKING"
+  ]
+}

@@ -14,7 +14,7 @@ Semantic flow в `REQUIREMENTS_RU.md`:
 8. Soft-publish diagnostics ≠ reader-facing product success.
 9. Режимы: `doc_translate`, `doc_verify`, `doc_continue`.
 
-## Код (P0+P1 landed)
+## Код (P0+P1+P2 landed)
 
 | Item | Status |
 |---|---|
@@ -24,7 +24,8 @@ Semantic flow в `REQUIREMENTS_RU.md`:
 | Translator/critic/arbiter prompt updates | **DONE** |
 | Canon §1.2 / §2 / §4.1 / §5.1 / §7 | **DONE** |
 | Gate + atoms witnesses | **DONE** |
-| P2 BlobDepot golden harness | **stub** — see `knowledge/blobdepot-golden-plan.md` |
+| P2 BlobDepot golden harness | **DONE** — `tests/golden/test_blobdepot_golden.py` |
 
-Offline contract surface updated for redesign. Live `doc_translate` gate still
-needs credentials/push proof after P2 golden.
+Offline redesign surface (atoms + presentation map + draft/reviewed gate +
+BlobDepot golden) is ready. Live `doc_translate` re-proof on a known source PR
+is still pending (credentials + model quality on real #50839).

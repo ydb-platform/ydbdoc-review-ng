@@ -19,7 +19,7 @@
 | 9 | `doc_verify` | done |
 | 10 | Budget / reporting | done |
 | 11 | Identifier atoms + presentation map + draft/reviewed gate | **done** (P0+P1) |
-| 12 | BlobDepot golden harness (P2) | stub plan |
+| 12 | BlobDepot golden harness (P2) | **done** |
 | 13 | Full suite after redesign | **done** (2168 passed) |
 | 14 | Live PR after redesign | pending |
 
@@ -32,11 +32,12 @@
 | P0c | Critic fail/503 → RED, not arbiter GREEN on raw | **done** | `tests/unit/quality/test_draft_reviewed_gate.py` |
 | P1a | Prompt updates + presentation-reference input | **done** | critic/arbiter prompts; translator tag |
 | P1b | Canon §1.2/§2/§4.1/§5.1/§7 | **done** | `REQUIREMENTS_RU.md` |
-| P2 | Offline BlobDepot golden | **stub** | `knowledge/blobdepot-golden-plan.md` |
+| P2 | Offline BlobDepot golden | **done** | `tests/golden/test_blobdepot_golden.py` + `tests/golden/blobdepot/` |
 
 > [!success] offline suite (2026-10-02 redesign)
-> Full non-live `tests/unit` + `tests/integration`: **2168 passed, 0 failed**
-> (1 deselected). Live `doc_translate` gate still needs credentials / push after P2.
+> P0+P1+P2 golden landed. Prior full non-live suite was **2168 passed**.
+> Live `doc_translate` re-proof on a known source PR is still pending (P2 is
+> offline only).
 
 ## Neural review triage (2026-10-01)
 
@@ -165,7 +166,8 @@ Adversary against public/main tip `56d6bff` found three production lifecycle hol
 - New `doc_translate` deletes `translation/pr-{n}` and closes checkpoints; labels removed.
 - `doc_verify` GREEN/YELLOW closes prior RED checkpoint.
 - TOC scope hash ignores volatile `expected_sha256` wording; review-stage continue skips TOC string retranslate.
-- Offline contract surface **READY**; **live PR / production `doc_translate` still pending**.
+- Offline contract surface **READY** including P2 BlobDepot golden; **live PR /
+  production `doc_translate` still pending**.
 - Continue tests that still expected per-file `complete_pair` exclusion or translation-PR
   continue after branch-delete/`target_sha=null` were updated to §1.1/§1.2/§5.1 contracts
   (stale expectations, not production bugs).

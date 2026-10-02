@@ -16,5 +16,7 @@
 - Arbiter worst-verdict; YELLOW закрывает checkpoint; RED открывает.
 - Ноль commits после translator+critic → нет пустого PR, RED в source PR.
 - Continue: operator context; pending раньше review; потом полный re-review.
+- BlobDepot golden (`tests/golden/test_blobdepot_golden.py`): atoms, presentation
+  map, critic-unavailable → RED; без сети и без живой модели.
 
 `doc_model_probe` не production translate.

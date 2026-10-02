@@ -9,6 +9,6 @@
 - `delivery.md` — commits в `main`
 - `current-status.md` — что согласовано и где код
 - `debt-map.md` — срезы выравнивания кода под контракт
-- `blobdepot-golden-plan.md` — stub P2 golden harness
+- `blobdepot-golden-plan.md` — P2 BlobDepot offline golden (done)
 
 Не хранить секреты, полные transcripts, черновики агентов.
