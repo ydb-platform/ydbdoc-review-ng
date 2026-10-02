@@ -60,6 +60,9 @@ class ModelRequest:
     schema: FrozenJson | None = field(repr=False)
     target_path: RepoPath | None = None
     developer_prompt: str | None = field(default=None, repr=False)
+    # Critic/arbiter with reasoning_effort=high + uncapped remainder (~1M) hang
+    # until the provider silent-connection wall (~270s). Cap generation budget.
+    max_output_tokens: int | None = None
 
     def __post_init__(self) -> None:
         if type(self.role) is not ModelRole:
@@ -74,6 +77,10 @@ class ModelRequest:
             type(self.developer_prompt) is not str or not self.developer_prompt.strip()
         ):
             raise ValueError("developer_prompt must be a non-empty string or None")
+        if self.max_output_tokens is not None and (
+            type(self.max_output_tokens) is not int or self.max_output_tokens < 1
+        ):
+            raise ValueError("max_output_tokens must be a positive integer or None")
         if self.schema is not None:
             object.__setattr__(self, "schema", freeze_json(self.schema))
 

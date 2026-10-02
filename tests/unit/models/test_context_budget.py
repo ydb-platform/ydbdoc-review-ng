@@ -54,7 +54,7 @@ def test_complete_wire_bytes_determine_output_for_different_prompt_sizes() -> No
 
 
 @pytest.mark.parametrize("builder", [build_pr_critic_request, build_pr_arbiter_request])
-def test_production_review_roles_use_complete_wire_budget(builder) -> None:
+def test_production_review_roles_cap_generation_under_reasoning_budget(builder) -> None:
     transport = RecordingTransport()
     model = client(transport)
     request = builder(
@@ -67,8 +67,11 @@ def test_production_review_roles_use_complete_wire_budget(builder) -> None:
     model.invoke(request)
     body = transport.requests[0].body
     payload = json.loads(body)
-    assert payload["max_tokens"] == 1_048_576 - len(body)
-    assert payload["max_tokens"] > 8000
+    remainder = 1_048_576 - len(body)
+    assert request.max_output_tokens is not None
+    assert payload["max_tokens"] == min(remainder, request.max_output_tokens)
+    assert payload["max_tokens"] == request.max_output_tokens
+    assert payload["max_tokens"] < remainder
     assert [message["role"] for message in payload["messages"]] == ["developer", "user"]
     assert "Термин" in payload["messages"][1]["content"]
     assert "Уточните термин" in payload["messages"][1]["content"]
@@ -102,7 +105,7 @@ def test_model_request_rejects_removed_expected_response_argument() -> None:
         )
 
 
-def test_critic_calls_model_when_input_fits_without_reserving_a_synthetic_reply() -> None:
+def test_critic_caps_max_tokens_instead_of_burning_full_remainder() -> None:
     transport = RecordingTransport('{"files":{"en.md":"Corrected"}}')
     model = client(transport)
     request = build_pr_critic_request(
@@ -114,8 +117,9 @@ def test_critic_calls_model_when_input_fits_without_reserving_a_synthetic_reply(
     result = model.invoke(request)
     body = transport.requests[0].body
     assert result.success
-    assert json.loads(body)["max_tokens"] == 1_048_576 - len(body)
-    assert 0 < json.loads(body)["max_tokens"] < 600_000
+    assert request.max_output_tokens == 98_304
+    assert json.loads(body)["max_tokens"] == 98_304
+    assert json.loads(body)["max_tokens"] < 1_048_576 - len(body)
 
 
 def test_response_content_and_size_do_not_change_wire_budget() -> None:

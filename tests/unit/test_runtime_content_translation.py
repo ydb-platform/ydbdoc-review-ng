@@ -355,7 +355,13 @@ def test_production_models_ignore_legacy_model_overrides(role) -> None:
     )
     for call in calls:
         budget = provider.prepare_request(call)
-        assert json.loads(budget.body)["max_tokens"] == 1_048_576 - len(budget.body)
+        payload = json.loads(budget.body)
+        if role in {"critic", "arbiter"}:
+            assert call.max_output_tokens is not None
+            assert payload["max_tokens"] == call.max_output_tokens
+            assert payload["max_tokens"] < 1_048_576 - len(budget.body)
+        else:
+            assert payload["max_tokens"] == 1_048_576 - len(budget.body)
 
 
 def test_translation_context_overflow_stops_before_transport_without_splitting() -> None:

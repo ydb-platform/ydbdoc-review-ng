@@ -117,7 +117,9 @@ def test_bug2_review_pr_keeps_malformed_critic_toc_for_arbiter() -> None:
     class Models:
         def __init__(self) -> None:
             self.payloads = [
-                json.dumps({"files": {page: page_text, toc: bad}}),
+                json.dumps({"files": {page: page_text}}),
+                json.dumps({"files": {toc: bad}}),
+                json.dumps({"verdict": "GREEN", "findings": []}),
                 json.dumps({"verdict": "GREEN", "findings": []}),
             ]
 
@@ -128,6 +130,8 @@ def test_bug2_review_pr_keeps_malformed_critic_toc_for_arbiter() -> None:
 
     def validate(files: dict[str, bytes]) -> None:
         seen.append(dict(files))
+        if toc not in files:
+            return
         # Call the real production soft-validator (not a fake that catches RBE).
         RuntimeContent._validate_toc_correction(
             SnapshotRef(RepositoryId("ydb-platform/ydb"), GitSha("a" * 40)),
@@ -147,7 +151,7 @@ def test_bug2_review_pr_keeps_malformed_critic_toc_for_arbiter() -> None:
                 toc_source_snapshots=toc_source_snapshots("toc.yaml", ("Draft", "page.md")),
             ),
             (
-                (page, files[page]),
+                (page, page_text.encode()),
                 (toc, files[toc]),
             ),
             toc_postconditions=toc_postcondition("toc.yaml", draft),

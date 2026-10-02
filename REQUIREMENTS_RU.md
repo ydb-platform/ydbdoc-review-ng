@@ -186,10 +186,13 @@ binary manifest и operator context — `user` message. В конце `user` mes
 technical literals и inline-code, damaged sentences, TOC и полный состав
 файлов.
 
-Контекст: 1 048 576; `max_tokens` = остаток после UTF-8 byte-размера полного
-wire request со всеми messages (1 byte ≈ 1 token для этого расчёта). Будущий
-response заранее не оценивается. `NON_FINAL` → чанк непроверен, остальные
-идут, итог RED.
+Контекст: 1 048 576. Для translator/direction `max_tokens` = остаток после
+UTF-8 byte-размера полного wire request (1 byte ≈ 1 token). Для critic/arbiter
+с `reasoning_effort=high` generation budget дополнительно ограничен
+(`max_output_tokens`: echo целевых файлов × коэффициент, потолок ~98k /
+arbiter ~24k). Иначе модель думает до silent-connection wall провайдера
+(~270 с → TRANSPORT, http_status=null; runs 37009373894 / 37027975808).
+`NON_FINAL` → чанк непроверен, остальные идут, итог RED.
 
 ### 4.1 Critic
 
@@ -210,8 +213,11 @@ inline-code и удаление ненужного экранирования (`
 продублировать. Такие исправления публикуются по мягким Markdown/YFM
 diagnostics §2.
 
-Один вызов, если влезает; иначе чанки по целым файловым парам. Пара не
+Чанки строго по **одной** source/target паре (и TOC-пара отдельно). Пара не
 делится. Не влезла одна пара → непроверена (unreviewed), остальные идут.
+Полный bilingual glossary.md в critic/arbiter **не** кладётся: только
+relevant paired sections по тексту чанка (как у translator). TOC
+before/after — только для TOC-пары чанка.
 
 Успешный чанк → **reviewed** commit/push в translation branch. Первый успех
 может создать branch/PR, если translator опубликовал только draft. Ошибка

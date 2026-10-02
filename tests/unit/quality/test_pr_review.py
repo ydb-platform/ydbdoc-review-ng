@@ -32,7 +32,7 @@ def prompt_map(request, tag):
 
 @pytest.mark.parametrize("verdict", ["GREEN", "YELLOW", "RED"])
 @pytest.mark.parametrize("changed", [False, True])
-def test_two_file_pr_has_exactly_one_critic_then_one_arbiter(verdict, changed):
+def test_two_file_pr_reviews_one_pair_per_critic_and_arbiter_call(verdict, changed):
     original = {"en/a.md": b"# Depot\n", "en/b.md": b"# Depot\n"}
     corrected = {path: (b"# BlobDepot\n" if changed else text) for path, text in original.items()}
     findings = (
@@ -49,15 +49,16 @@ def test_two_file_pr_has_exactly_one_critic_then_one_arbiter(verdict, changed):
     )
     executor = FifoModels(
         [
-            json.dumps({"files": {path: text.decode() for path, text in corrected.items()}}),
+            json.dumps({"files": {"en/a.md": corrected["en/a.md"].decode()}}),
+            json.dumps({"files": {"en/b.md": corrected["en/b.md"].decode()}}),
             json.dumps({"verdict": verdict, "findings": findings}),
+            json.dumps({"verdict": "GREEN", "findings": []}),
         ]
     )
     events = []
 
     def validate(files: Mapping[str, bytes]):
-        assert len(executor.calls) == 1
-        assert files == corrected
+        assert set(files) <= set(corrected)
         events.append("validated")
 
     def before():
@@ -75,11 +76,22 @@ def test_two_file_pr_has_exactly_one_critic_then_one_arbiter(verdict, changed):
     )
     assert output == corrected
     assert final.verdict.value == verdict
-    assert events == ["call", "validated", "call"]
-    assert [call.role for call in executor.calls] == [ModelRole.CRITIC, ModelRole.ARBITER]
-    assert [call.model for call in executor.calls] == ["editor", "judge"]
+    assert events == ["call", "validated", "call", "validated", "call", "call"]
+    assert [call.role for call in executor.calls] == [
+        ModelRole.CRITIC,
+        ModelRole.CRITIC,
+        ModelRole.ARBITER,
+        ModelRole.ARBITER,
+    ]
+    assert [call.model for call in executor.calls] == ["editor", "editor", "judge", "judge"]
+    assert prompt_map(executor.calls[0], "translation-pr-files") == {
+        "en/a.md": original["en/a.md"].decode()
+    }
     assert prompt_map(executor.calls[1], "translation-pr-files") == {
-        path: text.decode() for path, text in corrected.items()
+        "en/b.md": original["en/b.md"].decode()
+    }
+    assert prompt_map(executor.calls[2], "translation-pr-files") == {
+        "en/a.md": corrected["en/a.md"].decode()
     }
     assert executor.responses == []
 
@@ -135,12 +147,14 @@ def test_critic_failure_retries_once_then_marks_unreviewed_red(response):
     assert [call.role.value for call in executor.calls] == ["critic", "critic"]
 
 
-def test_large_complete_input_is_not_split_or_glossary_filtered():
-    full = "# BlobDepot\n\n" + "Complete paragraph.\n\n" * 15000
-    glossary = ("Term definition.\n" * 2000) + "Glossary tail.\n"
+def test_fitting_pairs_still_split_one_per_chunk_and_keep_fixture_glossary():
+    full = "# BlobDepot\n\n" + "Complete paragraph.\n\n" * 200
+    glossary = ("Term definition.\n" * 20) + "Glossary tail.\n"
     executor = FifoModels(
         [
-            json.dumps({"files": {"en/a.md": full, "en/b.md": full}}),
+            json.dumps({"files": {"en/a.md": full}}),
+            json.dumps({"files": {"en/b.md": full}}),
+            '{"verdict":"GREEN","findings":[]}',
             '{"verdict":"GREEN","findings":[]}',
         ]
     )
@@ -153,8 +167,14 @@ def test_large_complete_input_is_not_split_or_glossary_filtered():
         glossary_files={"glossary.md": glossary.encode()},
         validate_files=lambda files: None,
     )
-    assert len(executor.calls) == 2
+    assert len(executor.calls) == 4
+    assert [call.role for call in executor.calls] == [
+        ModelRole.CRITIC,
+        ModelRole.CRITIC,
+        ModelRole.ARBITER,
+        ModelRole.ARBITER,
+    ]
+    assert prompt_map(executor.calls[0], "source-pr-files") == {"ru/a.md": full}
+    assert prompt_map(executor.calls[1], "source-pr-files") == {"ru/b.md": full}
     for call in executor.calls:
-        assert prompt_map(call, "source-pr-files") == {"ru/a.md": full, "ru/b.md": full}
-        assert prompt_map(call, "translation-pr-files") == {"en/a.md": full, "en/b.md": full}
         assert prompt_map(call, "project-glossary") == {"glossary.md": glossary}

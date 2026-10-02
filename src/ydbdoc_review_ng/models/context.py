@@ -20,13 +20,23 @@ def serialize_json(value: object) -> bytes:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
 
 
-def calculate_context_budget(serialize_request: Callable[[int], bytes]) -> ContextBudget:
+def calculate_context_budget(
+    serialize_request: Callable[[int], bytes],
+    /,
+    *,
+    max_tokens_cap: int | None = None,
+) -> ContextBudget:
     """Resolve max_tokens using the same complete serialization sent to transport.
 
     At decimal digit boundaries compact JSON can have no fixed point: reducing
     max_tokens by one removes a digit and restores one byte of context. One
     trailing JSON whitespace byte resolves that case and is counted on the wire.
+
+    ``max_tokens_cap`` optionally lowers the generation budget below the raw
+    remainder (required for reasoning critic/arbiter under provider idle walls).
     """
+    if max_tokens_cap is not None and (type(max_tokens_cap) is not int or max_tokens_cap < 1):
+        raise ValueError("max_tokens_cap must be a positive integer or None")
     for digits in range(len(str(CONTEXT_WINDOW)), 0, -1):
         lower = 10 ** (digits - 1)
         max_tokens = CONTEXT_WINDOW - len(serialize_request(lower))
@@ -38,5 +48,8 @@ def calculate_context_budget(serialize_request: Callable[[int], bytes]) -> Conte
             body = serialize_request(max_tokens) + b" "
         else:
             continue
+        if max_tokens_cap is not None and max_tokens > max_tokens_cap:
+            body = serialize_request(max_tokens_cap)
+            return ContextBudget(body, len(body), max_tokens_cap)
         return ContextBudget(body, len(body), max_tokens)
     raise ValueError("model context cannot fit the complete wire request")

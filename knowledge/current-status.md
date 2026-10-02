@@ -28,14 +28,24 @@ Semantic flow в `REQUIREMENTS_RU.md`:
 | Canon §1.2 / §2 / §4.1 / §5.1 / §7 | **DONE** |
 | P2 BlobDepot golden harness | **DONE** |
 
-## Critic fall (run 37009373894) — root cause
+## Critic TRANSPORT (runs 37009373894 → 37027975808) — real root cause
 
-Live PR [#54842](https://github.com/ydb-platform/ydb/pull/54842) commit `4f39103`
-(translator-only). Critic 2× `TRANSPORT`, `http_status=null`, wall ~182s.
-Root cause: `_BaseYandexClient` default `timeout_seconds=180` vs
-`reasoning_effort=high` for critic. urllib timeout → transport failure → RED,
-raw draft shipped. Fix: default **600s**, env
-`YDBDOC_MODEL_HTTP_TIMEOUT_SECONDS`, keep `reasoning_effort=high` (canon §4).
+Not «provider flaky». Translator OK; critic 2× `TRANSPORT`, `http_status=null`.
+
+| Run | tip | wall per critic attempt | limiter |
+|---|---|---|---|
+| 37009373894 | pre-timeout bump | ~182s | **our** urllib 180s |
+| 37027975808 | `4f2867c` (600s) | ~273s | **provider** silent wall |
+
+Mega-request evidence (BlobDepot PR #50839 / #54842 shape):
+
+- one critic invoke `article:null` with **all** MD+TOC pairs
+- full RU+EN `glossary.md` dump **225 432** bytes (REQUIREMENTS: relevant sections)
+- `reasoning_effort=high`, `stream=false`, `max_tokens≈715 000`
+- wire ~334 KB; translator: one file, `reasoning=none`, finishes in seconds–~90s
+
+Fix on tip after this note: one pair/chunk, relevant glossary only, cap
+`max_output_tokens` for critic/arbiter so reasoning cannot burn the idle wall.
 
 ## Quality classes on #54842 raw EN (critic never ran)
 

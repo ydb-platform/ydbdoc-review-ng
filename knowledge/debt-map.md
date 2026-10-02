@@ -23,6 +23,7 @@
 | 13 | Full suite after redesign | **done** (2168 passed) |
 | 14 | Live PR after redesign | critic fell on 180s timeout; quality hotfix next |
 | 15 | Critic HTTP timeout 180→600 + presentation/CLI/CamelCase | **done** (2026-10-02) |
+| 16 | Critic mega-request TRANSPORT @ ~270s (provider idle wall) | **done** (2026-10-02): 1 pair/chunk, relevant glossary, max_output_tokens cap |
 
 ## CI translation redesign (2026-10-02)
 

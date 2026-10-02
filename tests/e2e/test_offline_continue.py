@@ -53,7 +53,7 @@ def test_pending_cli_continuation_reuses_green_map_and_source_only_protected_byt
     old = services.stop_and_continue()
     assert invoke(services) == 0
     # State v3 stores no accepted file bytes; continue re-translates every pending path.
-    assert services.roles == ["translate", "translate", "critic", "arbiter"]
+    assert services.roles == ["translate", "translate", "critic", "critic", "arbiter", "arbiter"]
     assert services.files[EN + "a.md"].endswith(protected)
     assert b"DROP TABLE" not in services.files[EN + "a.md"]
     assert services.files[EN + "b.md"].startswith(b"# Resumed")
@@ -75,26 +75,39 @@ def test_review_cli_reviews_all_files_without_retranslation_then_updates_one_ver
     old = services.checkpoint()
     services.outcomes = {EN + "b.md": ["repair"]}
     assert invoke(services, 43) == 0
-    assert services.roles == ["critic", "arbiter"]
-    assert [paths for _, paths, _ in services.calls] == [(EN + "a.md", EN + "b.md")] * 2
+    assert services.roles == ["critic", "critic", "arbiter", "arbiter"]
+    assert [paths for _, paths, _ in services.calls] == [
+        (EN + "a.md",),
+        (EN + "b.md",),
+        (EN + "a.md",),
+        (EN + "b.md",),
+    ]
     for role, prompt in services.prompts:
         sources = json.loads(raw_repair_context(prompt, "source-pr-files"))
         targets = json.loads(raw_repair_context(prompt, "translation-pr-files"))
         glossary = json.loads(raw_repair_context(prompt, "project-glossary"))
-        assert sources == {
-            RU + "a.md": "# Source a\n\n```sql\nSELECT 1;\n```\n",
-            RU + "b.md": "# Source b\n\nSource detail b\n",
+        assert set(sources) <= {
+            RU + "a.md",
+            RU + "b.md",
         }
-        assert targets == {
-            EN + "a.md": "# Corrected\n\n```sql\nSELECT 1;\n```\n",
-            EN + "b.md": "# Translated\n\nTranslated\n"
-            if role == "critic"
-            else "# Repaired b\n\nTranslated\n",
+        assert set(targets) <= {
+            EN + "a.md",
+            EN + "b.md",
         }
-        assert glossary == {
-            RU + "concepts/glossary.md": "# Glossary RU\n" + "Definition\n" * 900,
-            EN + "concepts/glossary.md": "# Glossary EN\nFull definition\n",
-        }
+        assert len(sources) == len(targets) == 1
+        path = next(iter(targets))
+        if path == EN + "a.md":
+            assert targets[path] == "# Corrected\n\n```sql\nSELECT 1;\n```\n"
+            assert sources[RU + "a.md"] == "# Source a\n\n```sql\nSELECT 1;\n```\n"
+        else:
+            assert sources[RU + "b.md"] == "# Source b\n\nSource detail b\n"
+            assert targets[path] == (
+                "# Translated\n\nTranslated\n"
+                if role == "critic"
+                else "# Repaired b\n\nTranslated\n"
+            )
+        # Dual-locale glossaries without matching section anchors → empty relevant set.
+        assert glossary == {}
         assert CONTEXT in prompt
         assert "Prior arbiter sentinel" not in prompt
         assert all(
@@ -106,8 +119,10 @@ def test_review_cli_reviews_all_files_without_retranslation_then_updates_one_ver
     # when the final candidate matches that head (see integration continue review).
     assert services.timeline == [
         "critic",
+        "critic",
         "commit",
         "push",
+        "arbiter",
         "arbiter",
         "report",
         "report",

@@ -18,6 +18,7 @@ from ydbdoc_review_ng.quality.critic import (
     parse_pr_critic_response,
 )
 from ydbdoc_review_ng.quality.types import CriticResult, Finding, Verdict
+from ydbdoc_review_ng.terminology import bilingual_glossary_context
 from ydbdoc_review_ng.translation import (
     ProtectedMismatch,
     TranslationRequest,
@@ -28,6 +29,10 @@ from ydbdoc_review_ng.translation.contract import field_request_text
 
 _VERDICT_RANK = {Verdict.GREEN: 0, Verdict.YELLOW: 1, Verdict.RED: 2}
 _UnreviewedReason = Literal["context", "provider", "contract", "missing"]
+# One pair per call: packing only on the 1M context window produced a single
+# mega-request (full glossary + all MD/TOC + presentation + reasoning=high)
+# that died at the ~270s provider silent wall (runs 37009373894 / 37027975808).
+_MAX_PAIRS_PER_REVIEW_CHUNK = 1
 
 
 class ModelExecutor(Protocol):
@@ -92,17 +97,25 @@ def _pack_pair_chunks(
     *,
     build_request: Callable[[Sequence[tuple[str, str]]], ModelRequest],
     fits: Callable[[ModelRequest], bool],
+    max_pairs_per_chunk: int = _MAX_PAIRS_PER_REVIEW_CHUNK,
 ) -> tuple[tuple[tuple[str, str], ...], ...]:
-    """Greedy whole-pair packing. Oversized single pairs are omitted (unreviewed)."""
+    """Greedy whole-pair packing with a hard per-chunk pair cap.
+
+    Oversized single pairs are omitted (unreviewed). The pair cap exists because
+    context-window packing alone still builds one mega critic call under the 1M
+    window, and reasoning_effort=high then exceeds the provider idle wall.
+    """
     if not pairs:
         return ()
-    if fits(build_request(pairs)):
+    if max_pairs_per_chunk < 1:
+        raise ValueError("max_pairs_per_chunk must be >= 1")
+    if len(pairs) <= max_pairs_per_chunk and fits(build_request(pairs)):
         return (tuple(pairs),)
     chunks: list[tuple[tuple[str, str], ...]] = []
     current: list[tuple[str, str]] = []
     for pair in pairs:
         trial = (*current, pair)
-        if fits(build_request(trial)):
+        if len(trial) <= max_pairs_per_chunk and fits(build_request(trial)):
             current.append(pair)
             continue
         if current:
@@ -125,6 +138,56 @@ def _subset_targets(
     translated_files: Mapping[str, bytes | None], pairs: Sequence[tuple[str, str]]
 ) -> dict[str, bytes | None]:
     return {target: translated_files[target] for _source, target in pairs}
+
+
+def _subset_toc_snapshots(
+    toc_snapshots: Mapping[str, Mapping[str, str | None]] | None,
+    pairs: Sequence[tuple[str, str]],
+) -> Mapping[str, Mapping[str, str | None]] | None:
+    if toc_snapshots is None:
+        return None
+    sources = {source for source, _target in pairs}
+    return {path: snapshot for path, snapshot in toc_snapshots.items() if path in sources}
+
+
+def _glossary_locale(path: str) -> str | None:
+    if path.startswith("ru/") or "/docs/ru/" in path or "/ru/" in path:
+        return "ru"
+    if path.startswith("en/") or "/docs/en/" in path or "/en/" in path:
+        return "en"
+    return None
+
+
+def _relevant_glossary_files(
+    glossary_files: Mapping[str, bytes],
+    source_files: Mapping[str, bytes],
+) -> dict[str, bytes]:
+    """Pass only relevant paired glossary sections (REQUIREMENTS §4.1).
+
+    Runtime historically dumped both full glossary.md files (~225KB). That alone
+    dominated the critic wire body and is not what the prompt promises.
+    """
+    if not glossary_files:
+        return {}
+    by_locale: dict[str, bytes] = {}
+    for path, content in glossary_files.items():
+        locale = _glossary_locale(path)
+        if locale is not None:
+            by_locale[locale] = content
+    if "ru" not in by_locale or "en" not in by_locale or not source_files:
+        return dict(glossary_files)
+    source_text = "\n".join(
+        content.decode("utf-8") for content in source_files.values()
+    )
+    first = next(iter(source_files))
+    source_locale = _glossary_locale(first) or "ru"
+    if source_locale == "ru":
+        relevant = bilingual_glossary_context(source_text, by_locale["ru"], by_locale["en"])
+    else:
+        relevant = bilingual_glossary_context(source_text, by_locale["en"], by_locale["ru"])
+    if not relevant:
+        return {}
+    return {"relevant-paired-sections": relevant.encode("utf-8")}
 
 
 def _worst_verdict(results: Sequence[CriticResult]) -> Verdict:
@@ -199,6 +262,7 @@ def review_pr(
             unreviewed.setdefault(path, reason)
 
     def build_critic(chunk_pairs: Sequence[tuple[str, str]]) -> ModelRequest:
+        chunk_sources = _subset_sources(source_files, chunk_pairs)
         chunk_refs = {
             target: presentation_refs[target]
             for _source, target in chunk_pairs
@@ -206,11 +270,11 @@ def review_pr(
         }
         return build_pr_critic_request(
             model=critic_model,
-            source_files=_subset_sources(source_files, chunk_pairs),
+            source_files=chunk_sources,
             translated_files=_subset_targets(translated_files, chunk_pairs),
-            glossary_files=glossary_files,
+            glossary_files=_relevant_glossary_files(glossary_files, chunk_sources),
             operator_context=operator_context,
-            toc_snapshots=toc_snapshots,
+            toc_snapshots=_subset_toc_snapshots(toc_snapshots, chunk_pairs),
             binary_manifest=binary_manifest,
             presentation_reference_files=chunk_refs,
         )
@@ -270,13 +334,14 @@ def review_pr(
     }
 
     def build_arbiter(chunk_pairs: Sequence[tuple[str, str]]) -> ModelRequest:
+        chunk_sources = _subset_sources(source_files, chunk_pairs)
         return build_pr_arbiter_request(
             model=arbiter_model,
-            source_files=_subset_sources(source_files, chunk_pairs),
+            source_files=chunk_sources,
             translated_files={target: arbiter_targets[target] for _source, target in chunk_pairs},
-            glossary_files=glossary_files,
+            glossary_files=_relevant_glossary_files(glossary_files, chunk_sources),
             operator_context=operator_context,
-            toc_snapshots=toc_snapshots,
+            toc_snapshots=_subset_toc_snapshots(toc_snapshots, chunk_pairs),
             binary_manifest=binary_manifest,
         )
 

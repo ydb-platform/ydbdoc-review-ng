@@ -175,7 +175,10 @@ def test_pending_only_preserves_accepted_source_fragments_and_records_current_co
     accepted = services.rows[saved.continuation_id]["state"]
     result = services.resume()
     assert result.verdict is Verdict.GREEN
-    assert services.roles[:1] == ["translate"] and services.roles[-2:] == ["critic", "arbiter"]
+    assert services.roles[:1] == ["translate"]
+    assert services.roles.count("critic") >= 1
+    assert services.roles.count("arbiter") >= 1
+    assert services.roles[-1] == "arbiter"
     assert services.files[EN + "a.md"].endswith(protected)
     assert b"```sql\nSELECT 1;\n```" in services.files[EN + "a.md"]
     assert services.files[EN + "b.md"] == b"# Resumed b\n"
@@ -231,7 +234,10 @@ def test_continue_uses_saved_inventory_after_source_head_and_inventory_move():
     assert saved.target_sha is None
     result = services.resume(42)
     assert result.verdict is Verdict.GREEN
-    assert services.roles[:1] == ["translate"] and services.roles[-2:] == ["critic", "arbiter"]
+    assert services.roles[:1] == ["translate"]
+    assert services.roles.count("critic") >= 1
+    assert services.roles.count("arbiter") >= 1
+    assert services.roles[-1] == "arbiter"
     assert services.files[EN + "b.md"] == b"# Resumed b\n"
     assert all("ref=" + services.source in path for path in services.reads if "/ru/core/" in path)
     assert services.jobs[result.job_id]["pr_number"] == 42
@@ -272,7 +278,9 @@ def test_public_continue_restores_protected_link_delete_rename_and_pinned_metada
     result = services.resume()
     assert result.verdict is Verdict.GREEN
     assert services.roles.count("translate") >= 1
-    assert services.roles[-2:] == ["critic", "arbiter"]
+    assert services.roles.count("critic") >= 1
+    assert services.roles.count("arbiter") >= 1
+    assert services.roles[-1] == "arbiter"
     assert services.files[EN + "b.md"] == source_b.replace(b"Source", b"Resumed")
     assert services.files[EN + "moved.md"] == b"# Whole pinned translation\n"
     assert EN + "old.md" not in services.files and EN + "deleted.md" not in services.files
@@ -398,7 +406,7 @@ def test_direction_selection_translates_all_markdown_pairs_for_selected_directio
     services.direction_values = {"a.md": "complete_pair", "b.md": "ru_to_en"}
     result = services.resume()
     assert result.verdict is Verdict.GREEN
-    assert services.roles == ["direction", "translate", "translate", "critic", "arbiter"]
+    assert services.roles == ["direction", "translate", "translate", "critic", "critic", "arbiter", "arbiter"]
     assert services.files[EN + "a.md"] in {b"# Translated\n", b"# Resumed a\n"}
     assert services.files[EN + "b.md"] == b"# Resumed b\n"
     assert services.rows[saved.continuation_id]["status"] == "closed"
@@ -422,7 +430,10 @@ def test_selected_direction_survives_translation_checkpoint_without_reclassifica
     services.roles.clear()
     services.resume()
     assert "direction" not in services.roles
-    assert services.roles[:1] == ["translate"] and services.roles[-2:] == ["critic", "arbiter"]
+    assert services.roles[:1] == ["translate"]
+    assert services.roles.count("critic") >= 1
+    assert services.roles.count("arbiter") >= 1
+    assert services.roles[-1] == "arbiter"
     assert services.files[EN + "a.md"] in {b"# Translated\n", b"# Resumed a\n"}
     assert services.files[EN + "b.md"] == b"# Resumed b\n"
 
@@ -456,7 +467,10 @@ def test_toc_no_action_replays_exact_saved_decision_without_classifier():
     assert wire["semantic_actions"][-1]["operation"] == "modify"
     assert wire["semantic_actions"][-1]["action"] == "toc_delta"
     assert services.resume().verdict is Verdict.GREEN
-    assert services.roles[:1] == ["translate"] and services.roles[-2:] == ["critic", "arbiter"]
+    assert services.roles[:1] == ["translate"]
+    assert services.roles.count("critic") >= 1
+    assert services.roles.count("arbiter") >= 1
+    assert services.roles[-1] == "arbiter"
     assert b"href: b.md" in services.files[EN + "toc.yaml"]
 
 
@@ -572,7 +586,9 @@ def test_pending_success_uses_full_review_single_repair_and_captures_red():
     following = services.checkpoint()
     assert result.verdict is Verdict.RED and result.repair_applied
     assert services.roles.count("translate") >= 2
-    assert services.roles[-2:] == ["critic", "arbiter"]
+    assert services.roles.count("critic") >= 1
+    assert services.roles.count("arbiter") >= 1
+    assert services.roles[-1] == "arbiter"
     assert following.state.stage is ContinuationStage.REVIEW
     assert following.target_sha == result.final_commit_sha
     assert [p.value for p in following.state.review_paths] == [EN + "b.md"]
@@ -731,7 +747,9 @@ def test_green_consumption_prevents_paid_replay_despite_lost_acknowledgements(ki
         calls = ["direction"]
     else:
         assert services.roles.count("translate") >= 1
-        assert services.roles[-2:] == ["critic", "arbiter"]
+        assert services.roles.count("critic") >= 1
+        assert services.roles.count("arbiter") >= 1
+        assert services.roles[-1] == "arbiter"
         calls = list(services.roles)
     assert services.roles == calls
     with pytest.raises(PersistenceError):

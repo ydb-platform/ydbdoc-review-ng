@@ -234,7 +234,9 @@ class CaptureServices(RuntimeServices):
                     files[path] = "# Translated\n"
             if self.stop == "review":
                 path = "ydb/docs/en/core/a.md"
-                files[path] = rewrite_markdown(files[path], "Corrected")
+                # One-pair critic chunks: only rewrite when this path is in the call.
+                if path in files:
+                    files[path] = rewrite_markdown(files[path], "Corrected")
             if self.stop == "critic_reverts_to_base":
                 # Critic returns bytes identical to the pre-translate base. The
                 # published branch still holds the translator draft, so the

@@ -80,6 +80,94 @@ def test_oversized_review_splits_into_whole_file_pair_chunks_and_pushes_each() -
     assert final.verdict is Verdict.GREEN
 
 
+def test_fitting_multi_file_pr_still_uses_one_pair_per_critic_call() -> None:
+    """Even when the whole PR fits the 1M window, critic must not mega-batch."""
+    source = {
+        "docs/ru/a.md": b"# A\n",
+        "docs/ru/b.md": b"# B\n",
+    }
+    translated = {
+        "docs/en/a.md": b"# Draft A\n",
+        "docs/en/b.md": b"# Draft B\n",
+    }
+    models = _Scripted(
+        [
+            json.dumps({"files": {"docs/en/a.md": "# Fixed A\n"}}),
+            json.dumps({"files": {"docs/en/b.md": "# Fixed B\n"}}),
+            json.dumps({"verdict": "GREEN", "findings": []}),
+            json.dumps({"verdict": "GREEN", "findings": []}),
+        ]
+    )
+
+    corrected, final = review_pr(
+        models,
+        critic_model="critic",
+        arbiter_model="arbiter",
+        source_files=source,
+        translated_files=translated,
+        glossary_files={},
+        validate_files=lambda files: None,
+        request_fits=lambda _request: True,
+    )
+
+    assert corrected == {
+        "docs/en/a.md": b"# Fixed A\n",
+        "docs/en/b.md": b"# Fixed B\n",
+    }
+    assert [call.role for call in models.calls] == [
+        ModelRole.CRITIC,
+        ModelRole.CRITIC,
+        ModelRole.ARBITER,
+        ModelRole.ARBITER,
+    ]
+    assert [_target_paths(call) for call in models.calls[:2]] == [
+        ["docs/en/a.md"],
+        ["docs/en/b.md"],
+    ]
+    assert final.verdict is Verdict.GREEN
+
+
+def test_dual_locale_glossary_is_reduced_to_relevant_sections() -> None:
+    ru_glossary = (
+        "## BlobDepot {#blobdepot}\n\n**BlobDepot** stores blobs.\n\n"
+        "## Unrelated {#unrelated}\n\n**UnrelatedTerm** never matches.\n"
+    ).encode()
+    en_glossary = (
+        "## BlobDepot {#blobdepot}\n\n**BlobDepot** stores blobs.\n\n"
+        "## Unrelated {#unrelated}\n\n**UnrelatedTerm** never matches.\n"
+    ).encode()
+    models = _Scripted(
+        [
+            json.dumps({"files": {"docs/en/a.md": "# BlobDepot fixed\n"}}),
+            json.dumps({"verdict": "GREEN", "findings": []}),
+        ]
+    )
+
+    review_pr(
+        models,
+        critic_model="critic",
+        arbiter_model="arbiter",
+        source_files={"docs/ru/a.md": b"# BlobDepot overview\n"},
+        translated_files={"docs/en/a.md": b"# BlobDepot draft\n"},
+        glossary_files={
+            "ydb/docs/ru/core/concepts/glossary.md": ru_glossary,
+            "ydb/docs/en/core/concepts/glossary.md": en_glossary,
+        },
+        validate_files=lambda files: None,
+    )
+
+    glossary = json.loads(
+        models.calls[0].prompt.split("<project-glossary>\n", 1)[1].split(
+            "\n</project-glossary>", 1
+        )[0]
+    )
+    assert set(glossary) == {"relevant-paired-sections"}
+    assert "blobdepot" in glossary["relevant-paired-sections"]
+    assert "UnrelatedTerm" not in glossary["relevant-paired-sections"]
+    assert models.calls[0].max_output_tokens is not None
+    assert models.calls[0].max_output_tokens <= 98_304
+
+
 def test_single_pair_that_does_not_fit_is_left_unreviewed_and_forces_red() -> None:
     """Pair that never fits stays as-is for arbiter; overall verdict is RED."""
     source = {

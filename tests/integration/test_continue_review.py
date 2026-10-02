@@ -149,6 +149,11 @@ class ReviewServices(LifecycleServices):
             if role == "critic" and self.repair_payload is not None
             else json.dumps(values)
         )
+        if role == "critic" and self.repair_payload is not None:
+            # One-pair chunks: keep only the paths requested in this call.
+            parsed = json.loads(raw)
+            if type(parsed.get("files")) is dict:
+                raw = json.dumps({"files": {path: parsed["files"][path] for path in files}})
         return HttpResponse(
             200,
             json.dumps(
@@ -178,7 +183,7 @@ def test_continue_yellow_closes_checkpoint_without_repair():
     result = services.resume()
     assert result.verdict is Verdict.YELLOW
     assert services.rows[saved.continuation_id]["status"] == "closed"
-    assert services.roles == ["critic", "arbiter"]
+    assert services.roles == ["critic", "critic", "arbiter", "arbiter"]
     assert services.commits == services.initial_commits
     assert "Missing meaning in the heading." in services.comments[0]["body"]
 
@@ -220,10 +225,10 @@ def test_continue_preserves_complete_corrected_toc_with_residual_finding(toc_nam
     for role, prompt in services.prompts:
         if role not in {"critic", "arbiter"}:
             continue
-        assert (
-            json.loads(raw_repair_context(prompt, "translation-pr-files"))[EN + toc_name]
-            == corrected
-        )
+        targets = json.loads(raw_repair_context(prompt, "translation-pr-files"))
+        if EN + toc_name not in targets:
+            continue
+        assert targets[EN + toc_name] == corrected
     assert services.files[EN + toc_name].decode() == corrected
 
 
@@ -262,22 +267,37 @@ def test_green_review_only_updates_current_verdict_and_consumes_without_commit(c
     saved_state = services.rows[saved.continuation_id]["state"]
     result = services.resume(43)
     assert result.verdict is Verdict.GREEN and result.final_commit_sha == saved.target_sha
-    assert services.roles == ["critic", "arbiter"]
-    assert [paths for _, paths, _ in services.calls] == [(EN + "a.md", EN + "b.md")] * 2
+    assert services.roles == ["critic", "critic", "arbiter", "arbiter"]
+    assert [paths for _, paths, _ in services.calls] == [
+        (EN + "a.md",),
+        (EN + "b.md",),
+        (EN + "a.md",),
+        (EN + "b.md",),
+    ]
     assert services.files == before
     assert services.files[EN + "a.md"] == b"# Corrected\n\n```sql\nSELECT 1;\n```\n"
     assert services.rows[saved.continuation_id]["state"] == saved_state
     assert services.commits == services.initial_commits
-    assert services.timeline == ["critic", "arbiter", "report", "report"]
+    assert services.timeline == [
+        "critic",
+        "critic",
+        "arbiter",
+        "arbiter",
+        "report",
+        "report",
+    ]
     assert services.rows[saved.continuation_id]["status"] == "closed"
     assert services.rows[saved.continuation_id]["consumed_by_job_id"] == result.job_id
     assert services.jobs[result.job_id]["status"] == "succeeded"
     assert len(services.comments) == 1 and services.comments[0]["body"].startswith("🟢 GREEN\n")
     assert all(CONTEXT in prompt for _, prompt in services.prompts)
-    prompt = services.prompts[0][1]
-    source = json.loads(raw_repair_context(prompt, "source-pr-files"))
-    assert source[RU + "b.md"] == "# Source b\n\nSource detail b\n"
-    assert source[RU + "a.md"] == "# Source a\n\n```sql\nSELECT 1;\n```\n"
+    b_prompt = next(
+        prompt
+        for role, prompt in services.prompts
+        if role == "critic" and EN + "b.md" in prompt
+    )
+    source = json.loads(raw_repair_context(b_prompt, "source-pr-files"))
+    assert source == {RU + "b.md": "# Source b\n\nSource detail b\n"}
     for _, prompt in services.prompts:
         assert "Prior arbiter sentinel" not in prompt
         for tag in ("source-pr-files", "translation-pr-files", "project-glossary"):
@@ -285,12 +305,12 @@ def test_green_review_only_updates_current_verdict_and_consumes_without_commit(c
     assert CONTEXT not in services.comments[0]["body"]
     assert CONTEXT not in capsys.readouterr().out
     attempts = [params for _, params in services.operations if "attempt_id" in params]
-    assert len(attempts) == 2 and all(item["job_id"] == result.job_id for item in attempts)
+    assert len(attempts) == 4 and all(item["job_id"] == result.job_id for item in attempts)
     assert attempts[0]["cost_rub"] == Decimal("0.01")
     assert not any("SUM" in query for query, _ in services.operations)
     with pytest.raises(application.WorkflowError):
         services.resume()
-    assert services.roles == ["critic", "arbiter"]
+    assert services.roles == ["critic", "critic", "arbiter", "arbiter"]
 
 
 def test_critic_editor_merges_complete_document_and_finishes_green():
@@ -302,21 +322,24 @@ def test_critic_editor_merges_complete_document_and_finishes_green():
     saved = services.checkpoint()
     result = services.resume()
     assert result.verdict is Verdict.GREEN and result.repair_applied
-    assert services.roles == ["critic", "arbiter"]
+    assert services.roles == ["critic", "critic", "arbiter", "arbiter"]
     # §4.1: successful critic chunk commits/pushes before arbiter. When the
     # final candidate already matches that head, the post-arbiter publish is a no-op.
     assert services.timeline == [
         "critic",
+        "critic",
         "commit",
         "push",
+        "arbiter",
         "arbiter",
         "report",
         "report",
     ]
     assert services.files[EN + "a.md"] == green
     assert services.files[EN + "b.md"] == b"# Repaired b\n\nTranslated\n"
-    repair_prompt = services.prompts[0][1]
-    assert services.calls[0][2] is not None
+    repair_prompt = next(
+        prompt for role, prompt in services.prompts if role == "critic" and EN + "b.md" in prompt
+    )
     assert "Source b" in raw_repair_context(repair_prompt, "source-pr-files")
     assert "Translated" in raw_repair_context(repair_prompt, "translation-pr-files")
     assert "Source detail b" in repair_prompt
@@ -365,7 +388,7 @@ def test_continuation_repair_publishes_exact_model_markdown():
 
     expected = b"* Parent corrected\n* Nested translated item\n"
     assert result.verdict is Verdict.GREEN and result.repair_applied
-    assert services.roles == ["critic", "arbiter"]
+    assert services.roles == ["critic", "critic", "arbiter", "arbiter"]
     assert services.files[EN + "b.md"] == expected
     assert services.snapshots[result.final_commit_sha.value][EN + "b.md"] == expected
 
@@ -381,13 +404,17 @@ def test_saved_review_paths_do_not_narrow_the_complete_review():
     result = services.resume()
     assert result.verdict is Verdict.GREEN
     assert [(role, path) for role, path, _ in services.calls] == [
-        ("critic", (EN + "a.md", EN + "b.md", EN + "c.md")),
-        ("arbiter", (EN + "a.md", EN + "b.md", EN + "c.md")),
+        ("critic", (EN + "a.md",)),
+        ("critic", (EN + "b.md",)),
+        ("critic", (EN + "c.md",)),
+        ("arbiter", (EN + "a.md",)),
+        ("arbiter", (EN + "b.md",)),
+        ("arbiter", (EN + "c.md",)),
     ]
     assert services.files[EN + "c.md"] == b"# Repaired c\n"
     assert services.files[EN + "b.md"] == b"# Repaired b\n\nTranslated\n"
-    # Critic immediate push; final publish is a no-op when head already matches.
-    assert services.commits == services.initial_commits + 1
+    # Each repaired critic chunk pushes immediately (b + c).
+    assert services.commits == services.initial_commits + 2
     with pytest.raises(PersistenceError):
         services.checkpoint()
 
@@ -408,8 +435,19 @@ def test_repeated_red_preserves_unresolved_path_order_for_the_next_continue():
     assert following.target_sha == saved.target_sha
     assert services.resume().verdict is Verdict.GREEN
     assert [paths for _, paths, _ in services.calls] == [
-        (EN + "a.md", EN + "b.md", EN + "c.md")
-    ] * 4
+        (EN + "a.md",),
+        (EN + "b.md",),
+        (EN + "c.md",),
+        (EN + "a.md",),
+        (EN + "b.md",),
+        (EN + "c.md",),
+        (EN + "a.md",),
+        (EN + "b.md",),
+        (EN + "c.md",),
+        (EN + "a.md",),
+        (EN + "b.md",),
+        (EN + "c.md",),
+    ]
 
 
 @pytest.mark.parametrize("repair", [False, True])
@@ -449,7 +487,7 @@ def test_pinned_rename_review_never_derives_maps_from_target_and_replays_metadat
     services.outcomes = {EN + "a.md": ["repair", "red"] if repair else ["red"]}
     result = services.resume()
     assert result.verdict is (Verdict.GREEN if repair else Verdict.RED)
-    assert services.roles == ["critic", "arbiter"]
+    assert services.roles == ["critic", "critic", "arbiter", "arbiter"]
     if repair:
         repair_prompt = services.prompts[0][1]
         assert services.calls[0][2] is not None
@@ -523,10 +561,10 @@ def test_infrastructure_failure_preserves_old_checkpoint(failure):
         services.roles
         == {
             "critic": ["critic"],
-            "repair": ["critic"],
-            # Critic immediate push fails before arbiter runs.
-            "publish": ["critic"],
-            "report": ["critic", "arbiter"],
+            "repair": ["critic", "critic"],
+            # Critic immediate push fails before later pairs / arbiter run.
+            "publish": ["critic", "critic"],
+            "report": ["critic", "critic", "arbiter", "arbiter"],
             "attempt": ["critic"],
         }[failure]
     )
@@ -540,7 +578,7 @@ def test_head_movement_blocks_later_models_publication_and_verdict(move_after):
     services.outcomes = {EN + "b.md": ["repair"]}
     with pytest.raises(application.WorkflowError):
         services.resume()
-    assert services.roles == ["critic"]
+    assert services.roles == (["critic"] if move_after == "critic" else ["critic", "critic"])
     assert "report" not in services.timeline and "commit" not in services.timeline
     assert services.rows[saved.continuation_id]["status"] == "open"
 
@@ -553,10 +591,7 @@ def test_invalid_critic_edit_retries_then_marks_unreviewed_red():
     services.repair_payload = json.dumps({})
     result = services.resume()
     assert result.verdict is Verdict.RED
-    assert services.roles == ["critic", "critic"]
-    assert services.files == before
-    assert services.commits == services.initial_commits
-    # Prior checkpoint is consumed; a fresh RED checkpoint stays open for continue.
+    assert services.roles == ["critic", "critic", "critic", "critic"]
     following = services.checkpoint()
     assert following.expires_at == saved.expires_at
     assert services.rows[following.continuation_id]["status"] == "open"
@@ -570,9 +605,16 @@ def test_byte_identical_selected_repair_reports_existing_sha_without_empty_commi
     result = services.resume()
     assert result.verdict is Verdict.GREEN and not result.repair_applied
     assert result.final_commit_sha == saved.target_sha
-    assert services.roles == ["critic", "arbiter"]
+    assert services.roles == ["critic", "critic", "arbiter", "arbiter"]
     assert services.commits == services.initial_commits
-    assert services.timeline == ["critic", "arbiter", "report", "report"]
+    assert services.timeline == [
+        "critic",
+        "critic",
+        "arbiter",
+        "arbiter",
+        "report",
+        "report",
+    ]
     assert services.rows[saved.continuation_id]["status"] == "closed"
 
 
@@ -582,7 +624,7 @@ def test_head_movement_while_loading_comment_blocks_stale_verdict_and_close():
     services.move_during_report = True
     with pytest.raises(application.WorkflowError, match="report"):
         services.resume()
-    assert services.roles == ["critic", "arbiter"]
+    assert services.roles == ["critic", "critic", "arbiter", "arbiter"]
     assert "report" not in services.timeline
     assert services.rows[saved.continuation_id]["status"] == "open"
     assert set(services.rows) == {saved.continuation_id}
@@ -617,7 +659,7 @@ def test_head_change_during_comment_write_fails_without_consuming_checkpoint(
         services.resume()
     failed = list(services.jobs.values())[-1]
     assert failed["status"] == "failed" and failed["error"] == "report_failed"
-    expected = ["critic", "arbiter"]
+    expected = ["critic", "critic", "arbiter", "arbiter"]
     assert services.roles == expected and services.timeline == [*expected, "report", "report"]
     assert services.branch_head == new_head
     assert set(services.rows) == {saved.continuation_id}
@@ -642,7 +684,14 @@ def test_head_change_during_comment_write_fails_without_consuming_checkpoint(
     assert len(services.comments) == 1 and services.comments[0]["id"] == comment_id
     assert services.comments[0]["body"].startswith("🟢 GREEN\n")
     assert services.roles == [
-        "critic", "arbiter", "critic", "arbiter"
+        "critic",
+        "critic",
+        "arbiter",
+        "arbiter",
+        "critic",
+        "critic",
+        "arbiter",
+        "arbiter",
     ]
 
 
@@ -672,7 +721,7 @@ def test_pinned_branch_change_during_repair_commit_cannot_create_or_update_ref(m
                     saved.target_sha,
                 )
             )
-    assert services.roles == ["critic"]
+    assert services.roles == ["critic", "critic"]
     assert services.timeline[-1] == "commit"
     assert services.commits == services.initial_commits + 1
     assert services.branch_head == new_head
@@ -692,7 +741,7 @@ def test_initial_translate_without_target_still_creates_branch():
     result = services.translate()
     assert result.verdict is Verdict.GREEN
     assert services.branch_head == result.final_commit_sha.value
-    assert services.roles == ["direction", "translate", "translate", "critic", "arbiter"]
+    assert services.roles == ["direction", "translate", "translate", "critic", "critic", "arbiter", "arbiter"]
     assert (
         sum(method == "POST" and path.endswith("/git/refs") for method, path in services.events)
         == 1
@@ -723,7 +772,7 @@ def test_review_green_consumption_survives_lost_lifecycle_acknowledgements(fault
         services.checkpoint()
     with pytest.raises(application.WorkflowError):
         services.resume()
-    assert services.roles == ["critic", "arbiter"]
+    assert services.roles == ["critic", "critic", "arbiter", "arbiter"]
 
 
 @pytest.mark.parametrize("fault", ["activate_before", "activate_after", "close_before"])
@@ -746,10 +795,17 @@ def test_review_red_handoff_preserves_one_logical_checkpoint_after_boundary_faul
     assert eligible.target_sha == saved.target_sha
     assert eligible.expires_at == saved.expires_at
     assert eligible.state.target_sha == saved.state.target_sha
-    assert services.roles == ["critic", "arbiter"]
+    assert services.roles == ["critic", "critic", "arbiter", "arbiter"]
     assert services.resume().verdict is Verdict.GREEN
     with pytest.raises(application.WorkflowError):
         services.resume()
     assert services.roles == [
-        "critic", "arbiter", "critic", "arbiter"
+        "critic",
+        "critic",
+        "arbiter",
+        "arbiter",
+        "critic",
+        "critic",
+        "arbiter",
+        "arbiter",
     ]

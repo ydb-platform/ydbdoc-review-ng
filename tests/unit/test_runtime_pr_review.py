@@ -182,29 +182,29 @@ def test_empty_review_without_manifest_stays_noop():
 
 
 @pytest.mark.parametrize("verdict", ["GREEN", "YELLOW", "RED"])
-def test_runtime_reviews_all_files_once_and_preserves_arbiter_verdict(verdict):
+def test_runtime_reviews_one_pair_per_call_and_preserves_arbiter_verdict(verdict):
     content, candidate = review_fixture()
     content.environment = {"YDBDOC_MAX_CRITIC_REQUEST_CHARACTERS": "1"}
     content.review_paths = (RepoPath(EN + "b.md"),)
     corrected = {EN + name: "# BlobDepot\n\nUse `BlobDepot`.\n" for name in ("a.md", "b.md")}
+    findings = (
+        []
+        if verdict == "GREEN"
+        else [
+            {
+                "target_path": EN + "b.md",
+                "searchable_snippet": "Use `BlobDepot`.",
+                "reason": "Residual terminology issue.",
+                "expected_correction": "Clarify the intended component meaning.",
+            }
+        ]
+    )
     models = FifoModels(
         [
-            json.dumps({"files": corrected}),
-            json.dumps(
-                {
-                    "verdict": verdict,
-                    "findings": []
-                    if verdict == "GREEN"
-                    else [
-                        {
-                            "target_path": EN + "b.md",
-                            "searchable_snippet": "Use `BlobDepot`.",
-                            "reason": "Residual terminology issue.",
-                            "expected_correction": "Clarify the intended component meaning.",
-                        }
-                    ],
-                }
-            ),
+            json.dumps({"files": {EN + "a.md": corrected[EN + "a.md"]}}),
+            json.dumps({"files": {EN + "b.md": corrected[EN + "b.md"]}}),
+            json.dumps({"verdict": "GREEN", "findings": []}),
+            json.dumps({"verdict": verdict, "findings": findings}),
         ]
     )
     content.models = models
@@ -214,8 +214,15 @@ def test_runtime_reviews_all_files_once_and_preserves_arbiter_verdict(verdict):
     }
     assert result.final.verdict is Verdict(verdict)
     assert result.repair_applied
-    assert [call.role for call in models.calls] == [ModelRole.CRITIC, ModelRole.ARBITER]
-    assert prompt_map(models.calls[1], "translation-pr-files") == corrected
+    assert [call.role for call in models.calls] == [
+        ModelRole.CRITIC,
+        ModelRole.CRITIC,
+        ModelRole.ARBITER,
+        ModelRole.ARBITER,
+    ]
+    assert prompt_map(models.calls[3], "translation-pr-files") == {
+        EN + "b.md": corrected[EN + "b.md"]
+    }
     assert tuple(item.target_path.value for item in result.accepted_maps) == (
         EN + "a.md",
         EN + "b.md",
@@ -228,23 +235,27 @@ def test_invalid_second_file_retries_then_marks_unreviewed_red(has_document_plan
     content, candidate = review_fixture()
     if not has_document_plans:
         content.documents = ()
-    # Missing required path is a hard contract failure (not a soft §2 diagnostic).
-    incomplete_files = {
-        EN + "a.md": "# BlobDepot\n\nUse `BlobDepot`.\n",
-    }
+    good_a = "# BlobDepot\n\nUse `BlobDepot`.\n"
     models = FifoModels(
         [
-            json.dumps({"files": incomplete_files}),
-            json.dumps({"files": incomplete_files}),
+            json.dumps({"files": {EN + "a.md": good_a}}),
+            json.dumps({"files": {}}),
+            json.dumps({"files": {}}),
             json.dumps({"verdict": "GREEN", "findings": []}),
         ]
     )
     content.models = models
     result = content.review(content.plans.preparation.snapshot, candidate)
-    assert [call.role.value for call in models.calls] == ["critic", "critic"]
+    assert [call.role.value for call in models.calls] == [
+        "critic",
+        "critic",
+        "critic",
+        "arbiter",
+    ]
     assert result.final.verdict is Verdict.RED
-    # Draft bytes preserved for the unreviewed paths, but status is honest RED.
+    # Draft bytes preserved for the unreviewed path, but status is honest RED.
     assert unpack(result.final_candidate)[EN + "b.md"] == b"# Depot\n\nUse `BlobDepot`.\n"
+    assert unpack(result.final_candidate)[EN + "a.md"] == good_a.encode()
 
 
 @pytest.mark.parametrize("invalid_change", [None, "href", "delete-target-only"])
@@ -305,21 +316,40 @@ def test_runtime_applies_complete_toc_including_href_corrections(invalid_change)
             else "\n- name: Target only\n  href: extra.md\n"
         )
     )
-    critic_response = json.dumps({"files": corrected})
     models = FifoModels(
-        [critic_response, critic_response, '{"verdict":"GREEN","findings":[]}']
+        [
+            json.dumps({"files": {EN + "a.md": corrected[EN + "a.md"]}}),
+            json.dumps({"files": {EN + "b.md": corrected[EN + "b.md"]}}),
+            json.dumps({"files": {EN + "toc.yaml": corrected[EN + "toc.yaml"]}}),
+            json.dumps({"files": {EN + "toc.yaml": corrected[EN + "toc.yaml"]}}),
+            json.dumps({"verdict": "GREEN", "findings": []}),
+            json.dumps({"verdict": "GREEN", "findings": []}),
+            json.dumps({"verdict": "GREEN", "findings": []}),
+        ]
         if invalid_change == "delete-target-only"
-        else [critic_response, '{"verdict":"GREEN","findings":[]}']
+        else [
+            json.dumps({"files": {EN + "a.md": corrected[EN + "a.md"]}}),
+            json.dumps({"files": {EN + "b.md": corrected[EN + "b.md"]}}),
+            json.dumps({"files": {EN + "toc.yaml": corrected[EN + "toc.yaml"]}}),
+            json.dumps({"verdict": "GREEN", "findings": []}),
+            json.dumps({"verdict": "GREEN", "findings": []}),
+            json.dumps({"verdict": "GREEN", "findings": []}),
+        ]
     )
     content.models = models
     result = content.review(preparation.snapshot, candidate)
     if invalid_change == "delete-target-only":
-        # Invalid critic TOC after retry is unreviewed RED; draft stays, no arbiter.
-        assert unpack(result.final_candidate) == unpack(candidate.content)
+        # Invalid critic TOC after retry is unreviewed RED; MD reviews may still apply.
         assert result.final.verdict is Verdict.RED
-        assert [call.role for call in models.calls] == [ModelRole.CRITIC, ModelRole.CRITIC]
+        assert models.calls[0].role is ModelRole.CRITIC
+        assert models.calls[1].role is ModelRole.CRITIC
+        assert [call.role for call in models.calls if call.role is ModelRole.CRITIC].count(
+            ModelRole.CRITIC
+        ) >= 3
         return
-    assert prompt_map(models.calls[1], "translation-pr-files") == corrected
+    assert prompt_map(models.calls[2], "translation-pr-files") == {
+        EN + "toc.yaml": toc.decode()
+    }
     final_files = {path: text.encode() for path, text in corrected.items()}
     assert unpack(result.final_candidate) == final_files
 

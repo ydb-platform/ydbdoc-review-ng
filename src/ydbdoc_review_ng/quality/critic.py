@@ -44,6 +44,21 @@ _ARBITER_CHECKLIST = (
     "Before answering, check completeness, terminology, technical literals and "
     "inline-code, damaged sentences, TOC correctness, and every supplied file."
 )
+# reasoning_effort=high burns against max_tokens. Uncapped remainder (~700k–900k)
+# lets DeepSeek think past the Yandex silent-connection wall (~270s → TRANSPORT).
+_ARBITER_MAX_OUTPUT_TOKENS = 24_576
+_CRITIC_MAX_OUTPUT_FLOOR = 24_576
+_CRITIC_MAX_OUTPUT_CEILING = 98_304
+
+
+def _critic_max_output_tokens(translated_files: Mapping[str, bytes | None]) -> int:
+    total = 0
+    for content in translated_files.values():
+        total += 512 if content is None else len(content)
+    return max(
+        _CRITIC_MAX_OUTPUT_FLOOR,
+        min(_CRITIC_MAX_OUTPUT_CEILING, total * 3 + 16_384),
+    )
 
 
 def _has_duplicate(value: object) -> bool:
@@ -152,6 +167,7 @@ def build_pr_critic_request(
         prompt,
         cast(FrozenJson, schema),
         developer_prompt=template,
+        max_output_tokens=_critic_max_output_tokens(translated_files),
     )
 
 
@@ -233,6 +249,7 @@ def build_pr_arbiter_request(
         prompt,
         cast(FrozenJson, schema),
         developer_prompt=template,
+        max_output_tokens=_ARBITER_MAX_OUTPUT_TOKENS,
     )
 
 
