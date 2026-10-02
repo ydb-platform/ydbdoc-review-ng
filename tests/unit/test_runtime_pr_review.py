@@ -223,8 +223,8 @@ def test_runtime_reviews_all_files_once_and_preserves_arbiter_verdict(verdict):
 
 
 @pytest.mark.parametrize("has_document_plans", [True, False])
-def test_invalid_second_file_retries_then_passes_draft_to_arbiter(has_document_plans):
-    """REQUIREMENTS §4.1: after one critic retry, files go to arbiter as-is."""
+def test_invalid_second_file_retries_then_marks_unreviewed_red(has_document_plans):
+    """REQUIREMENTS §4.1: invalid critic after retry → RED; raw draft is not success."""
     content, candidate = review_fixture()
     if not has_document_plans:
         content.documents = ()
@@ -241,9 +241,9 @@ def test_invalid_second_file_retries_then_passes_draft_to_arbiter(has_document_p
     )
     content.models = models
     result = content.review(content.plans.preparation.snapshot, candidate)
-    assert [call.role.value for call in models.calls] == ["critic", "critic", "arbiter"]
-    assert result.final.verdict is Verdict.GREEN
-    # Draft bytes preserved when critic corrections remain invalid.
+    assert [call.role.value for call in models.calls] == ["critic", "critic"]
+    assert result.final.verdict is Verdict.RED
+    # Draft bytes preserved for the unreviewed paths, but status is honest RED.
     assert unpack(result.final_candidate)[EN + "b.md"] == b"# Depot\n\nUse `BlobDepot`.\n"
 
 
@@ -314,15 +314,10 @@ def test_runtime_applies_complete_toc_including_href_corrections(invalid_change)
     content.models = models
     result = content.review(preparation.snapshot, candidate)
     if invalid_change == "delete-target-only":
-        assert prompt_map(models.calls[2], "translation-pr-files")[EN + "toc.yaml"] == (
-            toc.decode()
-        )
+        # Invalid critic TOC after retry is unreviewed RED; draft stays, no arbiter.
         assert unpack(result.final_candidate) == unpack(candidate.content)
-        assert [call.role for call in models.calls] == [
-            ModelRole.CRITIC,
-            ModelRole.CRITIC,
-            ModelRole.ARBITER,
-        ]
+        assert result.final.verdict is Verdict.RED
+        assert [call.role for call in models.calls] == [ModelRole.CRITIC, ModelRole.CRITIC]
         return
     assert prompt_map(models.calls[1], "translation-pr-files") == corrected
     final_files = {path: text.encode() for path, text in corrected.items()}

@@ -84,8 +84,8 @@ def test_two_file_pr_has_exactly_one_critic_then_one_arbiter(verdict, changed):
     assert executor.responses == []
 
 
-def test_invalid_files_retry_then_pass_draft_to_arbiter():
-    """REQUIREMENTS §4.1: after one critic retry, drafts go to arbiter as-is."""
+def test_invalid_files_retry_then_marks_unreviewed_red():
+    """REQUIREMENTS §4.1: invalid critic bytes after retry → RED, not arbiter on draft."""
     original = {"en/a.md": b"# Before\n"}
     executor = FifoModels(
         [
@@ -108,8 +108,8 @@ def test_invalid_files_retry_then_pass_draft_to_arbiter():
         validate_files=reject,
     )
     assert corrected == original
-    assert result.verdict.value == "GREEN"
-    assert [call.role.value for call in executor.calls] == ["critic", "critic", "arbiter"]
+    assert result.verdict.value == "RED"
+    assert [call.role.value for call in executor.calls] == ["critic", "critic"]
 
 
 @pytest.mark.parametrize(
@@ -119,7 +119,7 @@ def test_invalid_files_retry_then_pass_draft_to_arbiter():
         ModelCallResult(None, AttemptError.CONTENT_FILTER, ()),
     ],
 )
-def test_critic_failure_retries_once_then_passes_draft_to_arbiter(response):
+def test_critic_failure_retries_once_then_marks_unreviewed_red(response):
     executor = FifoModels([response, response, '{"verdict":"GREEN","findings":[]}'])
     corrected, result = quality.review_pr(
         executor,
@@ -131,8 +131,8 @@ def test_critic_failure_retries_once_then_passes_draft_to_arbiter(response):
         validate_files=lambda files: None,
     )
     assert corrected == {"en/a.md": b"# Before\n"}
-    assert result.verdict.value == "GREEN"
-    assert [call.role.value for call in executor.calls] == ["critic", "critic", "arbiter"]
+    assert result.verdict.value == "RED"
+    assert [call.role.value for call in executor.calls] == ["critic", "critic"]
 
 
 def test_large_complete_input_is_not_split_or_glossary_filtered():

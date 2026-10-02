@@ -52,8 +52,8 @@ def test_recorded_models_exposes_prepare_request_for_chunk_fits() -> None:
     assert budget.body  # wire body exists; ValueError would mean does-not-fit
 
 
-def test_critic_failure_retries_once_then_passes_files_to_arbiter() -> None:
-    """REQUIREMENTS §4.1: one retry; files go to arbiter as-is; critic fail ≠ RED (#4)."""
+def test_critic_failure_retries_once_then_marks_unreviewed_red() -> None:
+    """REQUIREMENTS §4.1: critic unavailable after retry → RED, not arbiter on raw dump."""
     source = {"docs/ru/a.md": b"# A\n"}
     translated = {"docs/en/a.md": b"# Draft\n"}
     models = _Scripted(
@@ -74,14 +74,11 @@ def test_critic_failure_retries_once_then_passes_files_to_arbiter() -> None:
         validate_files=lambda files: None,
     )
 
-    assert [call.role for call in models.calls] == [
-        ModelRole.CRITIC,
-        ModelRole.CRITIC,
-        ModelRole.ARBITER,
-    ]
+    assert [call.role for call in models.calls] == [ModelRole.CRITIC, ModelRole.CRITIC]
     assert corrected == translated
-    assert final.verdict is Verdict.GREEN
-    assert final.findings == ()
+    assert final.verdict is Verdict.RED
+    assert final.findings
+    assert final.findings[0].target_path == "docs/en/a.md"
 
 
 def test_zero_text_pairs_still_invoke_critic_and_arbiter() -> None:

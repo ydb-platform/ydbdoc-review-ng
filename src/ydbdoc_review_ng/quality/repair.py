@@ -233,7 +233,11 @@ def review_pr(
                     validate_files(chunk_corrected)
                 except Exception:
                     if attempt == 2:
-                        # After one retry, files go to arbiter as-is (§4.1).
+                        # Critic is a hard quality gate: invalid reviewed bytes must
+                        # not fall through to arbiter as a product success (§4.1).
+                        mark_unreviewed(target_paths, "contract")
+                        if not pairs:
+                            resource_review_reason = "contract"
                         break
                     continue
                 corrected.update(chunk_corrected)
@@ -244,12 +248,11 @@ def review_pr(
                 # §4: NON_FINAL survives a differently-failed retry → chunk unreviewed.
                 saw_non_final = True
             if attempt == 2:
-                # Ordinary provider failure keeps draft bytes for arbiter and is not
-                # itself RED, unless a NON_FINAL attempt already marked the chunk.
-                if saw_non_final:
-                    mark_unreviewed(target_paths, "provider")
-                    if not pairs:
-                        resource_review_reason = "provider"
+                # Provider/transport/503 after retry: raw translator dump is not a
+                # reviewed product. Mark unreviewed RED; skip arbiter for the chunk.
+                mark_unreviewed(target_paths, "provider")
+                if not pairs:
+                    resource_review_reason = "provider"
                 break
 
     arbiter_targets: dict[str, bytes | None] = {
