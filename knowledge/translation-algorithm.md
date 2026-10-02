@@ -11,11 +11,12 @@
 6. Лимиты: `YDBDOC_MAX_DEPENDENCY_FILES_PER_ARTICLE` (группа статьи),
    `YDBDOC_MAX_SOURCE_CHARACTERS` (один файл).
 
-## Translator
+## Prep + Translator
 
-Целый файл одним request. Existing target не в prompt. Segment ID map →
-runtime вставляет protected fragments. Одна техническая коррекция. Собрали
-UTF-8 → публикуем всегда.
+Placeholders + identifier atoms (не рвать `BS\_CONTROLLER` на ESCAPE).
+Optional presentation map с old target. Целый файл одним request. Old target
+в prompt только как presentation reference. Segment ID map → runtime restore
++ apply map. Собранный UTF-8 → **draft** soft-publish (diagnostics ≠ product).
 
 ## TOC
 
@@ -25,6 +26,7 @@ PR. Покрыть тестами.
 
 ## Critic / arbiter
 
-Critic: полные пары + glossary + manifest → `{"files": {...}}`, сразу push.
-Чанки по целым парам при необходимости. Arbiter: GREEN/YELLOW/RED + findings,
-без автопочинки. Худший чанк побеждает. YELLOW не открывает checkpoint.
+Critic: обязательный gate на source + draft + optional presentation-reference
+→ полные `{"files": {...}}`, **reviewed** push. Fail/503/unreviewed → RED,
+arbiter на сырой dump не вызывается. Arbiter: только reviewed bytes,
+GREEN/YELLOW/RED + findings, без автопочинки. YELLOW не открывает checkpoint.

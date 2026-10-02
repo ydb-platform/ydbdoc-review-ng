@@ -1,6 +1,6 @@
 # Карта долга кода vs контракт
 
-Сжатый канон: `REQUIREMENTS_RU.md` (commit упрощения контракта).
+Сжатый канон: `REQUIREMENTS_RU.md` (CI translation redesign 2026-10-02).
 Цель: удалять старое поведение, не оборачивать compatibility.
 
 ## Срезы
@@ -15,10 +15,23 @@
 | 5 | Critic полные файлы → сразу push + context chunking | done |
 | 6 | Arbiter: YELLOW закрывает checkpoint | done |
 | 7 | Continuation state v3 | done |
-| 8 | Soft-publish частичных translation success до critic | done |
+| 8 | Soft-publish draft до critic (diagnostics ≠ product) | done |
 | 9 | `doc_verify` | done |
 | 10 | Budget / reporting | done |
-| 11 | Full suite + live PR | pending |
+| 11 | Identifier atoms + presentation map + draft/reviewed gate | **done** (P0+P1) |
+| 12 | BlobDepot golden harness (P2) | stub plan |
+| 13 | Full suite + live PR after redesign | pending |
+
+## CI translation redesign (2026-10-02)
+
+| # | Item | Status | Notes / witness |
+|---|---|---|---|
+| P0a | Identifier atoms across `\_` | **done** | `tests/unit/parser/test_identifier_atoms.py` |
+| P0b | Presentation map from optional old EN | **done** | `tests/unit/translation/test_presentation_map.py` |
+| P0c | Critic fail/503 → RED, not arbiter GREEN on raw | **done** | `tests/unit/quality/test_draft_reviewed_gate.py` |
+| P1a | Prompt updates + presentation-reference input | **done** | critic/arbiter prompts; translator tag |
+| P1b | Canon §1.2/§2/§4.1/§5.1/§7 | **done** | `REQUIREMENTS_RU.md` |
+| P2 | Offline BlobDepot golden | **stub** | `knowledge/blobdepot-golden-plan.md` |
 
 > [!success] offline suite (2026-10-01)
 > Full non-live `tests/unit` + `tests/integration`: **2137 passed, 0 failed**

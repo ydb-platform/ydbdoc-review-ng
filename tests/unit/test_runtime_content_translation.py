@@ -646,18 +646,20 @@ def test_translate_without_existing_target_uses_full_translation_prompt() -> Non
     content_with(models).translate_document(document)
 
     assert "Translate the complete Markdown prose from ru to en" in models.calls[0].prompt
-    assert "<EXISTING_TARGET_EN>" not in models.calls[0].prompt
+    assert "<PRESENTATION_REFERENCE_EN>" not in models.calls[0].prompt
 
 
-def test_translate_does_not_send_existing_target_as_translation_context() -> None:
+def test_translate_sends_existing_target_as_presentation_reference_only() -> None:
     models = EchoChunkModels()
     content = content_with(models)
 
     content.translate_document(document_for(b"# Source heading\n", target=b"# Old target wording\n"))
 
     assert models.calls
+    assert all("<PRESENTATION_REFERENCE_EN>" in call.prompt for call in models.calls)
+    assert all("formatting/presentation reference only" in call.prompt for call in models.calls)
+    assert all("Old target wording" in call.prompt for call in models.calls)
     assert all("<EXISTING_TARGET_EN>" not in call.prompt for call in models.calls)
-    assert all("Old target wording" not in call.prompt for call in models.calls)
 
 
 def test_multiblock_document_uses_one_request_without_workflow_override() -> None:
@@ -721,7 +723,7 @@ def test_existing_target_cannot_override_symmetric_source_link_destination() -> 
     )
 
 
-def test_whole_document_request_excludes_all_existing_target_text() -> None:
+def test_whole_document_request_keeps_existing_target_as_presentation_reference() -> None:
     source = (
         "## Source one\n" + "a" * 900 + "\n\n"
         "## Source two\n" + "b" * 900 + "\n\n"
@@ -746,7 +748,9 @@ def test_whole_document_request_excludes_all_existing_target_text() -> None:
     prompt = models.calls[0].prompt
     assert "Source one" in prompt
     assert "Source three" in prompt
-    assert all(label not in prompt for label in ("Target one", "Target two", "Target three"))
+    assert "<PRESENTATION_REFERENCE_EN>" in prompt
+    assert "formatting/presentation reference only" in prompt
+    assert all(label in prompt for label in ("Target one", "Target two", "Target three"))
 
 
 def test_translate_restores_source_final_lf_without_technical_correction() -> None:
@@ -1043,8 +1047,9 @@ def test_content_filter_with_existing_target_is_terminal() -> None:
         content_with(models).translate_document(document)
 
     assert len(models.calls) == 1
-    assert all("<EXISTING_TARGET_EN>" not in call.prompt for call in models.calls)
-    assert all("# Existing target reference" not in call.prompt for call in models.calls)
+    assert all("<PRESENTATION_REFERENCE_EN>" in call.prompt for call in models.calls)
+    assert all("# Existing target reference" in call.prompt for call in models.calls)
+    assert all("formatting/presentation reference only" in call.prompt for call in models.calls)
 
 
 def test_protected_only_chunk_bypasses_model() -> None:

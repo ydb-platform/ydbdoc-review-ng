@@ -55,3 +55,20 @@ def test_arbiter_request_includes_same_review_context() -> None:
         "ydb/docs/ru/toc.yaml": {"before": None, "after": "items:\n"}
     }
     assert _section(request.prompt, "binary-manifest") == {}
+    assert _section(request.prompt, "presentation-reference-files") == {}
+
+
+def test_critic_request_includes_optional_presentation_reference() -> None:
+    request = build_pr_critic_request(
+        model="critic",
+        source_files={"ydb/docs/ru/a.md": b"# A\n"},
+        translated_files={"ydb/docs/en/a.md": b"# Draft\n"},
+        glossary_files={},
+        presentation_reference_files={"ydb/docs/en/a.md": b"# Old `BS_CONTROLLER`\n"},
+    )
+    assert _section(request.prompt, "presentation-reference-files") == {
+        "ydb/docs/en/a.md": "# Old `BS_CONTROLLER`\n"
+    }
+    assert "presentation-reference" in (request.developer_prompt or "").lower() or (
+        "presentation reference" in (request.developer_prompt or "").lower()
+    )

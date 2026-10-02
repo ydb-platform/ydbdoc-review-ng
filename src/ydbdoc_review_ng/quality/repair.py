@@ -180,6 +180,7 @@ def review_pr(
     request_fits: Callable[[ModelRequest], bool] | None = None,
     toc_snapshots: Mapping[str, Mapping[str, str | None]] | None = None,
     binary_manifest: Mapping[str, Mapping[str, str]] | None = None,
+    presentation_reference_files: Mapping[str, bytes] | None = None,
 ) -> tuple[dict[str, bytes], CriticResult]:
     """Correct/judge the PR in context-fitting whole source/target pair chunks."""
     pairs = _review_pairs(source_files, translated_files)
@@ -189,12 +190,20 @@ def review_pr(
     unreviewed: dict[str, _UnreviewedReason] = {}
     # §4: empty Markdown inventory still reviews resources; NON_FINAL cannot invent GREEN.
     resource_review_reason: _UnreviewedReason | None = None
+    presentation_refs = (
+        {} if presentation_reference_files is None else dict(presentation_reference_files)
+    )
 
     def mark_unreviewed(paths: Sequence[str], reason: _UnreviewedReason) -> None:
         for path in paths:
             unreviewed.setdefault(path, reason)
 
     def build_critic(chunk_pairs: Sequence[tuple[str, str]]) -> ModelRequest:
+        chunk_refs = {
+            target: presentation_refs[target]
+            for _source, target in chunk_pairs
+            if target in presentation_refs
+        }
         return build_pr_critic_request(
             model=critic_model,
             source_files=_subset_sources(source_files, chunk_pairs),
@@ -203,6 +212,7 @@ def review_pr(
             operator_context=operator_context,
             toc_snapshots=toc_snapshots,
             binary_manifest=binary_manifest,
+            presentation_reference_files=chunk_refs,
         )
 
     def fits(request: ModelRequest) -> bool:

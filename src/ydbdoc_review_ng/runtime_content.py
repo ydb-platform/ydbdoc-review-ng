@@ -1800,6 +1800,20 @@ class RuntimeContent:
                         + chunk_terminology_context
                         + "\n</PROJECT_GLOSSARY>"
                     )
+                if target_reference_bytes is not None:
+                    try:
+                        reference_text = target_reference_bytes.decode("utf-8")
+                    except UnicodeDecodeError:
+                        reference_text = None
+                    if reference_text is not None:
+                        prompt += (
+                            "\n\nExisting target is a formatting/presentation reference only. "
+                            "Match inline-code and identifier presentation when helpful; "
+                            "do not keep its wording as a semantic baseline.\n"
+                            f"<PRESENTATION_REFERENCE_{entry.pair.target_locale.value.upper()}>\n"
+                            + reference_text
+                            + f"\n</PRESENTATION_REFERENCE_{entry.pair.target_locale.value.upper()}>"
+                        )
                 if operator_context is not None:
                     prompt += document_operator_guidance(operator_context)
                 if attempt == 2:
@@ -2545,6 +2559,18 @@ class RuntimeContent:
             if publisher is not None:
                 publisher.publish(snapshot, chunk_candidate)
 
+        presentation_reference_files: dict[str, bytes] = {}
+        for document in self.documents:
+            path = document.entry.pair.target_path.value
+            if path not in translated_files:
+                continue
+            reference = (
+                document.entry.target_content
+                if document.entry.target_content is not None
+                else document.entry.rename_from_target_content
+            )
+            if reference is not None:
+                presentation_reference_files[path] = reference
         corrected, final = review_pr(
             self.models,
             critic_model=self.critic_model,
@@ -2560,6 +2586,7 @@ class RuntimeContent:
             on_successful_critic_chunk=publish_critic_chunk,
             toc_snapshots=toc_snapshots,
             binary_manifest=binary_manifest,
+            presentation_reference_files=presentation_reference_files,
         )
         repaired = corrected != translated_files
         files.update(corrected)

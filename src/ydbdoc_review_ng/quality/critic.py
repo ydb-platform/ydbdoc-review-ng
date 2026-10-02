@@ -79,6 +79,7 @@ def _review_user_prompt(
     binary_manifest: Mapping[str, Mapping[str, str]] | None,
     operator_context: str | None,
     checklist: str,
+    presentation_reference_files: Mapping[str, bytes] | None = None,
 ) -> str:
     values: tuple[tuple[str, Mapping[str, object]], ...] = (
         ("source-pr-files", source_files),
@@ -86,6 +87,10 @@ def _review_user_prompt(
         ("project-glossary", glossary_files),
         ("source-toc-snapshots", {} if toc_snapshots is None else toc_snapshots),
         ("binary-manifest", {} if binary_manifest is None else binary_manifest),
+        (
+            "presentation-reference-files",
+            {} if presentation_reference_files is None else presentation_reference_files,
+        ),
     )
     blocks: list[str] = []
     for tag, files in values:
@@ -111,6 +116,7 @@ def build_pr_critic_request(
     operator_context: str | None = None,
     toc_snapshots: Mapping[str, Mapping[str, str | None]] | None = None,
     binary_manifest: Mapping[str, Mapping[str, str]] | None = None,
+    presentation_reference_files: Mapping[str, bytes] | None = None,
 ) -> ModelRequest:
     template = (
         resources.files("ydbdoc_review_ng.quality")
@@ -125,6 +131,7 @@ def build_pr_critic_request(
         binary_manifest=binary_manifest,
         operator_context=operator_context,
         checklist=_CRITIC_CHECKLIST,
+        presentation_reference_files=presentation_reference_files,
     )
     schema = {
         "type": "object",
@@ -185,6 +192,7 @@ def build_pr_arbiter_request(
     operator_context: str | None = None,
     toc_snapshots: Mapping[str, Mapping[str, str | None]] | None = None,
     binary_manifest: Mapping[str, Mapping[str, str]] | None = None,
+    presentation_reference_files: Mapping[str, bytes] | None = None,
 ) -> ModelRequest:
     template = (
         resources.files("ydbdoc_review_ng.quality")
@@ -198,6 +206,7 @@ def build_pr_arbiter_request(
         toc_snapshots=toc_snapshots,
         binary_manifest=binary_manifest,
         operator_context=operator_context,
+        presentation_reference_files=presentation_reference_files,
         checklist=_ARBITER_CHECKLIST,
     )
     # §4.1/§4.2: resource-only scope still needs reportable finding paths.

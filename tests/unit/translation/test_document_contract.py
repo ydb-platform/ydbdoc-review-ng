@@ -57,6 +57,7 @@ def test_translation_prompt_uses_authoritative_source_only() -> None:
 
     assert "Translate the complete Markdown below from ru to en" in prompt
     assert "<AUTHORITATIVE_SOURCE_RU>\n" + source in prompt
+    assert "<PRESENTATION_REFERENCE_EN>" not in prompt
     assert "<EXISTING_TARGET_EN>" not in prompt
     assert "Return Markdown only" in prompt
 

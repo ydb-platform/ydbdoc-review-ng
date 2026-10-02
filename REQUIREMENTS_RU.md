@@ -60,8 +60,10 @@ provider error / невалидном JSON. Вторая неудача → job 
 - TOC → особый путь §3;
 - прочее вне locale mapping → без молчаливой потери: явный no-op или ошибка.
 
-Существующий target не подмешивается в translator prompt и не используется
-как baseline формулировок.
+Существующий target **опционален**. Если есть — передаётся translator/critic
+только как formatting/presentation reference (inline-code, escapes), не как
+semantic baseline. Если нет (новый файл) — опираемся на identifier atoms,
+style rules и нормализацию presentation в critic.
 
 ### 1.3 Дотягивание зависимостей
 
@@ -96,8 +98,12 @@ front matter `title`/`description`, заголовки YFM note/cut/tab, ком�
 
 Перед вызовом непрозрачные фрагменты → placeholders. URL в link/image:
 подпись видна, destination = URL-token. Markdown-синтаксис модели виден.
-Защищены: URL path/query, identifiers, templates, inline code, код вне
-комментариев, Mermaid, include, прочий front matter, technical HTML.
+Защищены: URL path/query, **identifier atoms** (целый `BS_CONTROLLER` /
+`CREATE_FAILED` / `POOL_NAME`; не рвать на bare ESCAPE `\_` внутри),
+templates, inline code, код вне комментариев, Mermaid, include, прочий
+front matter, technical HTML. Если old target есть — Python строит
+presentation map (какие атомы были в backticks / без escapes) и накладывает
+её на draft после restore; если нет — apply no-op.
 
 Внутренние YDB URL: только `/docs/ru/` ↔ `/docs/en/`. Для `glossary.md`
 fragment ищется в реальном target glossary; иначе fail-open diagnostic.
@@ -108,14 +114,16 @@ arbiter может поставить YELLOW.
 Модель возвращает JSON-карту segment IDs без placeholders. Runtime вставляет
 protected fragments из source (плюс locale/Wikipedia/glossary rules). Одна
 техническая коррекция при ответе, из которого нельзя собрать UTF-8 файл.
-Собранный файл **всегда публикуется**. Markdown/YFM/links/anchors/protected
-diagnostics не блокируют публикацию.
+Собранный UTF-8 файл публикуется как **draft** (технический soft-publish /
+diagnostics). Markdown/YFM/links/anchors/protected diagnostics не блокируют
+draft-публикацию, но draft **не** является reader-facing product success.
 
 Глоссарий в translator: все релевантные парные секции текущего файла, без
 лимита числа/размера; при равенстве — порядок по anchor. Это контекст, не
 текст для вставки.
 
-Existing target в prompt перевода не передаётся.
+Existing target в prompt перевода передаётся только как presentation
+reference (тег presentation-reference), когда файл уже существовал.
 
 ### 2.1 Комментарии в code fence
 
@@ -183,8 +191,9 @@ response заранее не оценивается. `NON_FINAL` → чанк н
 
 ### 4.1 Critic
 
-Вход: полные source/target пары frozen group (PR + дотянутые зависимости +
-изменённые TOC), relevant paired glossary без лимита, manifest binary,
+Обязательный quality gate. Вход: полные source + **draft** target пары frozen
+group (PR + зависимости + TOC), optional presentation-reference (old target
+по path, если был), relevant paired glossary без лимита, manifest binary,
 для TOC — before/after source. Отсутствующий обязательный target = JSON
 `null` → critic обязан создать полный файл.
 
@@ -192,25 +201,27 @@ Critic возвращает только `{"files": {"path": "complete content",
 Findings, verdict, patches запрещены. Каждый запрошенный path ровно один раз.
 При нуле текстовых пар → `{"files": {}}`, вызов всё равно есть.
 
-Source-разметка не считается эталоном качества target-разметки. Перед ответом
-critic отдельно проверяет все технические литералы и исправляет их presentation:
-может добавить/убрать inline-code и удалить ненужное Markdown-экранирование
-вроде `BS\_CONTROLLER` → `BS_CONTROLLER`. Сам технический литерал при этом
-нельзя переименовать, перевести, удалить или продублировать. Такие исправления
-публикуются по общему правилу мягких Markdown/YFM diagnostics §2.
+Source-разметка не эталон target-разметки. Presentation-reference — только
+оформление. Перед ответом critic нормализует технические литералы:
+inline-code и удаление ненужного экранирования (`BS\_CONTROLLER` →
+`BS_CONTROLLER`). Литерал нельзя переименовать, перевести, удалить или
+продублировать. Такие исправления публикуются по мягким Markdown/YFM
+diagnostics §2.
 
 Один вызов, если влезает; иначе чанки по целым файловым парам. Пара не
-делится. Не влезла одна пара → непроверена, остальные идут.
+делится. Не влезла одна пара → непроверена (unreviewed), остальные идут.
 
-Успешный чанк сразу commit/push в translation branch. Первый успех может
-создать branch/PR, если translator ничего не опубликовал. Ошибка чанка после
-одного retry не откатывает другие; его файлы идут к arbiter как есть.
-Падение critic само по себе не делает RED, если arbiter потом GREEN.
+Успешный чанк → **reviewed** commit/push в translation branch. Первый успех
+может создать branch/PR, если translator опубликовал только draft. Ошибка
+чанка после одного retry (transport/503/invalid contract/NON_FINAL) →
+unreviewed RED для путей чанка; arbiter по этим путям **не** вызывается на
+сыром draft. Critic unavailable ≠ GREEN/YELLOW на raw translator dump.
 
 ### 4.2 Arbiter
 
-Вход: окончательные source/target после critic, тот же glossary/manifest
-подход, чанки заново по финальным размерам.
+Вход: окончательные source/target **только после успешного critic**
+(reviewed bytes), тот же glossary/manifest подход, чанки заново по
+финальным размерам. Unreviewed пути уже RED и в arbiter не идут.
 
 Ответ только:
 
@@ -270,12 +281,14 @@ RED-отчёт в source PR; checkpoint с `target_sha=null`.
 2. Дневной budget gate (§6) до любого model call.
 3. Direction call (§1.1) → Python scope (§1.2–1.3).
 4. Перевести все страницы; TOC по §3; deterministic ops.
-5. Один первоначальный commit всех собранных файлов + deterministic ops →
-   translation PR. Частичные model-fail → остальные всё равно публикуются;
-   failed paths = `null` для critic. Нет ни файлов, ни ops → commit пока нет,
-   процесс идёт к critic.
-6. Critic по §4.1, затем arbiter по §4.2.
-7. QA comment + terminal status.
+5. Один первоначальный **draft** commit собранных файлов + deterministic ops →
+   translation PR (технический soft-publish; diagnostics ≠ product). Частичные
+   model-fail → остальные всё равно в draft; failed paths = `null` для critic.
+   Нет ни файлов, ни ops → commit пока нет, процесс идёт к critic.
+6. Critic по §4.1 (обязательный gate → reviewed commits). Затем arbiter по
+   §4.2 только на reviewed bytes. Нет успешного critic → RED/checkpoint,
+   не GREEN/YELLOW на сыром dump.
+7. QA comment + terminal status (честный цвет).
 
 Новый `doc_translate` всегда удаляет прежнюю remote translation branch этого
 source PR и открытые checkpoints старого translation PR, создаёт чистую ветку
@@ -329,7 +342,9 @@ calls. Иначе job идёт целиком, даже если сама пер
 ## 7. Публикация и отчёт
 
 - Репозиторий `ydb-platform/ydb`, base = base source PR.
-- Публикуем любой технически собранный UTF-8 файл.
+- Технически собранный UTF-8 может уйти в ветку как **draft** (soft-publish
+  diagnostics). Reader-facing product / success job — после **успешного
+  critic** (reviewed) и arbiter GREEN/YELLOW. Soft-publish ≠ «перевод готов».
 - Один актуальный QA comment в translation PR (или RED в source PR, если PR
   перевода нет): цвет, краткое резюме, cost job (unknown ≠ 0).
 - В source PR — один обновляемый комментарий со ссылкой на translation PR.
@@ -341,7 +356,8 @@ calls. Иначе job идёт целиком, даже если сама пер
   mypy / `git diff --check` один раз перед release.
 - Fakes для model/YDB/GitHub. Mutation testing и quota-матрицы без отдельной
   просьбы не делать.
-- TOC delta и soft-publish — обязательные witnesses.
+- TOC delta, soft-publish diagnostics, identifier atoms, draft/reviewed gate —
+  обязательные witnesses.
 - Работа в `main` без feature branches: частые commits + push.
 - Два параллельных потока только без пересечения production-файлов.
 - При смене требований — переписать на месте, не дублировать старое рядом.
@@ -349,5 +365,7 @@ calls. Иначе job идёт целиком, даже если сама пер
   probe, не production translate.
 
 Acceptance (минимум): auth; budget; dependency pull A→A1; whole-file translate;
-TOC delta tests; critic apply+push; arbiter GREEN/YELLOW/RED; YELLOW не открывает
-checkpoint; continue с operator context; empty PR не создаётся при нуле commits.
+identifier atoms; optional presentation map; TOC delta tests; critic
+apply+push как reviewed gate; critic fail → RED; arbiter GREEN/YELLOW/RED
+только на reviewed; YELLOW не открывает checkpoint; continue с operator
+context; empty PR не создаётся при нуле commits.
