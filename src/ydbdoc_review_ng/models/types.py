@@ -53,6 +53,13 @@ class AttemptError(str, Enum):
 
 
 @dataclass(frozen=True, slots=True)
+class ModelToolCall:
+    id: str
+    name: str
+    arguments: str
+
+
+@dataclass(frozen=True, slots=True)
 class ModelRequest:
     role: ModelRole
     model: str
@@ -63,6 +70,11 @@ class ModelRequest:
     # Review roles can outlive the provider's silent-connection wall when the
     # generation budget is unbounded. Cap each request at its contract boundary.
     max_output_tokens: int | None = None
+    # OpenAI-compatible tool loop (critic). When ``messages`` is set it is the
+    # full chat history; ``prompt`` may be a non-empty audit label.
+    tools: FrozenJson | None = field(default=None, repr=False)
+    messages: FrozenJson | None = field(default=None, repr=False)
+    tool_choice: str | None = None
 
     def __post_init__(self) -> None:
         if type(self.role) is not ModelRole:
@@ -81,8 +93,19 @@ class ModelRequest:
             type(self.max_output_tokens) is not int or self.max_output_tokens < 1
         ):
             raise ValueError("max_output_tokens must be a positive integer or None")
+        if self.tool_choice is not None and (
+            type(self.tool_choice) is not str or not self.tool_choice.strip()
+        ):
+            raise ValueError("tool_choice must be a non-empty string or None")
         if self.schema is not None:
             object.__setattr__(self, "schema", freeze_json(self.schema))
+        if self.tools is not None:
+            object.__setattr__(self, "tools", freeze_json(self.tools))
+        if self.messages is not None:
+            frozen = freeze_json(self.messages)
+            if type(frozen) is not tuple or not frozen:
+                raise ValueError("messages must be a non-empty JSON array")
+            object.__setattr__(self, "messages", frozen)
 
 
 @dataclass(frozen=True, slots=True)
@@ -242,6 +265,7 @@ class ModelCallResult:
     text: str | None = field(repr=False)
     failure: AttemptError | None
     attempts: tuple[AttemptResult, ...]
+    tool_calls: tuple[ModelToolCall, ...] = ()
 
     @property
     def success(self) -> bool:

@@ -29,6 +29,7 @@ from ydbdoc_review_ng.models.types import (
     HttpTransport,
     ModelCallResult,
     ModelRequest,
+    ModelToolCall,
     ModelUsage,
     TransportFailure,
     YandexCredentials,
@@ -74,7 +75,7 @@ class UrllibTransport:
 
 
 class _ParsedResponse:
-    __slots__ = ("error", "model", "role", "status", "text", "usage")
+    __slots__ = ("error", "model", "role", "status", "text", "tool_calls", "usage")
 
     def __init__(
         self,
@@ -85,6 +86,7 @@ class _ParsedResponse:
         status: str | None,
         text: str | None,
         usage: ModelUsage,
+        tool_calls: tuple[ModelToolCall, ...] = (),
     ) -> None:
         self.error = error
         self.model = model
@@ -92,6 +94,7 @@ class _ParsedResponse:
         self.status = status
         self.text = text
         self.usage = usage
+        self.tool_calls = tool_calls
 
 
 def _token(value: object) -> int | None:
@@ -175,6 +178,37 @@ def _parse_native(document: Mapping[str, object], role: ModelRole) -> _ParsedRes
     )
 
 
+def _parse_tool_calls(message: Mapping[str, object] | None) -> tuple[ModelToolCall, ...]:
+    if message is None:
+        return ()
+    raw = message.get("tool_calls")
+    if raw is None:
+        return ()
+    if type(raw) is not list or not raw:
+        return ()
+    parsed: list[ModelToolCall] = []
+    for item in raw:
+        mapping = _mapping(item)
+        if mapping is None:
+            return ()
+        call_id = _string(mapping.get("id"))
+        function = _mapping(mapping.get("function"))
+        if call_id is None or function is None:
+            return ()
+        name = _string(function.get("name"))
+        arguments = function.get("arguments")
+        if name is None:
+            return ()
+        if type(arguments) is dict:
+            arguments_text = json.dumps(arguments, ensure_ascii=False, separators=(",", ":"))
+        elif type(arguments) is str:
+            arguments_text = arguments
+        else:
+            return ()
+        parsed.append(ModelToolCall(call_id, name, arguments_text))
+    return tuple(parsed)
+
+
 def _parse_openai(document: Mapping[str, object], role: ModelRole) -> _ParsedResponse:
     # Some local/test gateways expose the native Yandex envelope even when the
     # OpenAI-compatible endpoint was selected. Accept that envelope as a
@@ -196,12 +230,15 @@ def _parse_openai(document: Mapping[str, object], role: ModelRole) -> _ParsedRes
     choice = _mapping(choices[0])
     message = _mapping(choice.get("message")) if choice is not None else None
     status = _string(choice.get("finish_reason")) if choice is not None else None
-    text = _string(message.get("content")) if message is not None else None
+    # content may be JSON null on tool_calls turns; distinguish missing key later.
+    raw_content = None if message is None else message.get("content")
+    text = _string(raw_content) if raw_content is not None else None
     response_role = _string(message.get("role")) if message is not None else None
+    tool_calls = _parse_tool_calls(message)
     error = (
         AttemptError.CONTENT_FILTER
         if status == "content_filter"
-        else _semantic_error(status, "stop", text, usage, role)
+        else _semantic_error(status, "stop", text, usage, role, tool_calls=tool_calls)
     )
     return _ParsedResponse(
         error=error,
@@ -210,6 +247,7 @@ def _parse_openai(document: Mapping[str, object], role: ModelRole) -> _ParsedRes
         status=status,
         text=text,
         usage=usage,
+        tool_calls=tool_calls,
     )
 
 
@@ -219,9 +257,14 @@ def _semantic_error(
     text: str | None,
     usage: ModelUsage,
     role: ModelRole,
+    *,
+    tool_calls: tuple[ModelToolCall, ...] = (),
 ) -> AttemptError | None:
     if status is None:
         return AttemptError.MALFORMED_RESPONSE
+    # Intermediate OpenAI tool turn: finish_reason=tool_calls with content=null.
+    if status == "tool_calls" and tool_calls:
+        return None
     if status != final_status:
         return AttemptError.NON_FINAL
     if text is None:
@@ -415,7 +458,9 @@ class _BaseYandexClient:
             self._recorder(attempt)
             attempts.append(attempt)
             if error is None:
-                return ModelCallResult(parsed.text, None, tuple(attempts))
+                return ModelCallResult(
+                    parsed.text, None, tuple(attempts), parsed.tool_calls
+                )
             if error is AttemptError.CONTENT_FILTER and attempt_number < max_attempts:
                 continue
             return ModelCallResult(None, error, tuple(attempts))
@@ -459,10 +504,13 @@ class YandexOpenAIClient(_BaseYandexClient):
     def _payload(
         self, request: ModelRequest, model_uri: str, max_tokens: int
     ) -> dict[str, object]:
-        messages: list[dict[str, str]] = []
-        if request.developer_prompt is not None:
-            messages.append({"role": "developer", "content": request.developer_prompt})
-        messages.append({"role": "user", "content": request.prompt})
+        if request.messages is not None:
+            messages = mutable_json(request.messages)
+        else:
+            messages = []
+            if request.developer_prompt is not None:
+                messages.append({"role": "developer", "content": request.developer_prompt})
+            messages.append({"role": "user", "content": request.prompt})
         payload: dict[str, object] = {
             "model": model_uri,
             "stream": False,
@@ -474,6 +522,10 @@ class YandexOpenAIClient(_BaseYandexClient):
             }.get(request.role, "none"),
             "messages": messages,
         }
+        if request.tools is not None:
+            payload["tools"] = mutable_json(request.tools)
+            if request.tool_choice is not None:
+                payload["tool_choice"] = request.tool_choice
         if request.schema is not None:
             payload["response_format"] = {
                 "type": "json_schema",

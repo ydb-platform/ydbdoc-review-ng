@@ -708,3 +708,100 @@ def test_gpt_oss_translate_is_rejected_without_starting_an_attempt() -> None:
     assert result.failure is AttemptError.UNSUPPORTED_MODEL
     assert result.attempts == ()
     assert transport.requests == []
+
+
+def test_openai_tool_calls_with_null_content_is_success_intermediate() -> None:
+    body = {
+        "id": "tool-1",
+        "model": "deepseek-v4-flash/latest",
+        "choices": [
+            {
+                "finish_reason": "tool_calls",
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {
+                                "name": "read",
+                                "arguments": '{"path":"docs/en/a.md","start_line":1,"end_line":1}',
+                            },
+                        }
+                    ],
+                },
+            }
+        ],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+    }
+    transport = FakeTransport(HttpResponse(200, json.dumps(body).encode()))
+    result = openai_client(transport, []).invoke(
+        ModelRequest(
+            ModelRole.CRITIC,
+            "deepseek-v4-flash",
+            "critic tool turn",
+            None,
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "read",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                }
+            ],
+            messages=[
+                {"role": "user", "content": "edit the draft"},
+            ],
+            tool_choice="required",
+        )
+    )
+    assert result.failure is None
+    assert result.text is None
+    assert len(result.tool_calls) == 1
+    assert result.tool_calls[0].name == "read"
+    assert result.tool_calls[0].id == "call_1"
+    payload = json.loads(transport.requests[0].body.decode())
+    assert "tools" in payload
+    assert payload["tool_choice"] == "required"
+    assert payload["messages"] == [{"role": "user", "content": "edit the draft"}]
+
+
+def test_openai_payload_round_trips_role_tool_messages() -> None:
+    transport = FakeTransport(openai_response(text="done", status="stop"))
+    messages = [
+        {"role": "user", "content": "start"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "finish", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": '{"ok":true}'},
+    ]
+    openai_client(transport, []).invoke(
+        ModelRequest(
+            ModelRole.CRITIC,
+            "deepseek-v4-flash",
+            "tool result turn",
+            None,
+            messages=messages,
+        )
+    )
+    payload = json.loads(transport.requests[0].body.decode())
+    assert payload["messages"] == messages
+    assert "tools" not in payload
+
+
+def test_openai_translator_payload_has_no_tools_by_default() -> None:
+    transport = FakeTransport(openai_response())
+    openai_client(transport, []).invoke(request("deepseek-v4-flash"))
+    payload = json.loads(transport.requests[0].body.decode())
+    assert "tools" not in payload
+    assert payload["messages"][-1]["role"] == "user"
