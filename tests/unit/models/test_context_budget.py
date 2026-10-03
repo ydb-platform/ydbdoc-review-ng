@@ -75,7 +75,11 @@ def test_production_review_roles_cap_generation_under_reasoning_budget(builder) 
     assert [message["role"] for message in payload["messages"]] == ["developer", "user"]
     assert "Термин" in payload["messages"][1]["content"]
     assert "Уточните термин" in payload["messages"][1]["content"]
-    assert "response_format" in payload
+    if builder is build_pr_critic_request:
+        assert "tools" in payload
+        assert "response_format" not in payload
+    else:
+        assert "response_format" in payload
 
 
 def test_packing_budget_exposes_only_complete_wire_input_requirement() -> None:
@@ -117,9 +121,10 @@ def test_critic_caps_max_tokens_instead_of_burning_full_remainder() -> None:
     result = model.invoke(request)
     body = transport.requests[0].body
     assert result.success
-    assert request.max_output_tokens == 32_768
-    assert json.loads(body)["max_tokens"] == 32_768
+    assert request.max_output_tokens == 4_096
+    assert json.loads(body)["max_tokens"] == 4_096
     assert json.loads(body)["max_tokens"] < 1_048_576 - len(body)
+    assert "tools" in json.loads(body)
 
 
 def test_response_content_and_size_do_not_change_wire_budget() -> None:

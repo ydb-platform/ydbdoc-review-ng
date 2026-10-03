@@ -219,7 +219,9 @@ def run_tool_critic_chunk(
             last_failure = error.reason
             last_detail = error.detail
             continue
-        except (ToolError, ValueError, TypeError, UnicodeError, RuntimeError) as error:
+        except (ToolError, ValueError, TypeError, UnicodeError) as error:
+            # Do not catch RuntimeError: PersistenceError and other infra failures
+            # must abort the job, not convert into an unreviewed RED retry.
             last_failure = LoopFailureReason.TOOL_ERROR
             last_detail = str(error)
             continue

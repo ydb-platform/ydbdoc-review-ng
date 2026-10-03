@@ -154,6 +154,10 @@ class ReplayServices(RuntimeServices):
         return []
 
     def model(self, request):
+
+        body = json.loads(request.body)
+        if body.get("tools"):
+            return super().model(request)
         from ydbdoc_review_ng.models import HttpResponse
 
         body = json.loads(request.body)

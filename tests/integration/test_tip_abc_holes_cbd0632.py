@@ -13,7 +13,12 @@ from __future__ import annotations
 import json
 from decimal import Decimal
 
-from _runtime_services import raw_repair_context, request_prompt, request_schema
+from _runtime_services import (
+    raw_repair_context,
+    request_prompt,
+    request_schema,
+    translation_pr_files_from_body,
+)
 from test_checkpoint_capture import CaptureServices, ENV
 from test_continue_translation import ContinueServices
 
@@ -52,29 +57,20 @@ def test_a_critic_malformed_utf8_toc_soft_publishes_on_production_validate() -> 
             self.critic_payloads = [MALFORMED, MALFORMED]
             self.arbiter_seen: list[dict] = []
 
+        def _critic_files_for_chunk(self, drafts, body):
+            files = super()._critic_files_for_chunk(drafts, body)
+            if EN + TOC in files:
+                files[EN + TOC] = self.critic_payloads.pop(0)
+            return files
+
         def model(self, request):
+
             body = json.loads(request.body)
+            if body.get("tools"):
+                return super().model(request)
             schema = request_schema(body)
             if schema is not None:
                 props = schema["schema"]["properties"]
-                if "files" in props:
-                    self.roles.append("critic")
-                    files = json.loads(
-                        raw_repair_context(request_prompt(body), "translation-pr-files")
-                    )
-                    files[EN + TOC] = self.critic_payloads.pop(0)
-                    text = json.dumps({"files": files})
-                    payload = {
-                        "model": "t",
-                        "choices": [
-                            {
-                                "finish_reason": "stop",
-                                "message": {"role": "assistant", "content": text},
-                            }
-                        ],
-                        "usage": {"prompt_tokens": 1, "completion_tokens": 1},
-                    }
-                    return HttpResponse(200, json.dumps(payload).encode(), Decimal(".01"))
                 if "findings" in props:
                     self.roles.append("arbiter")
                     seen = json.loads(
@@ -123,28 +119,22 @@ def test_a_doc_verify_malformed_branch_toc_reaches_critic() -> None:
             super().__init__(names=("page",), stop=None)
             self.critic_targets: list[dict] = []
 
-        def model(self, request):
-            body = json.loads(request.body)
-            schema = request_schema(body)
-            if schema is not None and "files" in schema["schema"]["properties"]:
-                self.roles.append("critic")
-                files = json.loads(
-                    raw_repair_context(request_prompt(body), "translation-pr-files")
-                )
-                self.critic_targets.append(dict(files))
+        def _on_critic_tool_session(self, body):
+            super()._on_critic_tool_session(body)
+            self.critic_targets.append(dict(translation_pr_files_from_body(body)))
+
+        def _critic_files_for_chunk(self, drafts, body):
+            files = super()._critic_files_for_chunk(drafts, body)
+            if EN + TOC in files:
                 files[EN + TOC] = FIXED
-                text = json.dumps({"files": files})
-                payload = {
-                    "model": "t",
-                    "choices": [
-                        {
-                            "finish_reason": "stop",
-                            "message": {"role": "assistant", "content": text},
-                        }
-                    ],
-                    "usage": {"prompt_tokens": 1, "completion_tokens": 1},
-                }
-                return HttpResponse(200, json.dumps(payload).encode(), Decimal(".01"))
+            return files
+
+        def model(self, request):
+
+            body = json.loads(request.body)
+            if body.get("tools"):
+                return super().model(request)
+            schema = request_schema(body)
             if schema is not None and "findings" in schema["schema"]["properties"]:
                 self.roles.append("arbiter")
                 text = json.dumps({"verdict": "GREEN", "findings": []})
@@ -188,7 +178,9 @@ def test_a_doc_verify_malformed_branch_toc_reaches_critic() -> None:
     assert result.verdict is Verdict.GREEN
     assert "critic" in services.roles
     assert services.critic_targets, "critic must receive the branch TOC"
-    assert services.critic_targets[0].get(EN + TOC) == MALFORMED
+    assert any(
+        target.get(EN + TOC) == MALFORMED for target in services.critic_targets
+    ), services.critic_targets
     assert services.files[EN + TOC].decode("utf-8") == FIXED
 
 
@@ -199,18 +191,21 @@ def test_b_full_source_toc_delete_accepts_arbiter_green() -> None:
         def __init__(self):
             super().__init__(names=(), stop="rename_red")
 
+        def _critic_files_for_chunk(self, drafts, body):
+            return {}
+
         def model(self, request):
+
             body = json.loads(request.body)
+            if body.get("tools"):
+                return super().model(request)
             schema = request_schema(body)
             if schema is None:
                 return super().model(request)
             props = schema["schema"]["properties"]
             if "translation_required" in props:
                 return super().model(request)
-            if "files" in props:
-                self.roles.append("critic")
-                text = json.dumps({"files": {}})
-            elif "findings" in props:
+            if "findings" in props:
                 self.roles.append("arbiter")
                 text = json.dumps({"verdict": "GREEN", "findings": []})
             else:
@@ -255,8 +250,14 @@ def test_c_green_continue_noop_updates_stale_red_qa() -> None:
     """§7: continue GREEN with publisher.noop must refresh the one current QA comment."""
 
     class ZeroCommitDelete(ContinueServices):
+        def _critic_files_for_chunk(self, drafts, body):
+            return {}
+
         def model(self, request):
+
             body = json.loads(request.body)
+            if body.get("tools"):
+                return super().model(request)
             props = request_schema(body)["schema"]["properties"]
             role = (
                 "direction"
@@ -280,20 +281,6 @@ def test_c_green_continue_noop_updates_stale_red_qa() -> None:
                                 "role": "assistant",
                                 "content": '{"verdict":"GREEN","findings":[]}',
                             },
-                        }
-                    ],
-                    "usage": {"prompt_tokens": 1, "completion_tokens": 1},
-                }
-                return HttpResponse(200, json.dumps(payload).encode(), Decimal(".01"))
-            if role == "critic":
-                self.roles.append(role)
-                text = json.dumps({"files": {}})
-                payload = {
-                    "model": "t",
-                    "choices": [
-                        {
-                            "finish_reason": "stop",
-                            "message": {"role": "assistant", "content": text},
                         }
                     ],
                     "usage": {"prompt_tokens": 1, "completion_tokens": 1},

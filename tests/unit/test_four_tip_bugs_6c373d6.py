@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 
+from tests.support.scripted_models import ScriptedModels
 from ydbdoc_review_ng.domain import RepoPath
 from ydbdoc_review_ng.models import AttemptError, ModelCallResult
 from ydbdoc_review_ng.quality.repair import review_pr
@@ -114,17 +115,14 @@ def test_bug2_review_pr_keeps_malformed_critic_toc_for_arbiter() -> None:
     with __import__("pytest").raises(RuntimeBoundaryError):
         _toc(bad.encode(), "translation_plan_toc_correction_invalid")
 
-    class Models:
-        def __init__(self) -> None:
-            self.payloads = [
-                json.dumps({"files": {page: page_text}}),
-                json.dumps({"files": {toc: bad}}),
-                json.dumps({"verdict": "GREEN", "findings": []}),
-                json.dumps({"verdict": "GREEN", "findings": []}),
-            ]
-
-        def invoke(self, request):
-            return ModelCallResult(self.payloads.pop(0), None, ())
+    models = ScriptedModels(
+        [
+            json.dumps({"files": {page: page_text}}),
+            json.dumps({"files": {toc: bad}}),
+            json.dumps({"verdict": "GREEN", "findings": []}),
+            json.dumps({"verdict": "GREEN", "findings": []}),
+        ]
+    )
 
     seen: list[dict[str, bytes]] = []
 
@@ -158,7 +156,7 @@ def test_bug2_review_pr_keeps_malformed_critic_toc_for_arbiter() -> None:
         )
 
     corrected, final = review_pr(
-        Models(),
+        models,
         critic_model="critic",
         arbiter_model="arbiter",
         source_files={

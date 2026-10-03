@@ -24,17 +24,17 @@ Semantic flow в `REQUIREMENTS_RU.md`:
 | P2 BlobDepot golden harness (one-shot critic era) | **DONE** (prior) |
 | REQUIREMENTS §4.1 tool-using critic | **DONE (docs)** + adversarial fixups |
 | Plan `knowledge/tool-using-critic-plan.md` | **DONE (docs)** + adversarial fixups |
-| Runtime tool loop / client `tool_calls` | **NOT STARTED** (P1 next) |
+| Runtime tool loop / client `tool_calls` | **DONE (offline)** P1a–g; P2 live next |
 | P0 live DeepSeek tools capability probe | **PASS / GO** — `knowledge/p0-deepseek-tools-probe.md` |
-| Offline stub-tool integration tests | **NOT STARTED** |
+| Offline stub-tool integration tests | **PASS** (`pytest -m 'not live'`, 2026-10-03) |
 
-> [!important] P0 green; P1 implementation unblocked
+> [!important] P0+P1 offline green; P2 live still required for #54888
 > Live probe (2026-10-03): DeepSeek `deepseek-v4-flash` on
 > `ai.api.cloud.yandex.net` returns `finish_reason=tool_calls` with
 > `content=null` and accepts `role=tool` multi-turn. Shell used
 > `YANDEX_CLOUD_*_DOC_REVIEW` (production `YANDEX_*` absent locally).
-> Tip still runs one-shot JSON critic until P1 cutover. #54888 re-run
-> only after P2 + Actions `YANDEX_*`.
+> Tip now uses tool-using critic offline. #54888 re-run only after P2
+> + Actions `YANDEX_*`.
 
 ## Critic TRANSPORT (runs 37009373894 → 37027975808) — real root cause
 

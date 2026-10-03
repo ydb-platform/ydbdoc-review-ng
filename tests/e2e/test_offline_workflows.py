@@ -23,10 +23,12 @@ from ydbdoc_review_ng.application import (
     WorkflowStage,
 )
 from ydbdoc_review_ng.direction import Direction
+from tests.support.scripted_models import ScriptedModels
 from ydbdoc_review_ng.domain import (
     GitSha,
     Locale,
     Mode,
+    ModelRole,
     RepoPath,
     RepositoryId,
     SnapshotRef,
@@ -384,15 +386,29 @@ class ContentAdapter:
 class CriticExecutor:
     def __init__(self, case: Case, responses: list[str]) -> None:
         self.case = case
-        self.responses = responses
+        self._scripted = ScriptedModels(list(responses))
+
+    @property
+    def responses(self) -> list:
+        return self._scripted.payloads
 
     def invoke(self, request: ModelRequest, /) -> ModelCallResult:
         role = request.role.value
-        self.case.calls.append(role)
-        self.case.events.append(role)
-        assert request.schema is not None
-        assert self.responses, "unexpected extra semantic call"
-        return ModelCallResult(self.responses.pop(0), None, ())
+        messages = request.messages
+        roles = (
+            [
+                message.get("role")
+                for message in messages
+                if isinstance(message, dict)
+            ]
+            if messages is not None
+            else []
+        )
+        mid_tool_session = "assistant" in roles or "tool" in roles
+        if request.role is not ModelRole.CRITIC or not mid_tool_session:
+            self.case.calls.append(role)
+            self.case.events.append(role)
+        return self._scripted.invoke(request)
 
 
 class ReviewAdapter:

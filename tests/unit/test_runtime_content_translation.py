@@ -51,6 +51,7 @@ from ydbdoc_review_ng.translation import (
     prepare_document,
 )
 from ydbdoc_review_ng.translation_plan import TranslationPlan
+from tests.support.scripted_models import ScriptedModels as _SupportScripted
 
 SOURCE_PATH = RepoPath("ydb/docs/ru/core/page.md")
 TARGET_PATH = RepoPath("ydb/docs/en/core/page.md")
@@ -59,10 +60,21 @@ SNAPSHOT = SnapshotRef(RepositoryId("ydb-platform/ydb"), GitSha("a" * 40))
 
 class ScriptedModels:
     def __init__(self, responses: list[str | ModelCallResult]) -> None:
-        self.responses = responses
+        self.responses = list(responses)
         self.calls: list[ModelRequest] = []
+        self._tool = _SupportScripted(list(responses))
 
     def invoke(self, request: ModelRequest, /) -> ModelCallResult:
+        from ydbdoc_review_ng.domain import ModelRole
+
+        if request.role is ModelRole.CRITIC or (
+            request.tools is not None
+            or (request.schema is None and request.messages is not None)
+        ):
+            # Tool-using critic: reuse the shared expander (legacy files JSON → tools).
+            result = self._tool.invoke(request)
+            self.calls = self._tool.calls
+            return result
         response = self.responses[len(self.calls)]
         self.calls.append(request)
         if type(response) is ModelCallResult:
@@ -349,7 +361,8 @@ def test_production_models_ignore_legacy_model_overrides(role) -> None:
             validate_files=lambda files: None,
         )
         calls = [call for call in review_models.calls if call.role.value == role]
-    assert [call.model for call in calls] == ["deepseek-v4-flash"]
+    assert calls
+    assert {call.model for call in calls} == {"deepseek-v4-flash"}
     provider = YandexOpenAIClient(
         YandexCredentials("secret", "folder"), lambda wire: None, lambda attempt: None
     )

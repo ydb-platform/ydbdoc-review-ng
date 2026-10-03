@@ -5,6 +5,8 @@ import json
 import re
 from decimal import Decimal
 
+from tests.support.tool_critic_scripts import finish_only, patch_read_finish
+
 
 def raw_translation_source(prompt):
     if "\nSegments: " in prompt:
@@ -168,10 +170,14 @@ class RuntimeServices:
             "ydb/docs/en/core/page.md": b"# Old\n",
         }
         self.blob = None
+        self.blobs: dict[str, bytes] = {}
+        self.tree: list[dict] = []
         self.semantic_responses = [
             {"files": {"ydb/docs/en/core/page.md": "# Translated\n"}},
             {"verdict": "GREEN", "findings": []},
         ]
+        self._tool_queue: list = []
+        self._commit_n = 0
 
     def execute(self, statement, parameters):
         self.audit.append(dict(parameters))
@@ -284,14 +290,31 @@ class RuntimeServices:
             return {"tree": {"sha": "c" * 40}}
         if path == "/git/blobs":
             self.blob = base64.b64decode(payload["content"])
-            return {"sha": "c" * 40}
+            sha = f"{len(self.blobs) + 0xC0:040x}"
+            self.blobs[sha] = self.blob
+            return {"sha": sha}
         if path == "/git/trees":
+            self.tree = list(payload.get("tree") or ())
             return {"sha": "d" * 40}
         if path == "/git/commits":
+            # Unique tip SHAs: GitHubBackend caches contents by commit; reusing one
+            # SHA after critic push would keep stale draft bytes forever.
+            self._commit_n += 1
+            self.translated = f"{0xE000 + self._commit_n:040x}"
             return {"sha": self.translated}
         if path == "/git/refs" or path.startswith("/git/refs/heads/"):
             self.branch_head = payload["sha"]
-            self.files["ydb/docs/en/core/page.md"] = self.blob
+            for item in self.tree:
+                path_name = item.get("path")
+                sha = item.get("sha")
+                if not isinstance(path_name, str):
+                    continue
+                if sha is None:
+                    self.files.pop(path_name, None)
+                elif sha in self.blobs:
+                    self.files[path_name] = self.blobs[sha]
+                elif self.blob is not None and path_name.endswith("page.md"):
+                    self.files[path_name] = self.blob
             return {}
         if path.startswith("/commits/") and "/check-runs?" in path:
             return {
@@ -349,6 +372,9 @@ class RuntimeServices:
         from ydbdoc_review_ng.models import HttpResponse
 
         body = json.loads(request.body)
+        if body.get("tools"):
+            return self._critic_tool_http(body)
+
         schema = request_schema(body)
         if schema is None:
             prompt = request_prompt(body)
@@ -402,6 +428,140 @@ class RuntimeServices:
                 }
             }
         return HttpResponse(200, json.dumps(payload).encode(), Decimal("0.01"))
+
+    def _on_critic_tool_session(self, body: dict) -> None:
+        """Hook once per critic tool session (developer+user). Subclasses record roles."""
+
+    def _critic_files_for_chunk(
+        self, drafts: dict[str, str | None], body: dict
+    ) -> dict[str, str] | None:
+        """Optional path→reviewed text for this chunk. None uses semantic_responses."""
+        return None
+
+    def _critic_tool_http(self, body: dict):
+        from ydbdoc_review_ng.models import HttpResponse
+
+        roles = [
+            message.get("role")
+            for message in body.get("messages", [])
+            if isinstance(message, dict)
+        ]
+        if roles == ["developer", "user"] or roles == ["user"]:
+            # New critic session: drop leftover turns from a failed attempt.
+            self._tool_queue = []
+            self._on_critic_tool_session(body)
+        if not self._tool_queue:
+            self._refill_tool_queue(body)
+        assert self._tool_queue, "unexpected critic tool call without queued turns"
+        result = self._tool_queue.pop(0)
+        self.events.append(("CRITIC", ("tools",)))
+        tool_calls = [
+            {
+                "id": call.id,
+                "type": "function",
+                "function": {"name": call.name, "arguments": call.arguments},
+            }
+            for call in result.tool_calls
+        ]
+        payload = {
+            "model": "test-model",
+            "choices": [
+                {
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": tool_calls,
+                    },
+                }
+            ],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+        }
+        return HttpResponse(200, json.dumps(payload).encode(), Decimal("0.01"))
+
+    def _enqueue_reviewed_files(
+        self, drafts: dict[str, str | None], reviewed: dict[str, str]
+    ) -> None:
+        if not reviewed:
+            self._tool_queue.extend([finish_only()])
+            return
+        for path, text in reviewed.items():
+            draft_text = drafts.get(path)
+            draft = b"" if draft_text is None else draft_text.encode("utf-8")
+            reviewed_b = text.encode("utf-8") if isinstance(text, str) else b""
+            self._tool_queue.extend(patch_read_finish(path, draft, reviewed_b))
+
+    def _refill_tool_queue(self, body: dict) -> None:
+        drafts = translation_pr_files_from_body(body)
+        custom = self._critic_files_for_chunk(drafts, body)
+        if custom is not None:
+            self._enqueue_reviewed_files(drafts, custom)
+            return
+        assert self.semantic_responses, "unexpected extra semantic model call"
+        values = self.semantic_responses[0]
+        if "verdict" in values:
+            # Critic tool loop should not see arbiter payloads.
+            raise AssertionError("critic tools requested but next semantic response is arbiter")
+        files = values.get("files")
+        assert isinstance(files, dict), "critic semantic response must contain files"
+        requested = set(drafts)
+        matched = {path: text for path, text in files.items() if path in requested}
+        leftover = {path: text for path, text in files.items() if path not in requested}
+        if leftover:
+            values["files"] = leftover
+        else:
+            self.semantic_responses.pop(0)
+        if not matched and not drafts:
+            self._tool_queue.extend([finish_only()])
+            return
+        if not matched:
+            # No scripted correction for this chunk: no-op finish keeps draft.
+            self._tool_queue.extend([finish_only()])
+            return
+        matched_text = {
+            path: (text if isinstance(text, str) else "") for path, text in matched.items()
+        }
+        self._enqueue_reviewed_files(drafts, matched_text)
+
+
+def translation_pr_files_from_body(body: dict) -> dict[str, str | None]:
+    for message in body.get("messages", []):
+        if message.get("role") != "user":
+            continue
+        content = message.get("content")
+        if not isinstance(content, str) or "<translation-pr-files>" not in content:
+            continue
+        block = content.split("<translation-pr-files>\n", 1)[1].split(
+            "\n</translation-pr-files>", 1
+        )[0]
+        rendered = json.loads(block)
+        out: dict[str, str | None] = {}
+        for path, text in rendered.items():
+            if text is None:
+                out[path] = None
+            elif isinstance(text, str):
+                out[path] = text
+        return out
+    return {}
+
+
+def source_pr_files_from_body(body: dict) -> dict[str, str | None]:
+    for message in body.get("messages", []):
+        if message.get("role") != "user":
+            continue
+        content = message.get("content")
+        if not isinstance(content, str) or "<source-pr-files>" not in content:
+            continue
+        block = content.split("<source-pr-files>\n", 1)[1].split("\n</source-pr-files>", 1)[0]
+        rendered = json.loads(block)
+        out: dict[str, str | None] = {}
+        for path, text in rendered.items():
+            if text is None:
+                out[path] = None
+            elif isinstance(text, str):
+                out[path] = text
+        return out
+    return {}
 
 
 class InstalledContinueServices(RuntimeServices):

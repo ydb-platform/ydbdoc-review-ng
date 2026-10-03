@@ -13,6 +13,8 @@ from _runtime_services import (
     request_prompt,
     request_schema,
     response_text,
+    source_pr_files_from_body,
+    translation_pr_files_from_body,
 )
 from test_continue_translation import CONTEXT, EN, RU, LifecycleServices
 
@@ -80,7 +82,97 @@ class ReviewServices(LifecycleServices):
                 self.branch_head = "f" * 40
         return super().github(method, path, payload)
 
+    def _on_critic_tool_session(self, body):
+        if not self.continuing:
+            return super()._on_critic_tool_session(body)
+        prompt = request_prompt(body)
+        files = translation_pr_files_from_body(body)
+        self.roles.append("critic")
+        self.critics += 1
+        self.prompts.append(("critic", prompt))
+        self.calls.append(("critic", tuple(files), {"properties": {"files": {}}}))
+        self.timeline.append("critic")
+        if self.failure == "critic":
+            raise TimeoutError("model unavailable")
+        if self.move_after == "critic":
+            self.branch_head = "f" * 40
+            self.snapshots[self.branch_head] = dict(self.files)
+
+    def _critic_files_for_chunk(self, drafts, body):
+        if not self.continuing:
+            return super()._critic_files_for_chunk(drafts, body)
+        sources = source_pr_files_from_body(body)
+        files = {
+            path: ("# Translated\n" if content is None else content)
+            for path, content in drafts.items()
+        }
+        scripted = None
+        if self.repair_payload is not None:
+            parsed = json.loads(self.repair_payload)
+            scripted = parsed.get("files") if type(parsed) is dict else None
+        for path, current in list(files.items()):
+            outcomes = self.outcomes.get(path, [])
+            outcome = outcomes.pop(0) if outcomes else "green"
+            self.arbiter_outcomes[path] = outcome
+            if type(scripted) is dict and path in scripted:
+                files[path] = scripted[path]
+                continue
+            if outcome == "repair" and not self.repair_uses_current_values:
+                source = sources.get(path.replace("/en/", "/ru/")) or ""
+                if current.startswith("# Whole pinned translation"):
+                    files[path] = source.replace("Source", "Repaired")
+                else:
+                    files[path] = source.splitlines(keepends=True)[0].replace(
+                        "Source", "Repaired"
+                    ) + "".join(current.splitlines(keepends=True)[1:])
+            if outcome == "repair" and self.failure == "repair":
+                raise TimeoutError("model unavailable")
+            if outcome == "repair" and self.move_after == "repair":
+                self.branch_head = "f" * 40
+                self.snapshots[self.branch_head] = dict(self.files)
+        return files
+
     def model(self, request):
+
+        body = json.loads(request.body)
+        if body.get("tools"):
+            if self.continuing and self.repair_payload is not None:
+                parsed = json.loads(self.repair_payload)
+                if type(parsed) is not dict or "files" not in parsed:
+                    roles = [
+                        message.get("role")
+                        for message in body.get("messages", [])
+                        if isinstance(message, dict)
+                    ]
+                    if roles == ["developer", "user"] or roles == ["user"]:
+                        self.roles.append("critic")
+                        self.critics += 1
+                        self.timeline.append("critic")
+                        self.prompts.append(("critic", request_prompt(body)))
+                        self.calls.append(
+                            ("critic", tuple(translation_pr_files_from_body(body)), {})
+                        )
+                    # stop without tool_calls → protocol failure → retry → unreviewed RED
+                    return HttpResponse(
+                        200,
+                        json.dumps(
+                            {
+                                "model": "test-model",
+                                "choices": [
+                                    {
+                                        "finish_reason": "stop",
+                                        "message": {
+                                            "role": "assistant",
+                                            "content": self.repair_payload,
+                                        },
+                                    }
+                                ],
+                                "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+                            }
+                        ).encode(),
+                        Decimal("0.01"),
+                    )
+            return super().model(request)
         if not self.continuing:
             return super().model(request)
         body = json.loads(request.body)
@@ -356,7 +448,18 @@ def test_critic_editor_merges_complete_document_and_finishes_green():
 
 def test_continuation_repair_publishes_exact_model_markdown():
     class FormattingReviewServices(ReviewServices):
+        def _critic_files_for_chunk(self, drafts, body):
+            files = super()._critic_files_for_chunk(drafts, body)
+            prompt = request_prompt(body)
+            if self.continuing and "Nested source item" in prompt and EN + "b.md" in files:
+                files[EN + "b.md"] = "* Parent corrected\n* Nested translated item\n"
+            return files
+
         def model(self, request):
+
+            body = json.loads(request.body)
+            if body.get("tools"):
+                return super().model(request)
             response = super().model(request)
             role = self.roles[-1]
             body = json.loads(request.body)

@@ -13,7 +13,6 @@ from ydbdoc_review_ng.models import AttemptError, ModelCallResult, ModelRequest
 def _draft_from_request(request: ModelRequest) -> dict[str, bytes]:
     prompt = request.prompt
     if "<translation-pr-files>" not in prompt:
-        # messages-based tool requests store prompt separately; recover from messages.
         if request.messages is None:
             return {}
         for message in request.messages:
@@ -47,12 +46,23 @@ def _expand_files_json(raw: str, request: ModelRequest) -> list[ModelCallResult]
         raise ValueError("files not object")
     drafts = _draft_from_request(request)
     turns: list[ModelCallResult] = []
-    # One path per chunk in production packing.
     for path, text in files.items():
         reviewed = text.encode("utf-8") if isinstance(text, str) else b""
         draft = drafts.get(path, b"")
         turns.extend(patch_read_finish(path, draft, reviewed))
     return turns or [finish_only()]
+
+
+def _is_critic_session_start(request: ModelRequest) -> bool:
+    if request.messages is None:
+        return True
+    # Fresh session: developer + user only (no assistant/tool turns yet).
+    roles = [
+        message.get("role")
+        for message in request.messages
+        if isinstance(message, dict)
+    ]
+    return roles == ["developer", "user"] or roles == ["user"]
 
 
 class ScriptedModels:
@@ -61,9 +71,15 @@ class ScriptedModels:
     def __init__(self, payloads: list[Any]) -> None:
         self.payloads: list[Any] = list(payloads)
         self.calls: list[ModelRequest] = []
+        self._active_plan: list[ModelCallResult] = []
 
     def invoke(self, request: ModelRequest) -> ModelCallResult:
         self.calls.append(request)
+        if request.role is ModelRole.CRITIC and _is_critic_session_start(request):
+            # Discard leftover turns from a failed previous session.
+            self._active_plan = []
+        if self._active_plan:
+            return self._active_plan.pop(0)
         if not self.payloads:
             raise AssertionError("scripted model out of payloads")
         item = self.payloads.pop(0)
@@ -77,9 +93,8 @@ class ScriptedModels:
                     expanded = _expand_files_json(item, request)
                 except (ValueError, json.JSONDecodeError):
                     return ModelCallResult(item, None, ())
-                # Current turn is the first expanded tool result; queue the rest.
                 head, *tail = expanded
-                self.payloads[0:0] = tail
+                self._active_plan = list(tail)
                 return head
             return ModelCallResult(item, None, ())
         raise TypeError(f"unsupported scripted payload: {type(item)!r}")

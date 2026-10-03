@@ -196,8 +196,34 @@ class CaptureServices(RuntimeServices):
             self.snapshots[self.branch_head]["ydb/docs/en/core/a.md"] = b"# Unpublished\n"
         return result
 
+    def _on_critic_tool_session(self, body):
+        self.roles.append("critic")
+        self.critics += 1
+        if self.failure == "critic":
+            raise TimeoutError("transport failed")
+        if self.failure == "repair" and self.stop == "review":
+            raise TimeoutError("transport failed")
+
+    def _critic_files_for_chunk(self, drafts, body):
+        files = {
+            path: ("# Translated\n" if content is None else content)
+            for path, content in drafts.items()
+        }
+        if self.stop == "review":
+            path = "ydb/docs/en/core/a.md"
+            if path in files:
+                files[path] = rewrite_markdown(files[path], "Corrected")
+        if self.stop == "critic_reverts_to_base":
+            for path in list(files):
+                name = path.rsplit("/", 1)[-1].removesuffix(".md")
+                files[path] = f"# Old {name}\n"
+        return files
+
     def model(self, request):
+
         body = json.loads(request.body)
+        if body.get("tools"):
+            return super().model(request)
         prompt = request_prompt(body)
         schema_wrapper = request_schema(body)
         if schema_wrapper is None:
@@ -486,7 +512,15 @@ def test_green_does_not_open_checkpoint():
 def test_provider_non_final_translation_is_rejected_before_publication():
     class NonFinalServices(CaptureServices):
         def model(self, request):
+
+            body = json.loads(request.body)
             response = super().model(request)
+            if body.get("tools"):
+                payload = json.loads(response.body)
+                choice = payload["choices"][0]
+                choice["finish_reason"] = "length"
+                choice["message"] = {"role": "assistant", "content": None, "tool_calls": []}
+                return HttpResponse(200, json.dumps(payload).encode(), Decimal("0.01"))
             if self.roles[-1] == "direction":
                 return response
             payload = json.loads(response.body)

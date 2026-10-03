@@ -14,7 +14,12 @@ from __future__ import annotations
 import json
 from decimal import Decimal
 
-from _runtime_services import raw_repair_context, request_prompt, request_schema
+from _runtime_services import (
+    raw_repair_context,
+    request_prompt,
+    request_schema,
+    translation_pr_files_from_body,
+)
 from test_checkpoint_capture import CaptureServices, ENV
 from test_continue_translation import ContinueServices
 
@@ -108,23 +113,22 @@ def test_verify_already_absent_intentional_toc_delete_keeps_green() -> None:
             super().__init__(names=("page",), stop=None)
             self.critic_targets: list[dict] = []
 
+        def _on_critic_tool_session(self, body):
+            super()._on_critic_tool_session(body)
+            self.critic_targets.append(dict(translation_pr_files_from_body(body)))
+
         def model(self, request):
+
             body = json.loads(request.body)
+            if body.get("tools"):
+                return super().model(request)
             schema = request_schema(body)
             if schema is None:
                 return super().model(request)
             props = schema["schema"]["properties"]
             if "translation_required" in props:
                 return super().model(request)
-            if "files" in props:
-                self.roles.append("critic")
-                files = json.loads(
-                    raw_repair_context(request_prompt(body), "translation-pr-files")
-                )
-                self.critic_targets.append(dict(files))
-                # Echo current translation-PR files; do not invent a TOC.
-                text = json.dumps({"files": files})
-            elif "findings" in props:
+            if "findings" in props:
                 self.roles.append("arbiter")
                 text = json.dumps({"verdict": "GREEN", "findings": []})
             else:
@@ -197,20 +201,17 @@ def test_verify_already_absent_intentional_toc_delete_yellow_no_checkpoint() -> 
             self.phase = "translate"
 
         def model(self, request):
+
             body = json.loads(request.body)
+            if body.get("tools"):
+                return super().model(request)
             schema = request_schema(body)
             if schema is None:
                 return super().model(request)
             props = schema["schema"]["properties"]
             if "translation_required" in props:
                 return super().model(request)
-            if "files" in props:
-                self.roles.append("critic")
-                files = json.loads(
-                    raw_repair_context(request_prompt(body), "translation-pr-files")
-                )
-                text = json.dumps({"files": files})
-            elif "findings" in props:
+            if "findings" in props:
                 self.roles.append("arbiter")
                 if self.phase == "verify":
                     files = json.loads(
@@ -280,8 +281,17 @@ def test_multi_continue_removes_stale_source_zero_commit_red_qa() -> None:
             self.phase = "translate"
             self.corrected = "items:\n- href: page.md\n  name: Corrected New\n"
 
+        def _critic_files_for_chunk(self, drafts, body):
+            files = super()._critic_files_for_chunk(drafts, body)
+            if self.phase == "continue_red" and EN + TOC in files:
+                files[EN + TOC] = self.corrected
+            return files
+
         def model(self, request):
+
             body = json.loads(request.body)
+            if body.get("tools"):
+                return super().model(request)
             schema = request_schema(body)
             if schema is None:
                 return super().model(request)
@@ -290,15 +300,7 @@ def test_multi_continue_removes_stale_source_zero_commit_red_qa() -> None:
                 return super().model(request)
             if "strings" in props:
                 return super().model(request)
-            if "files" in props:
-                self.roles.append("critic")
-                files = json.loads(
-                    raw_repair_context(request_prompt(body), "translation-pr-files")
-                )
-                if self.phase == "continue_red":
-                    files[EN + TOC] = self.corrected
-                text = json.dumps({"files": files})
-            elif "findings" in props:
+            if "findings" in props:
                 self.roles.append("arbiter")
                 if self.phase == "continue_red":
                     text = json.dumps(

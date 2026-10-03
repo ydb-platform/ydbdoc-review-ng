@@ -139,7 +139,10 @@ def test_repeated_verify_red_keeps_continue_unambiguous(continue_pr: int) -> Non
             self.phase = "translate"
 
         def model(self, request):
+
             body = json.loads(request.body)
+            if body.get("tools"):
+                return super().model(request)
             schema = request_schema(body)
             if schema is None:
                 return super().model(request)
@@ -373,23 +376,24 @@ def test_doc_verify_reconciles_leftover_source_red_when_translation_pr_exists() 
             self.phase = "translate"
             self.corrected = "items:\n- href: page.md\n  name: Corrected New\n"
 
+        def _critic_files_for_chunk(self, drafts, body):
+            files = super()._critic_files_for_chunk(drafts, body)
+            if self.phase in {"continue", "verify"} and EN + TOC in files:
+                files[EN + TOC] = self.corrected
+            return files
+
         def model(self, request):
+
             body = json.loads(request.body)
+            if body.get("tools"):
+                return super().model(request)
             schema = request_schema(body)
             if schema is None:
                 return super().model(request)
             props = schema["schema"]["properties"]
             if "translation_required" in props or "strings" in props:
                 return super().model(request)
-            if "files" in props:
-                self.roles.append("critic")
-                files = json.loads(
-                    raw_repair_context(request_prompt(body), "translation-pr-files")
-                )
-                if self.phase in {"continue", "verify"}:
-                    files[EN + TOC] = self.corrected
-                text = json.dumps({"files": files})
-            elif "findings" in props:
+            if "findings" in props:
                 self.roles.append("arbiter")
                 if self.phase == "continue":
                     # Translation PR gets a successful semantic color; source PATCH

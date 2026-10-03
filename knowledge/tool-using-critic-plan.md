@@ -1,8 +1,9 @@
 # Plan: tool-using critic (reliable rollout)
 
-Status: **P0 PASS** (2026-10-03). Provider tool_calls proven; see
-`knowledge/p0-deepseek-tools-probe.md`. Runtime tool loop **not** implemented
-yet (P1 next). Independent adversarial review applied; contract holes below
+Status: **P1 OFFLINE GREEN** (2026-10-03). Provider tool_calls proven
+(`knowledge/p0-deepseek-tools-probe.md`); tool-using critic runtime cut over
+offline (`pytest -m 'not live'`). P2 live BlobDepot / #54888 still pending.
+Independent adversarial review applied; contract holes below
 are frozen in `REQUIREMENTS_RU.md` §0 / §3.6 / §4.1 before any code.
 
 Canon: `REQUIREMENTS_RU.md` §4.1 (tool workspace + patches + enforceable FSM).
@@ -300,5 +301,6 @@ checklist + Actions secrets still valid for `doc_translate` (same `YANDEX_*`).
 ## Ready for independent review?
 
 **Plan/contract review: addressed.** P0 DeepSeek tool probe recorded **GO**.
-P1 implementation unblocked. Not ready for live BlobDepot acceptance until
+P1 offline implementation green (workspace, tool-loop FSM, OpenAI tool_calls,
+critic cutover, stub/integration suite). Not ready for live BlobDepot acceptance until
 P2 delivery checklist completes.

@@ -84,9 +84,5 @@ def test_critic_prompt_renders_null_for_missing_target() -> None:
         )[0]
     )
     assert files == {"ydb/docs/en/core/a.md": "# A\n", "ydb/docs/en/core/b.md": None}
-    schema_files = request.schema["properties"]["files"]
-    assert list(schema_files["required"]) == [
-        "ydb/docs/en/core/a.md",
-        "ydb/docs/en/core/b.md",
-    ]
-    assert schema_files["properties"]["ydb/docs/en/core/b.md"] == {"type": "string"}
+    assert request.schema is None
+    assert request.tools is not None

@@ -36,10 +36,12 @@ def test_arbiter_probe_uses_read_only_final_contract() -> None:
 
 def test_diagnostic_probe_uses_the_runtime_complete_files_contract() -> None:
     request = _diagnostic_probe_request("critic")
-    schema = request.schema
 
-    assert schema is not None
-    assert set(schema["properties"]) == {"files"}
+    # Production critic is tools-first (§4.1); diagnostic probe may still parse
+    # legacy files JSON for offline fixtures.
+    assert request.tools is not None or request.schema is not None
+    if request.schema is not None:
+        assert set(request.schema["properties"]) == {"files"}
     corrected = _parse_diagnostic_probe_response(
         json.dumps(
             {

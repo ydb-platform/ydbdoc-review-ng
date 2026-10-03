@@ -182,7 +182,9 @@ class RecordedModels:
         write_trace(
             "model",
             "result",
-            "ok" if result.success and result.text is not None else "fail",
+            "ok"
+            if result.success and (result.text is not None or result.tool_calls)
+            else "fail",
             **details,
             attempts_total=len(result.attempts),
             code=None if result.failure is None else result.failure.value,

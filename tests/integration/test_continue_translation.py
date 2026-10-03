@@ -97,7 +97,10 @@ class ContinueServices(CaptureServices):
         return result
 
     def model(self, request):
+
         body = json.loads(request.body)
+        if body.get("tools"):
+            return super().model(request)
         prompt = request_prompt(body)
         response = super().model(request)
         self.prompts.append((self.roles[-1], prompt))
@@ -320,6 +323,10 @@ def test_green_closes_only_loaded_row_after_successful_audit():
 def test_repeated_stop_keeps_exact_saved_head_if_branch_moves_during_model():
     class MovedBranch(ContinueServices):
         def model(self, request):
+
+            body = json.loads(request.body)
+            if body.get("tools"):
+                return super().model(request)
             result = super().model(request)
             if self.continuing:
                 self.branch_head = "f" * 40
@@ -337,6 +344,10 @@ def test_repeated_stop_keeps_exact_saved_head_if_branch_moves_during_model():
 def test_valid_response_cannot_publish_after_saved_branch_moves():
     class MovedBranch(ContinueServices):
         def model(self, request):
+
+            body = json.loads(request.body)
+            if body.get("tools"):
+                return super().model(request)
             result = super().model(request)
             if self.continuing:
                 self.branch_head = "f" * 40
@@ -441,6 +452,10 @@ def test_selected_direction_survives_translation_checkpoint_without_reclassifica
 def test_toc_no_action_replays_exact_saved_decision_without_classifier():
     class Services(ContinueServices):
         def model(self, request):
+
+            body = json.loads(request.body)
+            if body.get("tools"):
+                return super().model(request)
             response = super().model(request)
             if self.roles[-1] == "direction":
                 values = classification_response(
@@ -879,7 +894,10 @@ def test_continue_review_allows_missing_soft_published_target() -> None:
 
     class FailB(ContinueServices):
         def model(self, request):
+
             body = json.loads(request.body)
+            if body.get("tools"):
+                return super().model(request)
             props = request_schema(body)["schema"]["properties"]
             role = (
                 "direction"
@@ -922,7 +940,17 @@ def test_zero_commit_null_toc_keeps_review_checkpoint() -> None:
 
     class NullToc(ContinueServices):
         def model(self, request):
+
             body = json.loads(request.body)
+            if body.get("tools"):
+                roles = [
+                    message.get("role")
+                    for message in body.get("messages", [])
+                    if isinstance(message, dict)
+                ]
+                if roles == ["developer", "user"] or roles == ["user"]:
+                    self.roles.append("critic")
+                return HttpResponse(503, b"{}", None)
             props = request_schema(body)["schema"]["properties"]
             role = (
                 "direction"
@@ -966,7 +994,19 @@ def test_toc_only_null_checkpoint_is_continuable() -> None:
 
     class NullToc(ContinueServices):
         def model(self, request):
+
             body = json.loads(request.body)
+            if body.get("tools"):
+                if not self.continuing:
+                    roles = [
+                        message.get("role")
+                        for message in body.get("messages", [])
+                        if isinstance(message, dict)
+                    ]
+                    if roles == ["developer", "user"] or roles == ["user"]:
+                        self.roles.append("critic")
+                    return HttpResponse(503, b"{}", None)
+                return super().model(request)
             props = request_schema(body)["schema"]["properties"]
             role = (
                 "direction"
@@ -1015,7 +1055,33 @@ def test_resource_only_red_checkpoint_is_continuable() -> None:
 
     class ResOnly(ContinueServices):
         def model(self, request):
+
             body = json.loads(request.body)
+            if body.get("tools"):
+                if not self.continuing:
+                    roles = [
+                        message.get("role")
+                        for message in body.get("messages", [])
+                        if isinstance(message, dict)
+                    ]
+                    if roles == ["developer", "user"] or roles == ["user"]:
+                        self.roles.append("critic")
+                    payload = {
+                        "model": "t",
+                        "choices": [
+                            {
+                                "finish_reason": "length",
+                                "message": {
+                                    "role": "assistant",
+                                    "content": None,
+                                    "tool_calls": [],
+                                },
+                            }
+                        ],
+                        "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+                    }
+                    return HttpResponse(200, json.dumps(payload).encode(), Decimal(".01"))
+                return super().model(request)
             props = request_schema(body)["schema"]["properties"]
             role = (
                 "direction"
@@ -1068,7 +1134,10 @@ def test_delete_only_non_final_checkpoint_is_continuable() -> None:
 
     class DeleteOnly(ContinueServices):
         def model(self, request):
+
             body = json.loads(request.body)
+            if body.get("tools"):
+                return super().model(request)
             props = request_schema(body)["schema"]["properties"]
             role = (
                 "direction"
@@ -1117,7 +1186,10 @@ def test_mixed_markdown_and_binary_continue_skips_asset_utf8_restore() -> None:
 
     class Mix(ContinueServices):
         def model(self, request):
+
             body = json.loads(request.body)
+            if body.get("tools"):
+                return super().model(request)
             props = request_schema(body)["schema"]["properties"]
             role = (
                 "direction"
@@ -1181,7 +1253,31 @@ def test_continue_still_zero_commit_red_keeps_null_checkpoint_and_reports() -> N
 
     class AlwaysFailTranslate(ContinueServices):
         def model(self, request):
+
             body = json.loads(request.body)
+            if body.get("tools"):
+                roles = [
+                    message.get("role")
+                    for message in body.get("messages", [])
+                    if isinstance(message, dict)
+                ]
+                if roles == ["developer", "user"] or roles == ["user"]:
+                    self.roles.append("critic")
+                payload = {
+                    "model": "t",
+                    "choices": [
+                        {
+                            "finish_reason": "length",
+                            "message": {
+                                "role": "assistant",
+                                "content": None,
+                                "tool_calls": [],
+                            },
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+                }
+                return HttpResponse(200, json.dumps(payload).encode(), Decimal(".01"))
             props = request_schema(body)["schema"]["properties"]
             role = (
                 "direction"

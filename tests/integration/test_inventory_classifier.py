@@ -57,6 +57,26 @@ class ClassifierServices(RuntimeServices):
         return result
 
     def model(self, request):
+
+        body = json.loads(request.body)
+        if body.get("tools"):
+            roles = [
+                message.get("role")
+                for message in body.get("messages", [])
+                if isinstance(message, dict)
+            ]
+            if roles == ["developer", "user"] or roles == ["user"]:
+                self.requests.append(request)
+                if self.answers and isinstance(self.answers[0], str):
+                    data = json.loads(self.answers[0])
+                    if "files" in data:
+                        self.answers.pop(0)
+                        self.semantic_responses = [data] + [
+                            item
+                            for item in self.semantic_responses
+                            if "verdict" in item
+                        ]
+            return super().model(request)
         self.requests.append(request)
         answer = self.answers.pop(0)
         if type(answer) is int:
