@@ -26,7 +26,10 @@ PR. Покрыть тестами.
 
 ## Critic / arbiter
 
-Critic: обязательный gate на source + draft + optional presentation-reference
-→ полные `{"files": {...}}`, **reviewed** push. Fail/503/unreviewed → RED,
-arbiter на сырой dump не вызывается. Arbiter: только reviewed bytes,
-GREEN/YELLOW/RED + findings, без автопочинки. YELLOW не открывает checkpoint.
+Critic: обязательный tool-using gate на source + draft (+ optional
+presentation-reference). Workspace tools: `read` / `grep` / `apply_patch` /
+`finish`; после каждого patch — mandatory re-read; **reviewed** push =
+runtime-applied bytes. Fail/503/protocol/unreviewed → RED; arbiter на сырой
+dump не вызывается. Arbiter: только reviewed bytes, GREEN/YELLOW/RED +
+findings, без автопочинки и без цикла назад в critic. YELLOW не открывает
+checkpoint. Plan: `tool-using-critic-plan.md`.

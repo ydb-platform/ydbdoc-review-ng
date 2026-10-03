@@ -24,6 +24,7 @@
 | 14 | Live PR after redesign | critic fell on 180s timeout; quality hotfix next |
 | 15 | Critic HTTP timeout 180→600 + presentation/CLI/CamelCase | **done** (2026-10-02) |
 | 16 | Critic mega-request TRANSPORT @ ~270s (provider idle wall) | **done** (2026-10-02): 1 pair/chunk, relevant glossary, max_output_tokens cap |
+| 17 | Tool-using critic (workspace + patch + re-read); no arbiter repair loop | **docs/plan** (2026-10-03); runtime **not started** — see `tool-using-critic-plan.md` |
 
 ## CI translation redesign (2026-10-02)
 
@@ -168,8 +169,10 @@ Adversary against public/main tip `56d6bff` found three production lifecycle hol
 - New `doc_translate` deletes `translation/pr-{n}` and closes checkpoints; labels removed.
 - `doc_verify` GREEN/YELLOW closes prior RED checkpoint.
 - TOC scope hash ignores volatile `expected_sha256` wording; review-stage continue skips TOC string retranslate.
-- Offline contract surface **READY** including P2 BlobDepot golden; **live PR /
-  production `doc_translate` still pending**.
+- Offline contract surface **READY** for prior redesign including P2 BlobDepot
+  golden; **tool-using critic is docs-only** until P0 probe + P1 code.
+- Live BlobDepot open PR: [#54888](https://github.com/ydb-platform/ydb/pull/54888)
+  (source #50839). Re-run only after tool-critic P2 tag.
 - Continue tests that still expected per-file `complete_pair` exclusion or translation-PR
   continue after branch-delete/`target_sha=null` were updated to §1.1/§1.2/§5.1 contracts
   (stale expectations, not production bugs).

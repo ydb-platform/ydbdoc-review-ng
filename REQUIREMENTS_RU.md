@@ -164,11 +164,13 @@ diagnostic для critic/arbiter.
    Только delete и target TOC нет → новый файл не создаём.
 5. Ссылка на отсутствующий target-файл в TOC — diagnostic, не gate.
 6. Critic/arbiter получают полный target TOC (или `null`) и source TOC
-   before/after; critic может вернуть полный исправленный TOC. Перед
-   публикацией Python проверяет, что critic не удалил target-записи, которых
-   не касалась source-дельта PR. Нарушение делает ответ critic невалидным и
-   запускает обычную единственную повторную попытку §4.1; после второй ошибки
-   сохраняется TOC, уже построенный Python по дельте, и именно он идёт arbiter.
+   before/after. Critic правит TOC только через tool-workspace §4.1
+   (`apply_patch` по seeded target TOC), не целым JSON-файлом как primary
+   path. Перед публикацией Python проверяет, что critic не удалил
+   target-записи, которых не касалась source-дельта PR. Нарушение делает
+   правку невалидной и запускает обычную единственную повторную попытку
+   §4.1; после второй ошибки сохраняется TOC, уже построенный Python по
+   дельте, и именно он идёт arbiter.
 
 Покрывается unit/integration tests на дельту, идемпотентность, новый TOC,
 diagnostics.
@@ -178,52 +180,100 @@ diagnostics.
 Модель production: только DeepSeek V4 Flash. Исключение —
 `doc_model_probe` (не переводит и не публикует).
 
-`reasoning_effort`: `high` для critic и arbiter, `none` для остальных
-production-ролей. Critic/arbiter получают постоянные инструкции и выходной
-контракт отдельным `developer` message, а все файлы, glossary, TOC snapshots,
-binary manifest и operator context — `user` message. В конце `user` message
-повторяется короткий обязательный checklist: completeness, terminology,
-technical literals и inline-code, damaged sentences, TOC и полный состав
-файлов.
+`reasoning_effort`: critic `medium`, arbiter `none`, остальные production-роли
+`none` (live probes / tip; silent-connection wall на длинном reasoning).
+Critic/arbiter получают постоянные инструкции отдельным `developer` message,
+а входные файлы, glossary, TOC snapshots, binary manifest и operator context —
+`user` message. В конце `user` message повторяется короткий обязательный
+checklist: completeness, terminology, technical literals и inline-code,
+damaged sentences, TOC и состав файлов чанка.
 
 Контекст: 1 048 576. Для translator/direction `max_tokens` = остаток после
 UTF-8 byte-размера полного wire request (1 byte ≈ 1 token). Для critic/arbiter
-с `reasoning_effort=high` generation budget дополнительно ограничен
-(`max_output_tokens`: echo целевых файлов × коэффициент, потолок ~98k /
-arbiter ~24k). Иначе модель думает до silent-connection wall провайдера
-(~270 с → TRANSPORT, http_status=null; runs 37009373894 / 37027975808).
-`NON_FINAL` → чанк непроверен, остальные идут, итог RED.
+generation budget дополнительно ограничен (`max_output_tokens` потолки в
+коде; иначе silent-connection wall ~270 с → TRANSPORT, http_status=null;
+runs 37009373894 / 37027975808). `NON_FINAL` → чанк непроверен, остальные
+идут, итог RED.
+
+План rollout tool-using critic: `knowledge/tool-using-critic-plan.md`.
+Закрытый цикл arbiter findings → repair **запрещён** (token burn).
 
 ### 4.1 Critic
 
-Обязательный quality gate. Вход: полные source + **draft** target пары frozen
-group (PR + зависимости + TOC), optional presentation-reference (old target
-по path, если был), relevant paired glossary без лимита, manifest binary,
-для TOC — before/after source. Отсутствующий обязательный target = JSON
-`null` → critic обязан создать полный файл.
+Обязательный quality gate и **единственный** model-editor после draft.
+Вход чанка: полные source + **draft** target одной пары frozen group
+(статья или TOC), optional presentation-reference (old target по path),
+relevant paired glossary без лимита, manifest binary при необходимости,
+для TOC — before/after source. Отсутствующий обязательный target = `null` в
+workspace → critic обязан создать файл через tools (серия `apply_patch` /
+эквивалент создания), не через dump целого PR.
 
-Critic возвращает только `{"files": {"path": "complete content", ...}}`.
-Findings, verdict, patches запрещены. Каждый запрошенный path ровно один раз.
-При нуле текстовых пар → `{"files": {}}`, вызов всё равно есть.
+#### Роль и границы
+
+- Critic = tool-using editor: читает, ищет, патчит, **обязательно**
+  перечитывает затронутые строки, завершает сессию.
+- Arbiter = judge-only (§4.2). Findings арбитра **не** запускают critic и не
+  чинятся автоматически в том же job.
+- Translator и Python TOC-delta (§2–§3) не меняются этим контрактом.
+
+#### Workspace и tools
+
+Runtime готовит in-memory workspace = draft bytes чанка. Модель ходит в
+OpenAI-compatible tool loop (DeepSeek). Primary path — tools, **не**
+whole-file JSON `{"files": …}`.
+
+Обязательные tools:
+
+| Tool | Назначение |
+|---|---|
+| `read` | Байты/строки path из workspace (1-based window). |
+| `grep` | Поиск pattern в workspace path(s). |
+| `apply_patch` | Unified diff / hunks к одному path; runtime применяет. |
+| `finish` | Явное завершение сессии после всех re-read. |
+
+Другие tools в v1 запрещены. Verdict/findings в ответе critic запрещены.
+
+#### Обязательный re-read
+
+После каждого успешного `apply_patch` critic **обязан** вызвать `read`,
+покрывающий все затронутые строки, до следующего patch или `finish`.
+Нарушение = invalid contract → один retry сессии → иначе unreviewed RED.
+
+#### Финальные bytes
+
+Reviewed bytes чанка = workspace после runtime-applied patches. Текст
+ассистента и tool args сами по себе не публикуются. Нет успешного `finish`
+с валидным workspace → чанк непроверен.
+
+#### Лимиты надёжности
+
+- Max tool turns на чанк (дефолт 12; override env
+  `YDBDOC_CRITIC_MAX_TOOL_TURNS` при реализации). Превышение → RED.
+- Patch-not-full-file: runtime отвергает огромные hunks (пороги в плане
+  P1; цель — хирургические правки, не пересылка целого файла).
+- Чанки строго по **одной** source/target паре (TOC отдельно). Пара не
+  делится. Не влезла → unreviewed, остальные идут.
+- Полный bilingual glossary.md не кладётся: только relevant paired sections.
+- Один retry на transport/503/invalid contract/NON_FINAL/protocol (как
+  сегодня по смыслу fail→RED).
+
+#### Качество правок
 
 Source-разметка не эталон target-разметки. Presentation-reference — только
-оформление. Перед ответом critic нормализует технические литералы:
-inline-code и удаление ненужного экранирования (`BS\_CONTROLLER` →
-`BS_CONTROLLER`). Литерал нельзя переименовать, перевести, удалить или
-продублировать. Такие исправления публикуются по мягким Markdown/YFM
-diagnostics §2.
+оформление. Critic нормализует технические литералы: inline-code и снятие
+ненужного экранирования (`BS\_CONTROLLER` → `BS_CONTROLLER`). Литерал нельзя
+переименовать, перевести, удалить или продублировать. Мягкие Markdown/YFM
+diagnostics §2 по-прежнему не gate.
 
-Чанки строго по **одной** source/target паре (и TOC-пара отдельно). Пара не
-делится. Не влезла одна пара → непроверена (unreviewed), остальные идут.
-Полный bilingual glossary.md в critic/arbiter **не** кладётся: только
-relevant paired sections по тексту чанка (как у translator). TOC
-before/after — только для TOC-пары чанка.
+#### Публикация
 
-Успешный чанк → **reviewed** commit/push в translation branch. Первый успех
-может создать branch/PR, если translator опубликовал только draft. Ошибка
-чанка после одного retry (transport/503/invalid contract/NON_FINAL) →
-unreviewed RED для путей чанка; arbiter по этим путям **не** вызывается на
-сыром draft. Critic unavailable ≠ GREEN/YELLOW на raw translator dump.
+Успешный чанк → **reviewed** commit/push workspace bytes. Первый успех может
+создать branch/PR, если translator опубликовал только draft. Ошибка после
+retry → unreviewed RED; arbiter по этим путям **не** вызывается на сыром
+draft. Critic unavailable ≠ GREEN/YELLOW на raw translator dump.
+
+При нуле текстовых пар → пустой tool-сеанс / no-op `finish`, вызов gate
+всё равно есть (как раньше пустой `{"files": {}}`).
 
 ### 4.2 Arbiter
 
@@ -374,6 +424,7 @@ calls. Иначе job идёт целиком, даже если сама пер
 
 Acceptance (минимум): auth; budget; dependency pull A→A1; whole-file translate;
 identifier atoms; optional presentation map; TOC delta tests; critic
-apply+push как reviewed gate; critic fail → RED; arbiter GREEN/YELLOW/RED
-только на reviewed; YELLOW не открывает checkpoint; continue с operator
-context; empty PR не создаётся при нуле commits.
+tool-workspace + patches + mandatory re-read → reviewed push; critic fail →
+RED; arbiter GREEN/YELLOW/RED только на reviewed, без repair-loop; YELLOW не
+открывает checkpoint; continue с operator context; empty PR не создаётся при
+нуле commits. Rollout plan: `knowledge/tool-using-critic-plan.md`.

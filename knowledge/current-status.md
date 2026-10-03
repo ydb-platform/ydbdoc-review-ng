@@ -1,6 +1,6 @@
 # Текущее состояние
 
-## Согласованный контракт (2026-10-02 redesign)
+## Согласованный контракт (2026-10-02 redesign + 2026-10-03 critic tools)
 
 Semantic flow в `REQUIREMENTS_RU.md`:
 
@@ -9,24 +9,28 @@ Semantic flow в `REQUIREMENTS_RU.md`:
 3. Prep: placeholders + **identifier atoms** (underscore + CamelCase product) +
    presentation map from old target (atoms, CLI flags, short ALLCAPS, colon-form).
 4. Whole-file translate (old target = presentation reference only when present) → **draft**.
-5. Critic = обязательный gate → **reviewed** commits; fail/503/unreviewed → RED.
-6. Arbiter только на reviewed bytes: GREEN / YELLOW / RED.
+5. Critic = обязательный tool-using gate (§4.1): workspace + read/grep/apply_patch
+   + mandatory re-read → **reviewed** commits; fail → RED.
+6. Arbiter только на reviewed bytes: GREEN / YELLOW / RED (judge-only, no repair).
 7. YELLOW = успех; RED = continue / ручная правка + `doc_verify`.
 8. Soft-publish diagnostics ≠ reader-facing product success.
 9. Режимы: `doc_translate`, `doc_verify`, `doc_continue`.
 
-## Код (P0+P1+P2 + quality hotfix 2026-10-02)
+## Код vs новый critic contract (2026-10-03)
 
 | Item | Status |
 |---|---|
-| Identifier atoms (`BS\_CONTROLLER` not split) | **DONE** |
-| CamelCase product atoms (`BlobDepot`) | **DONE** |
-| Presentation map: atoms + CLI flags + ALLCAPS + `gen:counter` | **DONE** |
-| Draft vs reviewed critic gate (fail → RED) | **DONE** |
-| Model HTTP timeout default 600s (+ env override) | **DONE** |
-| Translator/critic/arbiter prompt updates | **DONE** |
-| Canon §1.2 / §2 / §4.1 / §5.1 / §7 | **DONE** |
-| P2 BlobDepot golden harness | **DONE** |
+| Identifier atoms / presentation map / draft-reviewed gate | **DONE** (prior) |
+| P2 BlobDepot golden harness (one-shot critic era) | **DONE** (prior) |
+| REQUIREMENTS §4.1 tool-using critic | **DONE (docs)** |
+| Plan `knowledge/tool-using-critic-plan.md` | **DONE (docs)** |
+| Runtime tool loop / client `tool_calls` | **NOT STARTED** |
+| P0 live DeepSeek tools capability probe | **NOT STARTED** |
+| Offline stub-tool integration tests | **NOT STARTED** |
+
+> [!important] Implementation freeze until independent plan review + P0 probe
+> Tip still runs one-shot JSON critic. Do not claim tool-critic in production
+> until P1 lands and suite is green.
 
 ## Critic TRANSPORT (runs 37009373894 → 37027975808) — real root cause
 
@@ -37,29 +41,38 @@ Not «provider flaky». Translator OK; critic 2× `TRANSPORT`, `http_status=null
 | 37009373894 | pre-timeout bump | ~182s | **our** urllib 180s |
 | 37027975808 | `4f2867c` (600s) | ~273s | **provider** silent wall |
 
-Mega-request evidence (BlobDepot PR #50839 / #54842 shape):
+Fix on tip: one pair/chunk, relevant glossary only, cap `max_output_tokens`.
+Tool-using critic keeps one-pair chunking; patches shrink generation further.
 
-- one critic invoke `article:null` with **all** MD+TOC pairs
-- full RU+EN `glossary.md` dump **225 432** bytes (REQUIREMENTS: relevant sections)
-- `reasoning_effort=high`, `stream=false`, `max_tokens≈715 000`
-- wire ~334 KB; translator: one file, `reasoning=none`, finishes in seconds–~90s
+## Quality classes on #54842 / #54888 lineage
 
-Fix on tip after this note: one pair/chunk, relevant glossary only, cap
-`max_output_tokens` for critic/arbiter so reasoning cannot burn the idle wall.
+Manual review of [#54888](https://github.com/ydb-platform/ydb/pull/54888)
+(source [#50839](https://github.com/ydb-platform/ydb/pull/50839) BlobDepot):
+structure/links/images largely OK; residual prose/literals (`--wait wait`,
+awkward phrasing, inconsistent inline-code). Whole-file critic did not reliably
+apply fixes. Tool-using critic is the agreed remedy (not arbiter↔repair loops).
 
-## Quality classes on #54842 raw EN (critic never ran)
+## Latest open BlobDepot translation PR (confirmed 2026-10-03)
 
-| Class | Root cause | Fixed in code? |
-|---|---|---|
-| BlobDepot → «Blob depot» | CamelCase not an atom; glossary #54797 **unmerged** so prompt path empty (wiring OK when entry present) | **Yes** — CamelCase atoms; glossary select regression |
-| Lost backticks on `--name`, `NEW`, `WORKING` | Presentation map required `_`/`::` | **Yes** — map covers CLI flags + ALLCAPS |
-| `gen:counter` lost backticks / escapes | Colon-form not in map | **Yes** |
-| «command is executed BS_CONTROLLER» | Model prose around opaque atom | **No** — needs critic (timeout unblock) |
-| CREATED_FAILED typo | RU source atom `CREATED\_FAILED` preserved | **No** — model/critic; source typo |
-| `{{ ydb-name }}` word order | Template restore + RU order | **Mostly model**; template bytes intact |
+- Source: [#50839](https://github.com/ydb-platform/ydb/pull/50839)
+- Open translation: [#54888](https://github.com/ydb-platform/ydb/pull/54888)
+  (`translation/pr-50839`)
+- Closed predecessors include #54886, #54877, #54868, …
 
-> [!warning] Do not start another live run
-> Code fix first. User did not say «гони».
+## Live clean re-run (2026-10-02, user «гони»)
 
-**TOC serialization fix** still at prior tip; this hotfix lands on top.
-Pin `v1.0.1` moves with this commit after push.
+- Tip then: `v1.0.1` = `a229b39` lineage; later tips `45712c3` / `28e2da1`.
+- Workflows produced #54877 → … → **#54888** (open).
+- Next live `doc_translate` only after tool-critic implementation + tag (P2).
+
+## YC / live model env (names found vs missing)
+
+**Found:** `YANDEX_API_KEY`, `YANDEX_FOLDER_ID`, `YDBDOC_MODEL*`,
+`YDBDOC_MODEL_HTTP_TIMEOUT_SECONDS`, `YDBDOC_DAILY_BUDGET_RUB`, `YDBDOC_LIVE`,
+smoke aliases `YC_API_KEY` / `YDBDOC_YC_API_KEY` / `YC_FOLDER_ID` /
+`YDBDOC_MODEL_TRANSLATE`, hardcoded `OPENAI_ENDPOINT` / `NATIVE_ENDPOINT`.
+
+**Missing for grant-limited paid tests:** grant id / remaining quota env names;
+unified live creds (prod `YANDEX_*` vs smoke `YC_*`); tool-feature flag env;
+checked-in DeepSeek tool_calls proof. Details:
+`knowledge/tool-using-critic-plan.md` § Yandex Cloud.

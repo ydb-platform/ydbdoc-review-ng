@@ -12,12 +12,23 @@ arbiter. YandexGPT только в `doc_model_probe`.
 - Direction: только `translation_required`, `direction`, `reason`. Per-file
   mirror actions считает Python (`mirror_classified_files`), не модель.
 - Translator / TOC strings: полная JSON ID-map запрошенных сегментов.
-- Critic: `{"files": {"path": "complete UTF-8"}}`; пустой scope → `{"files": {}}`.
+- Critic (canon §4.1): OpenAI tool loop на workspace — `read`, `grep`,
+  `apply_patch`, `finish`; mandatory re-read after patches; published bytes =
+  runtime-applied workspace. Whole-file `{"files":…}` **не** primary path.
+  Пустой scope → no-op `finish`. Plan: `tool-using-critic-plan.md`.
 - Arbiter: только `verdict` + `findings`. GREEN → пустые findings; YELLOW/RED →
-  ≥1. Missing/unreviewed → `null` line/snippet.
+  ≥1. Missing/unreviewed → `null` line/snippet. No repair loop.
 
-Один retry на provider/malformed для direction, translator, critic, arbiter.
-Critic partial response не применяется.
+`reasoning_effort` (tip): critic `medium`, arbiter `none`, else `none`.
+
+Один retry на provider/malformed/protocol для direction, translator, critic,
+arbiter. Critic без успешного `finish` не публикует reviewed bytes.
 
 Attempts аудируются с cost; unknown = `NULL`. Секреты только из env/GitHub
 secrets.
+
+## Clients today vs tools
+
+`YandexOpenAIClient` / `NativeYandexClient` ещё **не** шлют `tools` и не
+парсят `tool_calls` (`clients.py`). P0 плана: live probe DeepSeek tool-calling
+на `OPENAI_ENDPOINT` до реализации loop.

@@ -8,4 +8,9 @@
 5. После каждой атомарной задачи: focused tests + независимый review diff.
 6. После всех задач: полный suite → tag → удалить старую translation branch
    тестового PR → новый `doc_translate` → цель честный GREEN/YELLOW арбитра.
+   Для tool-critic P2: lineage source #50839 / open translation #54888
+   (см. `tool-using-critic-plan.md` delivery checklist).
 7. Каждое уточнение контракта сразу писать в `knowledge/` и коммитить в `main`.
+8. Docs-only контрактные коммиты (как tool-critic plan) тоже push в `public`
+   с `YDB_GH_TOKEN` и cleared `credential.helper`; runtime loop — отдельная
+   фаза после independent review.

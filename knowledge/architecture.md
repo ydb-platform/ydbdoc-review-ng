@@ -5,7 +5,8 @@
 ## Поток
 
 `label → snapshot → (budget) → direction → Python scope → translate/TOC/ops →
-commit → critic (правит и пушит) → arbiter (GREEN/YELLOW/RED) → QA comment`.
+draft commit → critic tool-workspace (patch+re-read → reviewed push) →
+arbiter judge-only (GREEN/YELLOW/RED) → QA comment`.
 
 | Режим | Translator | Budget gate | Ветка |
 |---|---|---|---|
@@ -18,7 +19,7 @@ commit → critic (правит и пушит) → arbiter (GREEN/YELLOW/RED) �
 - **Python:** inventory, Git-операции, dependency closure, protected fragments,
   TOC structural delta, publication, checkpoints.
 - **DeepSeek:** нужен ли перевод + направление; whole-file prose; TOC strings;
-  critic полные файлы; arbiter verdict/findings.
+  critic tool edits (patches); arbiter verdict/findings only.
 - Модель **не** назначает per-file semantic actions.
 
 ## Публикация и verdict
