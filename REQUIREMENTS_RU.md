@@ -54,17 +54,24 @@ provider error / невалидном JSON. Вторая неудача → job 
 
 После направления Python зеркалит inventory:
 
-- Markdown/YFM source-locale страница → whole-file перевод target;
+- Markdown/YFM source-locale страница → перевод target. Если у пары уже есть
+  target **и** известен source before/after, runtime сначала пробует
+  **surgical update**: перенести только source-delta на существующий target
+  (уникальные замены URL/строк без модели; иначе модель переводит только
+  выровненные hunks). Whole-file перевод — fallback, если выровнять нельзя
+  или target/source-before нет;
 - delete → удалить парный target;
 - rename → зеркально переименовать target; если содержимое ещё изменилось → перевести;
 - locale-relative resource/binary → copy/delete/rename без модели;
 - TOC → особый путь §3;
 - прочее вне locale mapping → без молчаливой потери: явный no-op или ошибка.
 
-Существующий target **опционален**. Если есть — передаётся translator/critic
-только как formatting/presentation reference (inline-code, escapes), не как
-semantic baseline. Если нет (новый файл) — опираемся на identifier atoms,
-style rules и нормализацию presentation в critic.
+Существующий target **опционален**. Для surgical hunks он semantic baseline
+неизменённых блоков и presentation-reference только для изменённых фрагментов.
+Для whole-file fallback по-прежнему: formatting/presentation reference
+(inline-code, escapes), не semantic baseline всего файла. Если target нет
+(новый файл) — опираемся на identifier atoms, style rules и нормализацию
+presentation в critic.
 
 ### 1.3 Дотягивание зависимостей
 
@@ -89,9 +96,16 @@ source PR с именем лимита. Для старого слитого PR 
 
 ## 2. Перевод документа
 
-Единица перевода — целый Markdown/YFM файл одним translator request.
-Внутридокументного chunking нет. Лимит размера — только
-`YDBDOC_MAX_SOURCE_CHARACTERS`.
+Единица перевода — Markdown/YFM файл.
+
+- **Surgical (предпочтительно):** существующий target + source before/after.
+  Неизменённые блоки копируются из target. Модель вызывается только на
+  выровненные hunks (или не вызывается, если delta — уникальные строковые
+  замены, например URL).
+- **Whole-file (fallback):** один translator request на весь файл, если
+  surgical выровнять нельзя, target нет, или это новая статья.
+  Внутридокументного chunking в fallback нет. Лимит размера — только
+  `YDBDOC_MAX_SOURCE_CHARACTERS`.
 
 Переводимы: проза, заголовки, списки, таблицы, подписи ссылок, `alt`,
 front matter `title`/`description`, заголовки YFM note/cut/tab, комментарии

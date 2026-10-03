@@ -37,6 +37,13 @@ from ydbdoc_review_ng.translation.presentation import (
     apply_presentation_map,
     build_presentation_map,
 )
+from ydbdoc_review_ng.translation.surgical import (
+    SurgicalHunk,
+    SurgicalMode,
+    SurgicalPlan,
+    apply_unique_replacements,
+    plan_surgical_update,
+)
 
 __all__ = [
     "AssemblyError",
@@ -50,9 +57,13 @@ __all__ = [
     "ProtectedMismatch",
     "ResponseError",
     "ResponseErrorReason",
+    "SurgicalHunk",
+    "SurgicalMode",
+    "SurgicalPlan",
     "TranslationField",
     "TranslationRequest",
     "apply_presentation_map",
+    "apply_unique_replacements",
     "assemble_candidate",
     "build_document_correction_note",
     "build_document_critic_prompt",
@@ -62,6 +73,7 @@ __all__ = [
     "document_operator_guidance",
     "document_placeholder_context",
     "parse_translation_response",
+    "plan_surgical_update",
     "prepare_document",
     "restore_document",
     "validate_chunk_response",

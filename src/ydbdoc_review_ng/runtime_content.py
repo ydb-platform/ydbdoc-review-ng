@@ -130,6 +130,7 @@ from ydbdoc_review_ng.translation import (
 )
 from ydbdoc_review_ng.translation.document import verify_document_candidate_with_links
 from ydbdoc_review_ng.translation.language import validate_translated_prose
+from ydbdoc_review_ng.translation.surgical import SurgicalMode, plan_surgical_update
 from ydbdoc_review_ng.translation_plan import (
     PathKind,
     PlanAction,
@@ -154,6 +155,19 @@ _DIAGNOSTIC_PLACEHOLDER = re.compile(
 )
 _PLACEHOLDER_PREFIXES = ("[[YDBDOC_PROTECTED_", "[[YDBDOC_URL_")
 _ATX_HEADING_LINE = re.compile(r"(?m)^ {0,3}#{1,6}[ \t]+")
+
+
+def _read_source_before(source: object, path: RepoPath) -> bytes | None:
+    github = getattr(source, "github", None)
+    snapshot = getattr(source, "source_base_snapshot", None)
+    reader = getattr(github, "read_bytes", None)
+    if reader is None or snapshot is None:
+        return None
+    try:
+        value = reader(snapshot, path)
+    except (AttributeError, TypeError, RuntimeBoundaryError):
+        return None
+    return value if type(value) is bytes else None
 
 
 def pack(files: Mapping[str, bytes | None]) -> bytes:
@@ -1767,6 +1781,10 @@ class RuntimeContent:
         def invoke_chunk(
             chunk: DocumentChunk,
             chunk_index: int,
+            *,
+            prepared_doc=prepared,
+            presentation_bytes: bytes | None = None,
+            chunks_total: int = 1,
         ) -> tuple[str | None, AttemptError | None, bool]:
             note: str | None = None
             previous_response: str | None = None
@@ -1787,7 +1805,7 @@ class RuntimeContent:
                     _document_chunk_translation_request(
                         base_request,
                         chunk,
-                        prepared.placeholders,
+                        prepared_doc.placeholders,
                         entry.pair.source_locale.value,
                         entry.pair.target_locale.value,
                     )
@@ -1800,9 +1818,9 @@ class RuntimeContent:
                         + chunk_terminology_context
                         + "\n</PROJECT_GLOSSARY>"
                     )
-                if target_reference_bytes is not None:
+                if presentation_bytes is not None:
                     try:
-                        reference_text = target_reference_bytes.decode("utf-8")
+                        reference_text = presentation_bytes.decode("utf-8")
                     except UnicodeDecodeError:
                         reference_text = None
                     if reference_text is not None:
@@ -1856,7 +1874,7 @@ class RuntimeContent:
                         "retry" if attempt == 1 else "fail",
                         article=entry.pair.target_path.value,
                         chunk_index=chunk_index,
-                        chunks_total=len(prepared.chunks),
+                        chunks_total=chunks_total,
                         attempt=attempt,
                         code="segment_map_invalid",
                         error_type=type(error).__name__,
@@ -1867,7 +1885,7 @@ class RuntimeContent:
                     previous_response = result.text
                     continue
                 try:
-                    validate_chunk_response(chunk, prepared.placeholders, response)
+                    validate_chunk_response(chunk, prepared_doc.placeholders, response)
                 except DocumentTranslationError as error:
                     structure_code = str(error)
                     if "structure_mismatch" not in structure_code:
@@ -1877,7 +1895,7 @@ class RuntimeContent:
                             "retry" if attempt == 1 else "fail",
                             article=entry.pair.target_path.value,
                             chunk_index=chunk_index,
-                            chunks_total=len(prepared.chunks),
+                            chunks_total=chunks_total,
                             attempt=attempt,
                             code=structure_code,
                         )
@@ -1907,7 +1925,7 @@ class RuntimeContent:
                             "retry" if attempt == 1 else "ok",
                             article=entry.pair.target_path.value,
                             chunk_index=chunk_index,
-                            chunks_total=len(prepared.chunks),
+                            chunks_total=chunks_total,
                             attempt=attempt,
                             code=code,
                         )
@@ -1926,7 +1944,7 @@ class RuntimeContent:
                         "retry" if attempt == 1 else "fail",
                         article=entry.pair.target_path.value,
                         chunk_index=chunk_index,
-                        chunks_total=len(prepared.chunks),
+                        chunks_total=chunks_total,
                         attempt=attempt,
                         code=code,
                     )
@@ -1944,32 +1962,103 @@ class RuntimeContent:
                         "ok",
                         article=entry.pair.target_path.value,
                         chunk_index=chunk_index,
-                        chunks_total=len(prepared.chunks),
+                        chunks_total=chunks_total,
                         attempt=attempt,
                         code=structure_code,
                     )
                 return response, None, False
             raise AssertionError("translation technical attempt bound exhausted")
 
-        if not any(block.fields for block in document.plan.blocks):
-            response = chunk.text
-        else:
-            with traced(
+        surgical_candidate: bytes | None = None
+        source_before = _read_source_before(self.source, entry.pair.source_path)
+        if target_reference_bytes is not None and source_before is not None:
+            surgical = plan_surgical_update(
+                source_before, document.source, target_reference_bytes
+            )
+            write_trace(
                 "translation",
-                "chunk",
+                "surgical",
+                "ok",
                 article=entry.pair.target_path.value,
-                chunk_index=1,
-                chunks_total=1,
+                code=surgical.mode.value,
+            )
+            if (
+                surgical.mode is SurgicalMode.UNIQUE_REPLACEMENTS
+                and surgical.patched_target is not None
             ):
-                accepted_response, failure, invalid_response = invoke_chunk(
-                    chunk,
-                    1,
-                )
-            if accepted_response is None:
-                if invalid_response and failure is None:
-                    raise InvalidTranslationResponse("translation_response_invalid")
-                raise RuntimeBoundaryError("translation_model_failed")
-            response = accepted_response
+                surgical_candidate = surgical.patched_target
+            elif surgical.mode is SurgicalMode.HUNKS:
+                patched = target_reference_bytes
+                translated_hunks: list[tuple[tuple[int, int], bytes]] = []
+                for hunk_index, hunk in enumerate(surgical.hunks, start=1):
+                    hunk_plan = build_markdown_plan(
+                        document.plan.source_snapshot,
+                        entry.pair.source_path,
+                        hunk.source_after,
+                    )
+                    hunk_prepared = prepare_document(
+                        hunk.source_after,
+                        hunk_plan,
+                        link_resolver=link_resolver,
+                    )
+                    with traced(
+                        "translation",
+                        "chunk",
+                        article=entry.pair.target_path.value,
+                        chunk_index=hunk_index,
+                        chunks_total=len(surgical.hunks),
+                    ):
+                        accepted_response, _failure, _invalid = invoke_chunk(
+                            hunk_prepared.chunks[0],
+                            hunk_index,
+                            prepared_doc=hunk_prepared,
+                            presentation_bytes=hunk.existing_target_fragment,
+                            chunks_total=len(surgical.hunks),
+                        )
+                    if accepted_response is None:
+                        translated_hunks = []
+                        break
+                    try:
+                        restored = restore_document(
+                            hunk.source_after,
+                            hunk_plan,
+                            hunk_prepared,
+                            (accepted_response,),
+                            allow_structure_diagnostics=True,
+                        )
+                    except (DocumentTranslationError, ValueError, TypeError, UnicodeError):
+                        translated_hunks = []
+                        break
+                    translated_hunks.append((hunk.target_span, restored))
+                if translated_hunks:
+                    for span, restored in sorted(
+                        translated_hunks, key=lambda item: item[0][0], reverse=True
+                    ):
+                        patched = patched[: span[0]] + restored + patched[span[1] :]
+                    surgical_candidate = patched
+
+        response: str | None = None
+        if surgical_candidate is None:
+            if not any(block.fields for block in document.plan.blocks):
+                response = chunk.text
+            else:
+                with traced(
+                    "translation",
+                    "chunk",
+                    article=entry.pair.target_path.value,
+                    chunk_index=1,
+                    chunks_total=1,
+                ):
+                    accepted_response, failure, invalid_response = invoke_chunk(
+                        chunk,
+                        1,
+                        presentation_bytes=target_reference_bytes,
+                    )
+                if accepted_response is None:
+                    if invalid_response and failure is None:
+                        raise InvalidTranslationResponse("translation_response_invalid")
+                    raise RuntimeBoundaryError("translation_model_failed")
+                response = accepted_response
 
         def assembly_failure(stage: str, error: Exception) -> None:
             write_trace(
@@ -1983,34 +2072,38 @@ class RuntimeContent:
             )
             raise InvalidTranslationResponse("translation_response_invalid") from None
 
-        try:
-            candidate = restore_document(
-                document.source,
-                document.plan,
-                prepared,
-                (response,),
-                allow_structure_diagnostics=True,
-            )
-        except (DocumentTranslationError, ValueError, TypeError, UnicodeError) as error:
-            assembly_failure("restore_document", error)
-        except Exception as error:  # noqa: BLE001 - YAML/parser diagnostics must not block UTF-8.
-            write_trace(
-                "translation",
-                "document_assembly",
-                "ok",
-                article=entry.pair.target_path.value,
-                stage="restore_document",
-                code="structure_diagnostic",
-                error_type=type(error).__name__,
-            )
-            # Last-resort publish of assembled chunk text with placeholders restored.
-            by_token = {
-                item.token: item.source_bytes for item in prepared.placeholders
-            }
-            rendered = response
-            for token, source_bytes in by_token.items():
-                rendered = rendered.replace(token, source_bytes.decode("utf-8"))
-            candidate = rendered.encode("utf-8")
+        if surgical_candidate is not None:
+            candidate = surgical_candidate
+        else:
+            assert response is not None
+            try:
+                candidate = restore_document(
+                    document.source,
+                    document.plan,
+                    prepared,
+                    (response,),
+                    allow_structure_diagnostics=True,
+                )
+            except (DocumentTranslationError, ValueError, TypeError, UnicodeError) as error:
+                assembly_failure("restore_document", error)
+            except Exception as error:  # noqa: BLE001 - YAML/parser diagnostics must not block UTF-8.
+                write_trace(
+                    "translation",
+                    "document_assembly",
+                    "ok",
+                    article=entry.pair.target_path.value,
+                    stage="restore_document",
+                    code="structure_diagnostic",
+                    error_type=type(error).__name__,
+                )
+                # Last-resort publish of assembled chunk text with placeholders restored.
+                by_token = {
+                    item.token: item.source_bytes for item in prepared.placeholders
+                }
+                rendered = response
+                for token, source_bytes in by_token.items():
+                    rendered = rendered.replace(token, source_bytes.decode("utf-8"))
+                candidate = rendered.encode("utf-8")
         # Optional old target is formatting reference only (§1.2 / §2).
         presentation = build_presentation_map(
             target_reference_bytes,
