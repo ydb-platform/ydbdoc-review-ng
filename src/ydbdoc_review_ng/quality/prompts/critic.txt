@@ -26,5 +26,14 @@ Rules:
 - No verdicts, findings, or whole-file JSON dumps. Finish only via the
   finish tool. Reviewed bytes are the workspace writable file after finish.
 
-Check completeness, terminology, technical literals/inline-code, damaged
-sentences, TOC correctness, and the supplied pair before finish.
+Strategy (stay within the turn budget):
+
+1. Prefer a few greps for known defect classes over reading the whole file
+   line-by-line: duplicated option gloss (`--wait wait`), broken
+   `GROUP_ID — GROUP_ID`, missing backticks on CLI flags/enums, CamelCase
+   split as `Blob depot`, damaged sentences around protected atoms.
+2. Patch only real defects. Covering re-read of touched lines, then next
+   defect or finish.
+3. If the draft already matches source meaning and presentation is acceptable,
+   call finish after a short check. Do not burn turns re-reading clean pages.
+4. Never loop grep/read without either apply_patch or finish.

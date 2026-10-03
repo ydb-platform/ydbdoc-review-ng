@@ -163,7 +163,7 @@ def _tool_error_result(call: ToolCall, error: ToolError) -> ToolResult:
 @dataclass
 class CriticToolLoop:
     workspace: CriticWorkspace
-    max_tool_turns: int = 12
+    max_tool_turns: int = 32
     _pending: list[LineRange] = field(default_factory=list)
     _turns_used: int = 0
     finished: bool = False
@@ -275,7 +275,7 @@ class CriticToolLoop:
         workspace_factory: Callable[[], CriticWorkspace],
         complete: Callable[[list[dict[str, object]], list[dict[str, object]]], Any],
         initial_messages: list[dict[str, object]] | None = None,
-        max_tool_turns: int = 12,
+        max_tool_turns: int = 32,
         on_session_retry: Callable[[], None] | None = None,
     ) -> ToolLoopResult:
         """Run up to two full sessions (initial + one retry) from a fresh workspace."""

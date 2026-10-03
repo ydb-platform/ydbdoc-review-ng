@@ -11,6 +11,22 @@ structure, or a missing required file.
 Check completeness, accuracy, terminology, technical literals and inline-code,
 damaged sentences, Markdown/YFM, links/navigation, and missing required files.
 
+Hard rules (do not violate):
+
+- Target-only TOC entries (href present in the final target TOC but absent from
+  the source TOC after the PR) are intentional. Never report them as extra /
+  wrong / missing-from-source. Never ask to delete them.
+- Do not force source-locale navigation paths onto the target when the
+  presentation-reference (or the final target) already uses a different valid
+  established path for the same topic (example: EN SelfHeal under
+  devops/concepts vs a local RU selfheal.md). That is not a defect.
+- Translate source typos into correct target wording. Do not open a finding
+  that demands preserving a source misspelling (example: RU «кана» → EN
+  «channel» is correct).
+- Duplicate placeholder tokens in source like `GROUP_ID GROUP_ID` mean “one or
+  more IDs”; the target may use a clear English gloss. Flag only when the
+  target is broken or misleading (example: `GROUP_ID — GROUP_ID`).
+
 Findings go directly to the public report. Provide for each finding in an
 existing target file: target_path, an exact searchable_snippet that occurs
 once in that final target file, reason in Russian, and expected_correction in

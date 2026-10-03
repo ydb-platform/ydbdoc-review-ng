@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping
 from enum import Enum
 from importlib import resources
@@ -268,8 +269,38 @@ def parse_pr_arbiter_response(
     findings, has_unresolved_location = _parse_findings(raw_findings, target_texts)
     if (raw_verdict == "GREEN") != (type(raw_findings) is list and not raw_findings):
         raise CriticResponseError(CriticResponseErrorReason.INCONSISTENT_RESULT)
-    verdict = Verdict.RED if has_unresolved_location else Verdict(raw_verdict)
+    findings = _drop_noop_arbiter_findings(findings)
+    if has_unresolved_location:
+        verdict = Verdict.RED
+    elif not findings:
+        # Model may emit YELLOW/RED with only no-op or duplicate noise.
+        verdict = Verdict.GREEN
+    else:
+        verdict = Verdict(raw_verdict)
     return CriticResult(verdict, findings)
+
+
+_NOOP_REPLACE = re.compile(
+    r"(?:Заменить|Replace)\s+`([^`]+)`\s+(?:на|with|to)\s+`([^`]+)`",
+    re.IGNORECASE,
+)
+
+
+def _drop_noop_arbiter_findings(findings: tuple[Finding, ...]) -> tuple[Finding, ...]:
+    """Drop duplicate / self-replacing arbiter noise that is not a real defect."""
+
+    kept: list[Finding] = []
+    seen: set[tuple[str | None, str | None, str]] = set()
+    for item in findings:
+        key = (item.target_path, item.searchable_snippet, item.reason)
+        if key in seen:
+            continue
+        seen.add(key)
+        match = _NOOP_REPLACE.search(item.expected_correction)
+        if match is not None and match.group(1) == match.group(2):
+            continue
+        kept.append(item)
+    return tuple(kept)
 
 
 def _finding_schema(target_path_schema: dict[str, object]) -> dict[str, object]:

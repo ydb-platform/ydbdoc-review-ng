@@ -286,8 +286,9 @@ patches. Текст ассистента и tool args сами по себе н�
 
 #### Лимиты надёжности
 
-- Max tool turns на чанк (дефолт 12; override env
-  `YDBDOC_CRITIC_MAX_TOOL_TURNS` при реализации). Превышение → RED.
+- Max tool turns на чанк (дефолт 32; override env
+  `YDBDOC_CRITIC_MAX_TOOL_TURNS`). Превышение / нет `finish` → RED с
+  публичным reason **budget** (не «сбой провайдера»).
 - Per-turn `max_output_tokens` для critic-turn ограничен (как сейчас против
   silent-connection wall); history tool-loop не должна заново класть полные
   файлы в каждый user-turn — только начальный context + tool results.

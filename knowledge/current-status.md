@@ -29,12 +29,14 @@ Semantic flow в `REQUIREMENTS_RU.md`:
 | Offline stub-tool integration tests | **PASS** (`pytest -m 'not live'`, 2026-10-03) |
 | P2 live tool-critic smoke (`--wait wait`) | **PASS** (2026-10-03) — `tests/live/test_tool_critic_live.py` |
 
-> [!success] P2 live PASS; BlobDepot clean re-run in progress
-> Live smoke (2026-10-03): production-shaped `YANDEX_*` mapped from shell
-> `YANDEX_CLOUD_*_DOC_REVIEW`; real DeepSeek tool loop patched tiny
-> `--wait wait` fixture (~17s). Soft `ToolError` (e.g. `end past EOF`) now
-> returns to the model instead of aborting the session. Tag `v1.0.1` moved
-> with the fix; consumer `ydbdoc-review.yml` pins `@v1.0.1`.
+> [!success] Local BlobDepot critic+arbiter → YELLOW (mergeable); CI RED explained
+> Run [37100488317](https://github.com/ydb-platform/ydb/actions/runs/37100488317) /
+> [#54924](https://github.com/ydb-platform/ydb/pull/54924): «сбой модели» = our
+> `TURN_BUDGET` (12) mislabeled as provider. Local grant iteration
+> (`scripts/probe_blobdepot_critic_live.py`): turns=32 → critic finishes →
+> arbiter YELLOW → no-op findings filtered to GREEN. Research:
+> `knowledge/blobdepot-critic-research.md`. Residual prose (`Blob depot`,
+> BS_CONTROLLER word order) still editorial, not budget.
 
 ## Critic TRANSPORT (runs 37009373894 → 37027975808) — real root cause
 

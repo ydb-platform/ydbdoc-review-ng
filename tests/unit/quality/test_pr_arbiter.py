@@ -129,6 +129,23 @@ def test_arbiter_accepts_green_with_no_findings(as_bytes: bool) -> None:
     assert result.corrected_markdown is None
 
 
+def test_arbiter_drops_noop_self_replace_findings_to_green() -> None:
+    """Live BlobDepot: arbiter YELLOW with 'replace X with X' must become GREEN."""
+    finding = {
+        "target_path": "docs/en/toc.yaml",
+        "searchable_snippet": "--snapshot-channel-sp=POOL_NAME",
+        "reason": "В переводе ошибочно назван параметр.",
+        "expected_correction": "Заменить `--snapshot-channel-sp` на `--snapshot-channel-sp`.",
+    }
+    duplicate = dict(finding)
+    result = quality.parse_pr_arbiter_response(
+        json.dumps({"verdict": "YELLOW", "findings": [finding, duplicate]}),
+        target_files={"docs/en/toc.yaml": b"line\n`--snapshot-channel-sp=POOL_NAME`\n"},
+    )
+    assert result.verdict is quality.Verdict.GREEN
+    assert result.findings == ()
+
+
 @pytest.mark.parametrize("verdict", ["YELLOW", "RED"])
 def test_arbiter_accepts_exact_existing_target_finding(verdict: str) -> None:
     result = quality.parse_pr_arbiter_response(

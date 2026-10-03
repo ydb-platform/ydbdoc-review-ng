@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Callable, Mapping, Sequence
 from typing import Literal, Protocol
 
@@ -34,7 +35,7 @@ from ydbdoc_review_ng.translation import (
 from ydbdoc_review_ng.translation.contract import field_request_text
 
 _VERDICT_RANK = {Verdict.GREEN: 0, Verdict.YELLOW: 1, Verdict.RED: 2}
-_UnreviewedReason = Literal["context", "provider", "contract", "missing"]
+_UnreviewedReason = Literal["context", "provider", "contract", "missing", "budget"]
 # One pair per call: packing only on the 1M context window produced a single
 # mega-request (full glossary + all MD/TOC + presentation + reasoning=high)
 # that died at the ~270s provider silent wall (runs 37009373894 / 37027975808).
@@ -180,9 +181,10 @@ def _critic_operator_context(
         if not protected:
             continue
         contracts.append(
-            f"TOC target {target_path} has mandatory preserved target references: "
-            f"{json.dumps(protected)}. The complete returned TOC must still contain "
-            "every listed href/include exactly once."
+            f"TOC target {target_path} has mandatory preserved target-only "
+            f"references: {json.dumps(protected)}. Critic must keep every listed "
+            "href/include exactly once. Arbiter must NOT report those hrefs as "
+            "extra/wrong/missing-from-source."
         )
     if not contracts:
         return base
@@ -247,6 +249,10 @@ def _unreviewed_finding(target_path: str, reason: _UnreviewedReason) -> Finding:
         "provider": (
             "Файл не удалось проверить из-за сбоя модели или провайдера.",
             "Повторите проверку файла.",
+        ),
+        "budget": (
+            "Критик исчерпал лимит tool-ходов, не завершив проверку файла.",
+            "Повторите проверку или увеличьте YDBDOC_CRITIC_MAX_TOOL_TURNS.",
         ),
         "contract": (
             "Ответ арбитра не соответствует формату проверки.",
@@ -414,6 +420,7 @@ def review_pr(
             toc_snapshots=chunk_toc,
             after_patch=after_patch,
             before_model_call=before_model_call,
+            environment=os.environ,
         )
         if result.ok and result.reviewed_bytes is not None:
             chunk_corrected = {target_path: result.reviewed_bytes}
@@ -441,7 +448,8 @@ def review_pr(
             LoopFailureReason.NO_FINISH,
             LoopFailureReason.TURN_BUDGET,
         }:
-            reason = "provider"
+            # Exhausted tool session without finish — not a transport/provider outage.
+            reason = "budget"
         if result.detail in {error.value for error in AttemptError}:
             reason = "provider"
         mark_unreviewed(target_paths, reason)
@@ -454,14 +462,25 @@ def review_pr(
 
     def build_arbiter(chunk_pairs: Sequence[tuple[str, str]]) -> ModelRequest:
         chunk_sources = _subset_sources(source_files, chunk_pairs)
+        arbiter_context = _critic_operator_context(
+            operator_context,
+            chunk_pairs,
+            arbiter_targets,
+            toc_snapshots,
+        )
         return build_pr_arbiter_request(
             model=arbiter_model,
             source_files=chunk_sources,
             translated_files={target: arbiter_targets[target] for _source, target in chunk_pairs},
             glossary_files=_relevant_glossary_files(glossary_files, chunk_sources),
-            operator_context=operator_context,
+            operator_context=arbiter_context,
             toc_snapshots=_subset_toc_snapshots(toc_snapshots, chunk_pairs),
             binary_manifest=binary_manifest,
+            presentation_reference_files={
+                target: presentation_refs[target]
+                for _source, target in chunk_pairs
+                if target in presentation_refs
+            },
         )
 
     reviewed_pairs = tuple(pair for pair in pairs if pair[1] not in unreviewed)

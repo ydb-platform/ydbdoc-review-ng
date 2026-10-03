@@ -24,7 +24,7 @@ def test_tool_critic_patches_wait_wait_against_deepseek() -> None:
 
     env = os.environ.copy()
     env.setdefault("YDBDOC_MODEL_HTTP_TIMEOUT_SECONDS", "180")
-    env.setdefault("YDBDOC_CRITIC_MAX_TOOL_TURNS", "12")
+    env.setdefault("YDBDOC_CRITIC_MAX_TOOL_TURNS", "32")
     result = subprocess.run(
         [sys.executable, "scripts/probe_tool_critic_live.py"],
         cwd=ROOT,

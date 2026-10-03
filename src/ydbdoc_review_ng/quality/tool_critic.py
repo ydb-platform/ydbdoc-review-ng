@@ -19,16 +19,22 @@ from ydbdoc_review_ng.quality.tool_loop import (
 from ydbdoc_review_ng.quality.workspace import CriticWorkspace, ToolError, ToolErrorReason
 
 
+# Live BlobDepot (#54924): default 12 exhausted before finish on ~200-line pages
+# while DeepSeek kept returning tool_calls (HTTP 200). Raise the floor so a
+# surgical session can complete; operators may still override via env.
+_DEFAULT_MAX_TOOL_TURNS = 32
+
+
 def _max_tool_turns(environment: Mapping[str, str] | None) -> int:
     raw = "" if environment is None else environment.get("YDBDOC_CRITIC_MAX_TOOL_TURNS", "")
     raw = raw.strip() if raw else ""
     if not raw:
-        return 12
+        return _DEFAULT_MAX_TOOL_TURNS
     try:
         value = int(raw)
     except ValueError:
-        return 12
-    return value if value >= 1 else 12
+        return _DEFAULT_MAX_TOOL_TURNS
+    return value if value >= 1 else _DEFAULT_MAX_TOOL_TURNS
 
 
 def _workspace_for_chunk(
