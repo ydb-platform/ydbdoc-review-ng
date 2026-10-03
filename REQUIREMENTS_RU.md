@@ -417,8 +417,14 @@ snippet; сообщение «уменьшите файл» допустимо �
 
 YELLOW findings публикуются в QA comment. Автопочинки arbiter findings нет.
 
-Если ни translator, ни critic не создали commit → пустой PR не создаём;
-RED-отчёт в source PR; checkpoint с `target_sha=null`.
+Если после Python-mirror целевая локаль уже отражает дельту source PR
+(нет дыр translator, publication plan без изменений) → комментарий
+«перевод не требуется» + GREEN; critic/arbiter и translation PR не
+запускаются. Это не failure.
+
+Если перевод требовался, но собрать/закоммитить не удалось (дыры,
+ошибка модели) → пустой PR не создаём; RED-отчёт в source PR;
+checkpoint с `target_sha=null`.
 
 ## 5. Оркестрация
 
@@ -428,6 +434,8 @@ RED-отчёт в source PR; checkpoint с `target_sha=null`.
 2. Дневной budget gate (§6) до любого model call.
 3. Direction call (§1.1) → Python scope (§1.2–1.3).
 4. Перевести все страницы; TOC по §3; deterministic ops.
+4a. Если publication plan пуст и нет translator-дыр → «перевод не требуется»
+    + GREEN (target уже зеркалит дельту); дальше не идём.
 5. Один первоначальный **draft** commit собранных файлов + deterministic ops →
    translation PR (технический soft-publish; diagnostics ≠ product). Частичные
    model-fail → остальные всё равно в draft; failed paths = `null` для critic.

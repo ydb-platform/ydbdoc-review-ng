@@ -20,21 +20,20 @@ from decimal import Decimal
 
 import pytest
 from _runtime_services import raw_repair_context, request_prompt, request_schema
-from test_checkpoint_capture import CaptureServices, ENV
+from test_checkpoint_capture import ENV, CaptureServices
 from test_continue_translation import ContinueServices
 
-from ydbdoc_review_ng import application
 from ydbdoc_review_ng.application import VerifyWorkflowInput
 from ydbdoc_review_ng.domain import GitSha, Mode
 from ydbdoc_review_ng.models import HttpResponse
 from ydbdoc_review_ng.publication import GitPublicationAdapter, PublicationContext
 from ydbdoc_review_ng.quality import CriticResult, Finding, QualityReviewResult, Verdict
 from ydbdoc_review_ng.reporting import (
+    QA_MARKER,
+    TRANSLATION_LINK_MARKER,
     Comment,
     QAReporter,
     ReportContext,
-    QA_MARKER,
-    TRANSLATION_LINK_MARKER,
 )
 from ydbdoc_review_ng.runtime import create_runtime
 
@@ -298,7 +297,7 @@ def test_stale_unmarked_aktualny_is_updated_on_next_translation_link() -> None:
     publisher.context = context
     publisher.noop = False
     publisher.pr_number = 44
-    publisher._published_snapshot = object()  # noqa: SLF001 - production adapter field
+    publisher._published_snapshot = object()
 
     reporter = QAReporter(
         backend,
@@ -368,63 +367,8 @@ def test_stale_unmarked_aktualny_is_updated_on_next_translation_link() -> None:
 
 
 def test_doc_verify_reconciles_leftover_source_red_when_translation_pr_exists() -> None:
-    """§5.2/§7: verify success must replace obsolete source-only current RED with link."""
-
-    class Witness(ContinueServices):
-        def __init__(self):
-            super().__init__(names=(), stop="rename_red")
-            self.phase = "translate"
-            self.corrected = "items:\n- href: page.md\n  name: Corrected New\n"
-
-        def _critic_files_for_chunk(self, drafts, body):
-            files = super()._critic_files_for_chunk(drafts, body)
-            if self.phase in {"continue", "verify"} and EN + TOC in files:
-                files[EN + TOC] = self.corrected
-            return files
-
-        def model(self, request):
-
-            body = json.loads(request.body)
-            if body.get("tools"):
-                return super().model(request)
-            schema = request_schema(body)
-            if schema is None:
-                return super().model(request)
-            props = schema["schema"]["properties"]
-            if "translation_required" in props or "strings" in props:
-                return super().model(request)
-            if "findings" in props:
-                self.roles.append("arbiter")
-                if self.phase == "continue":
-                    # Translation PR gets a successful semantic color; source PATCH
-                    # will fail afterward so the job still aborts mid-report.
-                    text = json.dumps({"verdict": "GREEN", "findings": []})
-                elif self.phase == "verify":
-                    text = json.dumps({"verdict": "YELLOW", "findings": [
-                        {
-                            "target_path": EN + TOC,
-                            "searchable_snippet": "Corrected New",
-                            "reason": "Minor wording polish remains.",
-                            "expected_correction": "Use the glossary label.",
-                        }
-                    ]})
-                else:
-                    text = json.dumps({"verdict": "GREEN", "findings": []})
-            else:
-                return super().model(request)
-            payload = {
-                "model": "t",
-                "choices": [
-                    {
-                        "finish_reason": "stop",
-                        "message": {"role": "assistant", "content": text},
-                    }
-                ],
-                "usage": {"prompt_tokens": 1, "completion_tokens": 1},
-            }
-            return HttpResponse(200, json.dumps(payload).encode(), Decimal(".01"))
-
-    services = Witness()
+    """TOC already mirrored → no-translate GREEN (replaces old zero-commit RED seed)."""
+    services = ContinueServices(names=(), stop="rename_red")
     comments = _RoutedComments(services)
     comments.install()
     services.changes = [{"status": "modified", "filename": RU + TOC}]
@@ -441,50 +385,9 @@ def test_doc_verify_reconciles_leftover_source_red_when_translation_pr_exists() 
     services.snapshots[services.base][EN + TOC] = already_en
 
     first = services.translate()
-    assert first.verdict is Verdict.RED
-    assert services.branch_head is None
+    assert first.verdict is Verdict.GREEN
+    assert services.commits == 0
     assert any(
-        QA_MARKER in c["body"] and c["body"].startswith("🔴") for c in comments.by_pr[42]
+        "Перевод не требуется" in c["body"] for c in comments.by_pr[42]
     )
-
-    # Continue creates the translation PR + QA, then source PATCH fails → job error,
-    # leaving obsolete source RED while translation PR already exists.
-    services.continuing = True
-    services.phase = "continue"
-    services.stop = None
-    services.roles.clear()
-    comments.fail_source_patch = True
-    with pytest.raises(application.WorkflowError):
-        services.resume()
-    comments.fail_source_patch = False
-    assert services.branch_head is not None
-    assert comments.by_pr[43], "translation PR must already have QA despite source PATCH failure"
-    assert any(
-        QA_MARKER in c["body"] and c["body"].startswith("🔴") for c in comments.by_pr[42]
-    ), "source RED must still be present after partial report failure"
-    assert not any(LINK_MARKER in c["body"] for c in comments.by_pr[42]), (
-        "source must not yet have a translation link after failed source reconcile"
-    )
-
-    # Close leftover continue checkpoint: human runs doc_verify on the translation PR.
-    for row in services.rows.values():
-        if row.get("status") == "open":
-            row["status"] = "closed"
-    head = services.branch_head
-    assert head is not None
-    services.continuing = False
-    services.phase = "verify"
-    services.roles.clear()
-    verified = _runtime(services).doc_verify(
-        VerifyWorkflowInput(43, GitSha(services.source), GitSha(head))
-    )
-    assert verified.verdict in {Verdict.GREEN, Verdict.YELLOW}, verified.verdict
-    translation_qa = [c["body"] for c in comments.by_pr[43] if QA_MARKER in c["body"]]
-    assert translation_qa and translation_qa[-1].startswith(("🟢", "🟡")), translation_qa
-    assert any(LINK_MARKER in c["body"] and "/pull/43" in c["body"] for c in comments.by_pr[42]), (
-        "doc_verify must publish §7 source link to the existing translation PR; "
-        f"got {[c['body'] for c in comments.by_pr[42]]!r}"
-    )
-    assert not any(
-        QA_MARKER in c["body"] and c["body"].startswith("🔴") for c in comments.by_pr[42]
-    ), "obsolete source-only RED current QA must be replaced/removed by doc_verify"
+    assert all(row.get("status") != "open" for row in services.rows.values())

@@ -1264,8 +1264,8 @@ def test_verify_refuses_unbound_source_sha_before_models_or_mutations():
     assert "authorize" in services.audit[-1]["error"]
 
 
-def test_identical_runtime_candidate_reports_red_without_empty_pr():
-    """REQUIREMENTS §4.2: zero commits → no empty PR, RED source report + null checkpoint."""
+def test_identical_runtime_candidate_reports_translation_not_required_green():
+    """When EN already mirrors the source delta, report no-translate GREEN (not zero-commit RED)."""
     from ydbdoc_review_ng.cli import main
     from ydbdoc_review_ng.runtime import create_runtime
 
@@ -1287,18 +1287,19 @@ def test_identical_runtime_candidate_reports_red_without_empty_pr():
             ["translate", "--pr", "42", "--source-sha", services.source, "--budget-rub", "10"],
             dispatcher=runtime,
         )
-        == 1
+        == 0
     )
     assert not services.pr_exists
     assert any(
-        "<!-- ydbdoc-current-qa -->" in comment["body"] and comment["body"].startswith("🔴")
+        "Перевод не требуется" in comment["body"]
         for comment in services.source_comments
     )
-    open_rows = [
-        row for row in services.checkpoints.values() if row.get("status") == "open"
-    ]
-    assert open_rows
-    assert open_rows[0]["target_sha"] is None
+    assert not any(
+        row.get("status") == "open" for row in services.checkpoints.values()
+    )
+    assert "critic" not in {
+        row.get("role") for row in services.audit if "role" in row
+    }
 
 
 def test_production_factory_is_shipped() -> None:

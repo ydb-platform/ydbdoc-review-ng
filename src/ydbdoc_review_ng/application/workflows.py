@@ -321,6 +321,12 @@ class ContentWorkflowPort(Protocol):
         self, snapshot: ImmutableRunSnapshot, candidate: WorkflowCandidate, /
     ) -> None: ...
 
+    def translation_already_satisfied(
+        self, snapshot: ImmutableRunSnapshot, candidate: WorkflowCandidate, /
+    ) -> bool: ...
+
+    def report_translation_not_required(self, reason: str, /) -> None: ...
+
     def review_checkpoint(
         self,
         snapshot: ImmutableRunSnapshot,
@@ -534,6 +540,23 @@ class LinearWorkflows:
             candidate = self._content.prepare_translation(snapshot)
             stage = WorkflowStage.VALIDATE
             self._content.validate_candidate(snapshot, candidate)
+            if self._content.translation_already_satisfied(snapshot, candidate):
+                # Direction said work was needed, but the target locale already
+                # mirrors the source delta. Same public outcome as §1.1 no-translate.
+                self._content.report_translation_not_required(
+                    "Целевая локаль уже отражает изменения source PR."
+                )
+                context = snapshot.context
+                final_sha = (
+                    snapshot.target_sha
+                    if snapshot.target_sha is not None
+                    else getattr(context, "current_head", snapshot.source_sha)
+                )
+                result = WorkflowResult(
+                    job_id, mode, final_sha, Verdict.GREEN, False
+                )
+                self._succeed_job(job_id, mode, audit_started_at, final_sha)
+                return result
             stage = WorkflowStage.PUBLISH
             # Soft-publish assembled UTF-8 (including partial translator successes)
             # before critic. Failed translator paths remain null in the candidate.

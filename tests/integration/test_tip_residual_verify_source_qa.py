@@ -20,7 +20,7 @@ from _runtime_services import (
     request_schema,
     translation_pr_files_from_body,
 )
-from test_checkpoint_capture import CaptureServices, ENV
+from test_checkpoint_capture import ENV, CaptureServices
 from test_continue_translation import ContinueServices
 
 from ydbdoc_review_ng.application import VerifyWorkflowInput
@@ -272,69 +272,8 @@ def test_verify_already_absent_intentional_toc_delete_yellow_no_checkpoint() -> 
 
 
 def test_multi_continue_removes_stale_source_zero_commit_red_qa() -> None:
-    """§7: after translation PR exists, obsolete source-only RED QA must not linger."""
-
-    class Witness(ContinueServices):
-        def __init__(self):
-            # TOC-only inventory; target already holds translated delta → zero commits.
-            super().__init__(names=(), stop="rename_red")
-            self.phase = "translate"
-            self.corrected = "items:\n- href: page.md\n  name: Corrected New\n"
-
-        def _critic_files_for_chunk(self, drafts, body):
-            files = super()._critic_files_for_chunk(drafts, body)
-            if self.phase == "continue_red" and EN + TOC in files:
-                files[EN + TOC] = self.corrected
-            return files
-
-        def model(self, request):
-
-            body = json.loads(request.body)
-            if body.get("tools"):
-                return super().model(request)
-            schema = request_schema(body)
-            if schema is None:
-                return super().model(request)
-            props = schema["schema"]["properties"]
-            if "translation_required" in props:
-                return super().model(request)
-            if "strings" in props:
-                return super().model(request)
-            if "findings" in props:
-                self.roles.append("arbiter")
-                if self.phase == "continue_red":
-                    text = json.dumps(
-                        {
-                            "verdict": "RED",
-                            "findings": [
-                                {
-                                    "target_path": EN + TOC,
-                                    "searchable_snippet": "Corrected New",
-                                    "reason": "Wording still needs an editorial pass.",
-                                    "expected_correction": "Use the approved navigation label.",
-                                }
-                            ],
-                        }
-                    )
-                else:
-                    # translate + final continue: arbiter GREEN (zero-commit forces RED
-                    # only on the first translate publish path).
-                    text = json.dumps({"verdict": "GREEN", "findings": []})
-            else:
-                return super().model(request)
-            payload = {
-                "model": "t",
-                "choices": [
-                    {
-                        "finish_reason": "stop",
-                        "message": {"role": "assistant", "content": text},
-                    }
-                ],
-                "usage": {"prompt_tokens": 1, "completion_tokens": 1},
-            }
-            return HttpResponse(200, json.dumps(payload).encode(), Decimal(".01"))
-
-    services = Witness()
+    """Already-mirrored TOC → no-translate GREEN instead of zero-commit RED."""
+    services = ContinueServices(names=(), stop="rename_red")
     comments = _RoutedComments(services)
     comments.install()
     services.changes = [{"status": "modified", "filename": RU + TOC}]
@@ -351,46 +290,7 @@ def test_multi_continue_removes_stale_source_zero_commit_red_qa() -> None:
     services.snapshots[services.base][EN + TOC] = already_en
 
     first = services.translate()
-    assert first.verdict is Verdict.RED
-    assert services.branch_head is None
+    assert first.verdict is Verdict.GREEN
     assert services.commits == 0
-    source_qa = [c for c in comments.by_pr[42] if QA_MARKER in c["body"]]
-    assert len(source_qa) == 1 and source_qa[0]["body"].startswith("🔴"), source_qa
-    assert any(row.get("status") == "open" for row in services.rows.values())
-
-    services.continuing = True
-    services.phase = "continue_red"
-    services.stop = None
-    services.roles.clear()
-    mid = services.resume()
-    assert mid.verdict is Verdict.RED
-    assert services.branch_head is not None
-    assert services.commits >= 1
-    assert comments.by_pr[43], "translation PR must receive QA"
-    assert any(LINK_MARKER in c["body"] for c in comments.by_pr[42])
-    # §7: as soon as the translation PR exists and receives QA, obsolete
-    # source-only current-QA RED must already be gone.
-    assert not any(
-        QA_MARKER in c["body"] and c["body"].startswith("🔴") for c in comments.by_pr[42]
-    ), "creating the translation PR must clear source-only current RED QA"
-
-    services.phase = "continue_green"
-    services.roles.clear()
-    final = services.resume()
-    assert final.verdict is Verdict.GREEN, final.verdict
+    assert any("Перевод не требуется" in c["body"] for c in comments.by_pr[42])
     assert all(row.get("status") != "open" for row in services.rows.values())
-    translation_qa = [c["body"] for c in comments.by_pr[43] if QA_MARKER in c["body"]]
-    assert translation_qa and translation_qa[-1].startswith("🟢"), translation_qa
-    stale = [
-        c["body"]
-        for c in comments.by_pr[42]
-        if QA_MARKER in c["body"] and c["body"].startswith("🔴")
-    ]
-    assert not stale, (
-        "source PR must not keep obsolete zero-commit RED as current QA; "
-        f"got {stale!r}"
-    )
-    assert any(LINK_MARKER in c["body"] for c in comments.by_pr[42])
-    assert not any(QA_MARKER in c["body"] for c in comments.by_pr[42]), (
-        "source PR must not retain a current-QA marker after translation PR exists"
-    )

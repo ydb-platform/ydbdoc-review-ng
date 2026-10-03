@@ -1536,6 +1536,22 @@ class RuntimeContent:
         with traced("prepare", "translate_documents", documents_total=len(documents)):
             return self._translate_documents(plans, documents, (), ())
 
+    def translation_already_satisfied(
+        self, snapshot: ImmutableRunSnapshot, candidate: WorkflowCandidate, /
+    ) -> bool:
+        """True when direction wanted work but Python mirror has nothing left to publish."""
+        if self.plans is None or self.plans.manifest is None:
+            return False
+        files = unpack(candidate.content)
+        if any(value is None for value in files.values()):
+            return False
+        return not self.publication_plan(snapshot, candidate).changed
+
+    def report_translation_not_required(self, reason: str, /) -> None:
+        report_classification(
+            self.source.github, self.source.source_pr, reason=reason
+        )
+
     def replay_continuation(self, checkpoint: ContinuationCheckpoint, /) -> ContinueReplay:
         from ydbdoc_review_ng.runtime_continue import replay_continue
 

@@ -292,3 +292,35 @@
 <!-- delta-scope-production -->
 - Production: DeepSeek critic/arbiter всегда. Python задаёт CHANGE CLASS / source delta / touched EN lines. Findings вне дельты drop → GREEN. Unique dest без `model_exempt`. Presentation-reference = previous EN. Патч critic вне touched lines отклоняется.
 - Live delta probe #50858 был GREEN. Дальше commit/tag/`doc_translate` на #50858.
+
+## 2026-10-03 20:30 UTC
+<!-- already-satisfied-green -->
+- Run 37150733390: unique dest + delta critic/arbiter ок, но EN уже готов → zero-commit RED. Direction смотрит только RU inventory.
+- Fix: после prepare, если publication plan пуст и нет дыр → «перевод не требуется» GREEN, без critic/PR.
+
+## 2026-10-03 20:13 UTC
+<!-- 02f3adca4cb577ec -->
+- Доставка.** `29059c4` на `public/main`, тег `v1.0.1` указывает туда же. Закрыт кривой [#54958](https://github.com/ydb-platform/ydb/pull/54958), ветка `translation/pr-50858` удалена. На [#50858](https://github.com/ydb-platform/ydb/pull/50858) снова `doc_translate`: [run 37150733390](https://github.com/ydb-platform/ydb/actions/runs/37150733390) (`in_progress`). #54958 не мержить.
+
+## 2026-10-03 20:19 UTC
+<!-- 22a8ceed06adf621 -->
+- EN `maintenance/manual/dynamic-config.md` уже удалён (404)
+- PR #50858 менял только RU. EN-дельты нечего коммитить. Soft-publish видит `plan.changed=false` → ветка/PR не создаются → zero-commit RED.
+- Почему live-тесты прошли.** `probe_pr_50858_delta_review_live.py` явно пишет: `No GitHub publish`. Он проверял только critic/arbiter на байтах в памяти и ждал GREEN по дельте. Публикацию и правило «zero commits → RED» он не трогал. Модельная часть отработала как в тесте; упал publication contract.
+- Итого: delta-scope сработал. Сломался сценарий «RU надо зеркалить, а EN уже готов». Нужно решать, что делать в этом случае: GREEN «EN уже актуален» без PR, или другой явный исход, а не RED про отсутствие commit.
+
+## 2026-10-03 20:21 UTC
+<!-- 506706d92669ef92 -->
+- Проверка сработала, но она отвечает на другой вопрос.
+- Что она делает сейчас.** DeepSeek в §1.1 смотрит только inventory source PR: RU before/after + mapping путей. Текущие EN байты туда не подаются. На #50858 модель честно видит: RU changelog поменял ссылки, RU `dynamic-config.md` удалён → `translation_required=true`, `ru_to_en`. Это не баг модели.
+- Чего она не делает.** Не сравнивает результат с уже существующим EN. «EN уже с новыми URL и страница уже удалена» Python узнаёт только позже, на surgical/publish. Тогда `noop`, и старый gate §4.2 превращает это в RED «нет commit».
+- Итог.** Ранняя проверка отвечает: «в PR есть работа для зеркалирования локалей?» Поздний gate отвечает: «появился ли commit?» Для уже готового EN оба ответа формально верны, а нужный исход («перевод не требуется», GREEN) нигде не вычисляется.
+- Нужный исход: после Python-mirror, если менять в EN нечего, это `перевод не требуется` + GREEN, а не zero-commit RED. Это либо отдельная Python-проверка после плана (до/вместо publish), либо расширение direction контекстом текущих EN. Сейчас второго нет.
+
+## 2026-10-03 20:22 UTC
+<!-- 56dfbb6a11029203 -->
+- После Python-mirror добавить вторую проверку: **осталась ли реальная работа в target.**
+- комментарий «перевод не требуется» + короткая причина («EN уже отражает дельту»);
+- 4. Zero-commit RED оставить только для настоящего провала: перевод требовался, а собрать/закоммитить не удалось (дыры, ошибка модели, validation).
+- Почему так.** «Требуется ли перевод» по смыслу §1.1 = нужна ли работа. Когда EN уже готов, это знает Python на mirror, не модель на inventory. Critic на noop только жжёт деньги.
+- Не предлагаю:** менять prompt direction «угадай по RU, готов ли EN» — хрупко и дорого.

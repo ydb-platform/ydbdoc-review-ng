@@ -684,23 +684,20 @@ def test_review_path_cannot_name_a_selected_delete_operation():
         replay_continue(content, corrupted)
 
 
-def test_red_without_commits_opens_source_report_and_null_checkpoint():
-    """REQUIREMENTS §4.2: zero-commit RED still reports and opens target_sha=null."""
+def test_already_mirrored_target_reports_translation_not_required_green():
+    """When EN already matches the prepared candidate, no-translate GREEN (not zero-commit RED)."""
     services = CaptureServices(names=("a",), stop="rename_red")
     services.branch_head = services.translated
     services.snapshots[services.translated] = dict(services.files)
     for files in [services.files, *services.snapshots.values()]:
         files["ydb/docs/en/core/a.md"] = b"# Translated\n"
     result = services.translate()
-    assert result.verdict is Verdict.RED
-    # §4.2 / §7: zero-commit RED QA is published on the source PR.
+    assert result.verdict is Verdict.GREEN
     assert any(
-        "RED" in comment["body"] or "🔴" in comment["body"]
-        for comment in services.source_comments
+        "Перевод не требуется" in comment["body"] for comment in services.source_comments
     )
-    open_rows = [row for row in services.rows.values() if row["status"] == "open"]
-    assert open_rows
-    assert open_rows[0]["target_sha"] is None
+    assert not any(row["status"] == "open" for row in services.rows.values())
+    assert services.commits == 0
 
 
 @pytest.mark.parametrize(
