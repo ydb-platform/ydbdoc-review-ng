@@ -242,7 +242,16 @@ def test_continue_uses_saved_inventory_after_source_head_and_inventory_move():
     assert services.roles.count("arbiter") >= 1
     assert services.roles[-1] == "arbiter"
     assert services.files[EN + "b.md"] == b"# Resumed b\n"
-    assert all("ref=" + services.source in path for path in services.reads if "/ru/core/" in path)
+    moved_head = "f" * 40
+    frozen = {
+        saved.source_sha.value,
+        saved.source_inventory.source_base_sha.value,
+        saved.source_inventory.source_head_sha.value,
+    }
+    ru_refs = [path for path in services.reads if "/ru/core/" in path]
+    assert ru_refs
+    assert all(any("ref=" + sha in path for sha in frozen) for path in ru_refs)
+    assert all("ref=" + moved_head not in path for path in ru_refs)
     assert services.jobs[result.job_id]["pr_number"] == 42
     assert services.rows[saved.continuation_id]["status"] == "closed"
     assert sum("<!-- ydbdoc-current-qa -->" in c["body"] for c in services.comments) == 1

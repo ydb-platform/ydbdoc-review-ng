@@ -349,11 +349,14 @@ def test_merged_source_uses_workflow_pinned_base_after_branch_advances() -> None
 
     class MergedServices(RuntimeServices):
         merge_commit = "c" * 40
+        merge_parent = "d" * 40
 
         def github(self, method, path, payload):
             response = super().github(method, path, payload)
             if path.endswith("/pulls/42"):
                 return {**response, "merged": True, "merge_commit_sha": self.merge_commit}
+            if path.endswith("/git/commits/" + self.merge_commit):
+                return {"parents": [{"sha": self.merge_parent}], "tree": {"sha": "e" * 40}}
             return response
 
     services = MergedServices()
@@ -386,9 +389,10 @@ def test_merged_source_uses_workflow_pinned_base_after_branch_advances() -> None
     assert source.context.current_head == pinned_base.commit_sha
     assert source.context.expected_branch_head is None
     assert services.branch_head is None
-    assert source.inventory.source_base_sha == GitSha(services.base)
-    assert source.inventory.source_head_sha == GitSha(services.source)
-    assert source.source_change_snapshot.commit_sha == GitSha(services.source)
+    assert source.inventory.source_base_sha == GitSha(services.merge_parent)
+    assert source.inventory.source_head_sha == GitSha(services.merge_commit)
+    assert source.source_base_snapshot.commit_sha == GitSha(services.merge_parent)
+    assert source.source_change_snapshot.commit_sha == GitSha(services.merge_commit)
     merge_base_with = source.snapshots.merge_base_with
     assert merge_base_with is not None
     assert GitSha(services.base) not in {

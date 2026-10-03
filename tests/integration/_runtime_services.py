@@ -287,7 +287,7 @@ class RuntimeServices:
                 }
             )
         if method == "GET" and path.startswith("/git/commits/"):
-            return {"tree": {"sha": "c" * 40}}
+            return {"tree": {"sha": "c" * 40}, "parents": [{"sha": self.base}]}
         if path == "/git/blobs":
             self.blob = base64.b64decode(payload["content"])
             sha = f"{len(self.blobs) + 0xC0:040x}"

@@ -58,6 +58,12 @@ def test_repeated_identical_url_replacements_update_every_english_copy() -> None
     assert plan.patched_target == NEW.join((b"A ", b" B ", b" C\n"))
 
 
+def test_identical_source_versions_fall_back_to_whole_file() -> None:
+    plan = plan_surgical_update(b"* Same\n", b"* Same\n", b"* Stale English\n")
+    assert plan.mode is SurgicalMode.WHOLE_FILE
+    assert plan.patched_target is None
+
+
 def test_structural_insert_falls_back_to_whole_file() -> None:
     plan = plan_surgical_update(
         b"* One\n",
@@ -109,19 +115,27 @@ class _BoomModels:
 
 
 class _GithubBefore:
-    def __init__(self, before: bytes) -> None:
+    def __init__(self, before: bytes, after: bytes | None = None) -> None:
         self.before = before
+        self.after = after
+        self.base = SnapshotRef(RepositoryId("ydb-platform/ydb"), GitSha("b" * 40))
+        self.change = SnapshotRef(RepositoryId("ydb-platform/ydb"), GitSha("c" * 40))
 
     def read_bytes(self, snapshot, path):
-        return self.before
+        del path
+        if snapshot == self.base:
+            return self.before
+        if snapshot == self.change:
+            return self.after
+        raise AssertionError(snapshot)
 
 
 class _SourceBefore:
-    def __init__(self, before: bytes) -> None:
-        self.source_base_snapshot = SnapshotRef(
-            RepositoryId("ydb-platform/ydb"), GitSha("b" * 40)
-        )
-        self.github = _GithubBefore(before)
+    def __init__(self, before: bytes, after: bytes | None = None) -> None:
+        github = _GithubBefore(before, after)
+        self.source_base_snapshot = github.base
+        self.source_change_snapshot = github.change
+        self.github = github
 
 
 def _document(source: bytes, target: bytes):
@@ -154,5 +168,17 @@ def test_runtime_skips_model_when_existing_english_needs_only_url_rewrites() -> 
     _accepted, translated = content._translate_document(
         _document(source_after, existing_en)
     )
+
+    assert translated.translated_markdown == "* Enable views in [cfg](" + NEW.decode() + ").\n"
+
+
+def test_runtime_surgical_uses_pr_change_snapshot_not_later_main_source() -> None:
+    source_before = b"* Enable views in [cfg](" + OLD + b").\n"
+    source_after = b"* Enable views in [cfg](" + NEW + b").\n"
+    existing_en = b"* Enable views in [cfg](" + OLD + b").\n"
+    later_main = source_after + b"* Unrelated later changelog line.\n"
+    content = RuntimeContent(_SourceBefore(source_before, source_after), _BoomModels(), {})
+
+    _accepted, translated = content._translate_document(_document(later_main, existing_en))
 
     assert translated.translated_markdown == "* Enable views in [cfg](" + NEW.decode() + ").\n"

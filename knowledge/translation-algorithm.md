@@ -14,11 +14,12 @@
 ## Prep + Translator
 
 Placeholders + identifier atoms (не рвать `BS\_CONTROLLER` на ESCAPE).
-Если есть old target и source before/after: surgical update (уникальные
-URL/строки без модели, иначе модель только на hunks). Иначе целый файл одним
-request. Old target в hunk-prompt только как fragment; в whole-file fallback
-как presentation reference. Segment ID map → runtime restore + apply map.
-Собранный UTF-8 → **draft** soft-publish (diagnostics ≠ product).
+Если есть old target и source before/after PR (merged: parent/merge, не
+текущий `main`): surgical update (уникальные URL/строки без модели, иначе
+модель только на hunks). Иначе целый файл одним request. Old target в
+hunk-prompt только как fragment; в whole-file fallback как presentation
+reference. Segment ID map → runtime restore + apply map. Собранный UTF-8 →
+**draft** soft-publish (diagnostics ≠ product).
 
 ## TOC
 

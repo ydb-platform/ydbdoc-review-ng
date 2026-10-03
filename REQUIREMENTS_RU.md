@@ -55,7 +55,9 @@ provider error / невалидном JSON. Вторая неудача → job 
 После направления Python зеркалит inventory:
 
 - Markdown/YFM source-locale страница → перевод target. Если у пары уже есть
-  target **и** известен source before/after, runtime сначала пробует
+  target **и** известен source before/after (open PR: `base.sha`/`head`;
+  merged: first parent merge-commit / merge-commit, не плавающий `base.sha`
+  и не текущий tip `main`), runtime сначала пробует
   **surgical update**: перенести только source-delta на существующий target
   (уникальные замены URL/строк без модели; иначе модель переводит только
   выровненные hunks). Whole-file перевод — fallback, если выровнять нельзя

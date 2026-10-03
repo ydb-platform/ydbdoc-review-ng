@@ -157,9 +157,9 @@ _PLACEHOLDER_PREFIXES = ("[[YDBDOC_PROTECTED_", "[[YDBDOC_URL_")
 _ATX_HEADING_LINE = re.compile(r"(?m)^ {0,3}#{1,6}[ \t]+")
 
 
-def _read_source_before(source: object, path: RepoPath) -> bytes | None:
+def _read_source_snapshot(source: object, attr: str, path: RepoPath) -> bytes | None:
     github = getattr(source, "github", None)
-    snapshot = getattr(source, "source_base_snapshot", None)
+    snapshot = getattr(source, attr, None)
     reader = getattr(github, "read_bytes", None)
     if reader is None or snapshot is None:
         return None
@@ -168,6 +168,10 @@ def _read_source_before(source: object, path: RepoPath) -> bytes | None:
     except (AttributeError, TypeError, RuntimeBoundaryError):
         return None
     return value if type(value) is bytes else None
+
+
+def _read_source_before(source: object, path: RepoPath) -> bytes | None:
+    return _read_source_snapshot(source, "source_base_snapshot", path)
 
 
 def pack(files: Mapping[str, bytes | None]) -> bytes:
@@ -1971,9 +1975,13 @@ class RuntimeContent:
 
         surgical_candidate: bytes | None = None
         source_before = _read_source_before(self.source, entry.pair.source_path)
+        source_after = (
+            _read_source_snapshot(self.source, "source_change_snapshot", entry.pair.source_path)
+            or document.source
+        )
         if target_reference_bytes is not None and source_before is not None:
             surgical = plan_surgical_update(
-                source_before, document.source, target_reference_bytes
+                source_before, source_after, target_reference_bytes
             )
             write_trace(
                 "translation",

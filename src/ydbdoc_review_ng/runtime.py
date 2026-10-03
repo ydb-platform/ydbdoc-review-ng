@@ -334,14 +334,28 @@ class RuntimeSource:
         repository = RepositoryId(self.github.repository)
         base_snapshot = SnapshotRef(repository, tip)
         try:
-            source_base_snapshot = SnapshotRef(repository, GitSha(pr["base"]["sha"]))
+            reported_base_sha = GitSha(pr["base"]["sha"]).value
         except (KeyError, TypeError, ValueError):
             raise RuntimeBoundaryError("source_base_missing") from None
         merged = bool(pr["merged"])
         original = SnapshotRef(
             repository, GitSha(pr["merge_commit_sha"] if merged else pr["head"]["sha"])
         )
-        change_snapshot = SnapshotRef(repository, GitSha(pr["head"]["sha"]))
+        if merged:
+            # The GitHub `base.sha` field drifts with main after merge. Surgical
+            # before/after is the merge commit and its first parent (squash: one
+            # parent). Head of a squash PR is not the merged tree.
+            commit = self.github.request("GET", "/git/commits/" + original.commit_sha.value)
+            try:
+                source_base_snapshot = SnapshotRef(
+                    repository, GitSha(commit["parents"][0]["sha"])
+                )
+            except (KeyError, IndexError, TypeError, ValueError):
+                raise RuntimeBoundaryError("source_base_missing") from None
+            change_snapshot = original
+        else:
+            source_base_snapshot = SnapshotRef(repository, GitSha(reported_base_sha))
+            change_snapshot = SnapshotRef(repository, GitSha(pr["head"]["sha"]))
         source = SnapshotRef(repository, expected_source) if merged else original
         # Verify keeps the previously pinned authoritative source even if base advances.
         if authorization.mode is Mode.DOC_VERIFY:
@@ -372,7 +386,7 @@ class RuntimeSource:
         if (
             fresh["head"]["sha"] != pr["head"]["sha"]
             or fresh["base"]["ref"] != base.value
-            or fresh["base"].get("sha") != source_base_snapshot.commit_sha.value
+            or fresh["base"].get("sha") != reported_base_sha
         ):
             raise RuntimeBoundaryError("source_pr_changed")
         head = self.github.head(authorization.branch)

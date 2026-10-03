@@ -139,7 +139,7 @@ def plan_surgical_update(
     if not source_before or not source_after or not existing_target:
         return SurgicalPlan(SurgicalMode.WHOLE_FILE)
     if source_before == source_after:
-        return SurgicalPlan(SurgicalMode.UNIQUE_REPLACEMENTS, patched_target=existing_target)
+        return SurgicalPlan(SurgicalMode.WHOLE_FILE)
     pairs = collect_unique_replacements(source_before, source_after)
     if pairs is not None:
         patched = apply_unique_replacements(existing_target, pairs)
