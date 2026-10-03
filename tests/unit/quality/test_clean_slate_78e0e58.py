@@ -4,21 +4,15 @@ from __future__ import annotations
 
 import json
 
+from tests.support.scripted_models import ScriptedModels
 from ydbdoc_review_ng.models import AttemptError, ModelCallResult
 from ydbdoc_review_ng.quality.critic import build_pr_arbiter_request, parse_pr_arbiter_response
 from ydbdoc_review_ng.quality.repair import review_pr
 from ydbdoc_review_ng.quality.types import Verdict
 
 
-class _Scripted:
-    def __init__(self, payloads: list[object]) -> None:
-        self.payloads = list(payloads)
-
-    def invoke(self, request):
-        item = self.payloads.pop(0)
-        if isinstance(item, ModelCallResult):
-            return item
-        return ModelCallResult(item, None, ())
+class _Scripted(ScriptedModels):
+    pass
 
 
 def test_missing_required_target_cannot_finish_green() -> None:

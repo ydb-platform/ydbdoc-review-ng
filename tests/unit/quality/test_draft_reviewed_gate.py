@@ -4,23 +4,16 @@ from __future__ import annotations
 
 import json
 
+from tests.support.scripted_models import ScriptedModels
+from tests.support.tool_critic_scripts import patch_read_finish
 from ydbdoc_review_ng.domain import ModelRole
-from ydbdoc_review_ng.models import AttemptError, ModelCallResult, ModelRequest
+from ydbdoc_review_ng.models import AttemptError, ModelCallResult
 from ydbdoc_review_ng.quality.repair import review_pr
 from ydbdoc_review_ng.quality.types import Verdict
 
 
-class _Scripted:
-    def __init__(self, payloads: list[str | ModelCallResult]) -> None:
-        self.payloads = list(payloads)
-        self.calls: list[ModelRequest] = []
-
-    def invoke(self, request: ModelRequest) -> ModelCallResult:
-        self.calls.append(request)
-        item = self.payloads.pop(0)
-        if isinstance(item, ModelCallResult):
-            return item
-        return ModelCallResult(item, None, ())
+class _Scripted(ScriptedModels):
+    pass
 
 
 def test_critic_transport_failure_is_red_without_arbiter_on_raw_draft() -> None:
@@ -56,10 +49,11 @@ def test_critic_transport_failure_is_red_without_arbiter_on_raw_draft() -> None:
 def test_critic_invalid_contract_after_retry_is_red() -> None:
     source = {"docs/ru/a.md": b"# A\n"}
     translated = {"docs/en/a.md": b"# Draft\n"}
+    # Two sessions, each starts with a non-tool text response → protocol/contract RED.
     models = _Scripted(
         [
-            "{not-json",
-            "{still-not-json",
+            ModelCallResult("not-tools", None, ()),
+            ModelCallResult("still-not-tools", None, ()),
         ]
     )
 
@@ -81,9 +75,10 @@ def test_critic_invalid_contract_after_retry_is_red() -> None:
 def test_successful_critic_still_reaches_arbiter() -> None:
     source = {"docs/ru/a.md": b"# A\n"}
     translated = {"docs/en/a.md": b"# Draft\n"}
+    reviewed = b"# Reviewed\n"
     models = _Scripted(
         [
-            json.dumps({"files": {"docs/en/a.md": "# Reviewed\n"}}),
+            *patch_read_finish("docs/en/a.md", translated["docs/en/a.md"], reviewed),
             json.dumps({"verdict": "GREEN", "findings": []}),
         ]
     )
@@ -100,7 +95,9 @@ def test_successful_critic_still_reaches_arbiter() -> None:
         on_successful_critic_chunk=published.append,
     )
 
-    assert [call.role for call in models.calls] == [ModelRole.CRITIC, ModelRole.ARBITER]
-    assert published == [{"docs/en/a.md": b"# Reviewed\n"}]
-    assert corrected == {"docs/en/a.md": b"# Reviewed\n"}
+    assert corrected == {"docs/en/a.md": reviewed}
+    assert published == [{"docs/en/a.md": reviewed}]
     assert final.verdict is Verdict.GREEN
+    assert any(call.role is ModelRole.ARBITER for call in models.calls)
+    assert models.calls[0].tools is not None
+    assert models.calls[0].schema is None

@@ -49,10 +49,11 @@ def test_critic_renders_exact_shipped_prompt_template() -> None:
     built = request()
     assert built.developer_prompt == template
     assert "<source-pr-files>" not in built.developer_prompt
+    assert "Use only these tools: read, grep, apply_patch, finish." in template
     assert built.prompt.endswith(
-        "Before answering, check completeness, terminology, technical literals and "
-        "inline-code, damaged sentences, TOC correctness, and the complete requested "
-        "file set."
+        "Before finish, check completeness, terminology, technical literals and "
+        "inline-code, damaged sentences, TOC correctness, and the supplied pair. "
+        "Use tools only; end with finish after mandatory re-reads."
     )
 
 
@@ -71,23 +72,16 @@ def test_critic_contains_complete_two_file_inputs_and_glossary() -> None:
     assert built.model == "critic-model"
     assert built.target_path is None
     assert built.developer_prompt is not None
-    assert built.max_output_tokens == 16_384
-    assert mutable_json(built.schema) == {
-        "type": "object",
-        "properties": {
-            "files": {
-                "type": "object",
-                "properties": {
-                    "docs/en/article.md": {"type": "string"},
-                    "docs/en/toc.yaml": {"type": "string"},
-                },
-                "required": list(TARGET_PATHS),
-                "additionalProperties": False,
-            }
-        },
-        "required": ["files"],
-        "additionalProperties": False,
+    assert built.max_output_tokens == 4_096
+    assert built.schema is None
+    assert built.tools is not None
+    tool_names = {
+        item["function"]["name"]
+        for item in mutable_json(built.tools)
+        if isinstance(item, dict)
     }
+    assert tool_names == {"read", "grep", "apply_patch", "finish"}
+    assert built.messages is not None
 
 
 def test_template_edit_changes_next_request_without_workflow_change(
@@ -118,7 +112,7 @@ def test_operator_context_is_separate_from_file_maps() -> None:
     context = "Уточните термин в статье.\nСохраните структуру.\n"
     built = request(operator_context=context)
     assert f"<operator-context>\n{context}</operator-context>" in built.prompt
-    assert built.prompt.endswith("file set.")
+    assert built.prompt.endswith("mandatory re-reads.")
     assert context not in block(built.prompt, "source-pr-files").values()
     assert context not in block(built.prompt, "translation-pr-files").values()
 

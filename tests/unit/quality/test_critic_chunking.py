@@ -4,25 +4,25 @@ from __future__ import annotations
 
 import json
 
+from tests.support.scripted_models import ScriptedModels
 from ydbdoc_review_ng.domain import ModelRole
-from ydbdoc_review_ng.models import ModelCallResult, ModelRequest
+from ydbdoc_review_ng.models import ModelRequest
 from ydbdoc_review_ng.quality.repair import review_pr
 from ydbdoc_review_ng.quality.types import Verdict
 
 
-class _Scripted:
-    def __init__(self, payloads: list[str]) -> None:
-        self.payloads = list(payloads)
-        self.calls: list[ModelRequest] = []
-
-    def invoke(self, request: ModelRequest) -> ModelCallResult:
-        self.calls.append(request)
-        return ModelCallResult(self.payloads.pop(0), None, ())
+class _Scripted(ScriptedModels):
+    pass
 
 
 def _target_paths(request: ModelRequest) -> list[str]:
-    files = request.schema["properties"]["files"]
-    return list(files["required"])
+    if request.schema is not None:
+        files = request.schema["properties"]["files"]
+        return list(files["required"])
+    block = request.prompt.split("<translation-pr-files>\n", 1)[1].split(
+        "\n</translation-pr-files>", 1
+    )[0]
+    return list(json.loads(block))
 
 
 def test_oversized_review_splits_into_whole_file_pair_chunks_and_pushes_each() -> None:
@@ -70,12 +70,13 @@ def test_oversized_review_splits_into_whole_file_pair_chunks_and_pushes_each() -
         "docs/en/a.md": b"# Fixed A\n",
         "docs/en/b.md": b"# Fixed B\n",
     }
-    assert [call.role for call in models.calls] == [
-        ModelRole.CRITIC,
-        ModelRole.CRITIC,
-        ModelRole.ARBITER,
-        ModelRole.ARBITER,
-    ]
+    critic_calls = [call for call in models.calls if call.role is ModelRole.CRITIC]
+    arbiter_calls = [call for call in models.calls if call.role is ModelRole.ARBITER]
+    assert len(arbiter_calls) == 2
+    assert {_target_paths(call)[0] for call in critic_calls} == {
+        "docs/en/a.md",
+        "docs/en/b.md",
+    }
     assert pushes == [("docs/en/a.md",), ("docs/en/b.md",)]
     assert final.verdict is Verdict.GREEN
 
@@ -114,28 +115,29 @@ def test_fitting_multi_file_pr_still_uses_one_pair_per_critic_call() -> None:
         "docs/en/a.md": b"# Fixed A\n",
         "docs/en/b.md": b"# Fixed B\n",
     }
-    assert [call.role for call in models.calls] == [
-        ModelRole.CRITIC,
-        ModelRole.CRITIC,
-        ModelRole.ARBITER,
-        ModelRole.ARBITER,
-    ]
-    assert [_target_paths(call) for call in models.calls[:2]] == [
-        ["docs/en/a.md"],
-        ["docs/en/b.md"],
-    ]
+    critic_calls = [call for call in models.calls if call.role is ModelRole.CRITIC]
+    arbiter_calls = [call for call in models.calls if call.role is ModelRole.ARBITER]
+    assert len(arbiter_calls) == 2
+    first_turns = []
+    seen: set[str] = set()
+    for call in critic_calls:
+        path = _target_paths(call)[0]
+        if path not in seen:
+            first_turns.append([path])
+            seen.add(path)
+    assert first_turns == [["docs/en/a.md"], ["docs/en/b.md"]]
     assert final.verdict is Verdict.GREEN
 
 
 def test_dual_locale_glossary_is_reduced_to_relevant_sections() -> None:
     ru_glossary = (
-        "## BlobDepot {#blobdepot}\n\n**BlobDepot** stores blobs.\n\n"
-        "## Unrelated {#unrelated}\n\n**UnrelatedTerm** never matches.\n"
-    ).encode()
+        b"## BlobDepot {#blobdepot}\n\n**BlobDepot** stores blobs.\n\n"
+        b"## Unrelated {#unrelated}\n\n**UnrelatedTerm** never matches.\n"
+    )
     en_glossary = (
-        "## BlobDepot {#blobdepot}\n\n**BlobDepot** stores blobs.\n\n"
-        "## Unrelated {#unrelated}\n\n**UnrelatedTerm** never matches.\n"
-    ).encode()
+        b"## BlobDepot {#blobdepot}\n\n**BlobDepot** stores blobs.\n\n"
+        b"## Unrelated {#unrelated}\n\n**UnrelatedTerm** never matches.\n"
+    )
     models = _Scripted(
         [
             json.dumps({"files": {"docs/en/a.md": "# BlobDepot fixed\n"}}),
@@ -256,4 +258,9 @@ def test_single_pair_that_does_not_fit_is_left_unreviewed_and_forces_red() -> No
         and "Уменьш" in finding.expected_correction
         for finding in final.findings
     )
-    assert [call.role for call in models.calls] == [ModelRole.CRITIC, ModelRole.ARBITER]
+    assert any(call.role is ModelRole.CRITIC for call in models.calls)
+    assert any(call.role is ModelRole.ARBITER for call in models.calls)
+    assert all(
+        call.role is ModelRole.CRITIC or call.role is ModelRole.ARBITER
+        for call in models.calls
+    )

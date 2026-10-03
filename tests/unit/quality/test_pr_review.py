@@ -5,25 +5,16 @@ from collections.abc import Mapping
 
 import pytest
 
+from tests.support.scripted_models import ScriptedModels
 from ydbdoc_review_ng import quality
 from ydbdoc_review_ng.domain import ModelRole
 from ydbdoc_review_ng.models import AttemptError, ModelCallResult
 
 
-class FifoModels:
-    def __init__(self, responses):
-        self.responses = list(responses)
-        self.calls = []
-
-    def invoke(self, request, /):
-        assert self.responses, "unexpected extra model call"
-        self.calls.append(request)
-        response = self.responses.pop(0)
-        return (
-            response
-            if isinstance(response, ModelCallResult)
-            else ModelCallResult(response, None, ())
-        )
+class FifoModels(ScriptedModels):
+    @property
+    def responses(self):
+        return self.payloads
 
 
 def prompt_map(request, tag):
@@ -76,21 +67,25 @@ def test_two_file_pr_reviews_one_pair_per_critic_and_arbiter_call(verdict, chang
     )
     assert output == corrected
     assert final.verdict.value == verdict
-    assert events == ["call", "validated", "call", "validated", "call", "call"]
-    assert [call.role for call in executor.calls] == [
-        ModelRole.CRITIC,
-        ModelRole.CRITIC,
-        ModelRole.ARBITER,
-        ModelRole.ARBITER,
-    ]
-    assert [call.model for call in executor.calls] == ["editor", "editor", "judge", "judge"]
-    assert prompt_map(executor.calls[0], "translation-pr-files") == {
+    critic_turns_per_file = 1 if not changed else 3
+    expected_events = (
+        (["call"] * critic_turns_per_file + ["validated"]) * 2 + ["call", "call"]
+    )
+    assert events == expected_events
+    critic_calls = [call for call in executor.calls if call.role is ModelRole.CRITIC]
+    arbiter_calls = [call for call in executor.calls if call.role is ModelRole.ARBITER]
+    assert len(critic_calls) == 2 * critic_turns_per_file
+    assert len(arbiter_calls) == 2
+    assert {call.model for call in critic_calls} == {"editor"}
+    assert {call.model for call in arbiter_calls} == {"judge"}
+    assert prompt_map(critic_calls[0], "translation-pr-files") == {
         "en/a.md": original["en/a.md"].decode()
     }
-    assert prompt_map(executor.calls[1], "translation-pr-files") == {
+    # First turn of second file chunk.
+    assert prompt_map(critic_calls[critic_turns_per_file], "translation-pr-files") == {
         "en/b.md": original["en/b.md"].decode()
     }
-    assert prompt_map(executor.calls[2], "translation-pr-files") == {
+    assert prompt_map(arbiter_calls[0], "translation-pr-files") == {
         "en/a.md": corrected["en/a.md"].decode()
     }
     assert executor.responses == []
@@ -121,7 +116,8 @@ def test_invalid_files_retry_then_marks_unreviewed_red():
     )
     assert corrected == original
     assert result.verdict.value == "RED"
-    assert [call.role.value for call in executor.calls] == ["critic", "critic"]
+    assert all(call.role.value == "critic" for call in executor.calls)
+    assert len(executor.calls) == 6  # two sessions × patch/read/finish, validate fails
 
 
 @pytest.mark.parametrize(
@@ -167,14 +163,11 @@ def test_fitting_pairs_still_split_one_per_chunk_and_keep_fixture_glossary():
         glossary_files={"glossary.md": glossary.encode()},
         validate_files=lambda files: None,
     )
-    assert len(executor.calls) == 4
-    assert [call.role for call in executor.calls] == [
-        ModelRole.CRITIC,
-        ModelRole.CRITIC,
-        ModelRole.ARBITER,
-        ModelRole.ARBITER,
-    ]
-    assert prompt_map(executor.calls[0], "source-pr-files") == {"ru/a.md": full}
-    assert prompt_map(executor.calls[1], "source-pr-files") == {"ru/b.md": full}
+    critic_calls = [call for call in executor.calls if call.role is ModelRole.CRITIC]
+    arbiter_calls = [call for call in executor.calls if call.role is ModelRole.ARBITER]
+    assert len(critic_calls) == 2  # finish-only; draft already matches
+    assert len(arbiter_calls) == 2
+    assert prompt_map(critic_calls[0], "source-pr-files") == {"ru/a.md": full}
+    assert prompt_map(critic_calls[1], "source-pr-files") == {"ru/b.md": full}
     for call in executor.calls:
         assert prompt_map(call, "project-glossary") == {"glossary.md": glossary}

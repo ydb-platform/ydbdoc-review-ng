@@ -16,8 +16,12 @@ from ydbdoc_review_ng.quality.critic import (
     build_pr_arbiter_request,
     build_pr_critic_request,
     parse_pr_arbiter_response,
-    parse_pr_critic_response,
 )
+from ydbdoc_review_ng.quality.tool_critic import (
+    run_tool_critic_chunk,
+    toc_target_only_guard,
+)
+from ydbdoc_review_ng.quality.tool_loop import LoopFailureReason
 from ydbdoc_review_ng.quality.types import CriticResult, Finding, Verdict
 from ydbdoc_review_ng.terminology import bilingual_glossary_context
 from ydbdoc_review_ng.toc_delta import TocDeltaError, target_only_toc_references
@@ -334,43 +338,115 @@ def review_pr(
         critic_chunks = ((),)
 
     for chunk_pairs in critic_chunks:
-        critic = build_critic(chunk_pairs)
         target_paths = tuple(target for _source, target in chunk_pairs)
-        response = None
-        saw_non_final = False
-        for attempt in (1, 2):
-            if before_model_call is not None:
-                before_model_call()
-            response = executor.invoke(critic)
-            if response.success and response.text is not None:
-                try:
-                    chunk_corrected = parse_pr_critic_response(
-                        response.text, target_paths=target_paths
+        if not chunk_pairs:
+            # Zero-text: still invoke the gate; success is finish (or legacy empty files).
+            for attempt in (1, 2):
+                if before_model_call is not None:
+                    before_model_call()
+                response = executor.invoke(build_critic(()))
+                finished = False
+                if response.success:
+                    if response.tool_calls and response.tool_calls[0].name == "finish":
+                        finished = True
+                    elif response.text is not None:
+                        try:
+                            payload = json.loads(response.text)
+                        except json.JSONDecodeError:
+                            payload = None
+                        finished = type(payload) is dict and payload.get("files") == {}
+                if finished:
+                    if on_successful_critic_chunk is not None:
+                        on_successful_critic_chunk({})
+                    break
+                if attempt == 2:
+                    reason: _UnreviewedReason = (
+                        "provider"
+                        if response.failure is AttemptError.NON_FINAL
+                        or (
+                            response.failure is not None
+                            and response.failure is not AttemptError.EMPTY_TEXT
+                        )
+                        else "contract"
                     )
-                    validate_files(chunk_corrected)
-                except Exception:
-                    if attempt == 2:
-                        # Critic is a hard quality gate: invalid reviewed bytes must
-                        # not fall through to arbiter as a product success (§4.1).
-                        mark_unreviewed(target_paths, "contract")
-                        if not pairs:
-                            resource_review_reason = "contract"
-                        break
-                    continue
-                corrected.update(chunk_corrected)
-                if on_successful_critic_chunk is not None:
-                    on_successful_critic_chunk(chunk_corrected)
-                break
-            if response.failure is AttemptError.NON_FINAL:
-                # §4: NON_FINAL survives a differently-failed retry → chunk unreviewed.
-                saw_non_final = True
-            if attempt == 2:
-                # Provider/transport/503 after retry: raw translator dump is not a
-                # reviewed product. Mark unreviewed RED; skip arbiter for the chunk.
-                mark_unreviewed(target_paths, "provider")
-                if not pairs:
-                    resource_review_reason = "provider"
-                break
+                    resource_review_reason = reason
+            continue
+
+        # One pair per chunk by packing cap.
+        source_path, target_path = chunk_pairs[0]
+        initial = build_critic(chunk_pairs)
+        draft = translated_files.get(target_path)
+        glossary = _relevant_glossary_files(
+            glossary_files, {source_path: source_files[source_path]}
+        )
+        presentation = presentation_refs.get(target_path)
+        chunk_toc = _subset_toc_snapshots(toc_snapshots, chunk_pairs)
+        after_patch = None
+        protected: frozenset[str] | None = None
+        if chunk_toc is not None:
+            snapshot = chunk_toc.get(source_path)
+            source_after = None if snapshot is None else snapshot.get("after")
+            if draft is not None and source_after is not None:
+                try:
+                    protected = frozenset(
+                        target_only_toc_references(source_after.encode("utf-8"), draft)
+                    )
+                except (TocDeltaError, UnicodeEncodeError):
+                    protected = None
+                if protected:
+                    after_patch = toc_target_only_guard(
+                        source_after=source_after.encode("utf-8"),
+                        protected_refs=protected,
+                    )
+
+        result = run_tool_critic_chunk(
+            executor.invoke,
+            model=critic_model,
+            source_path=source_path,
+            target_path=target_path,
+            source_bytes=source_files[source_path],
+            draft_bytes=draft,
+            glossary_files=glossary,
+            developer_prompt=initial.developer_prompt or "",
+            user_prompt=initial.prompt,
+            validate_files=validate_files,
+            presentation_reference=presentation,
+            toc_snapshots=chunk_toc,
+            after_patch=after_patch,
+            before_model_call=before_model_call,
+        )
+        if result.ok and result.reviewed_bytes is not None:
+            chunk_corrected = {target_path: result.reviewed_bytes}
+            corrected.update(chunk_corrected)
+            if on_successful_critic_chunk is not None:
+                on_successful_critic_chunk(chunk_corrected)
+            continue
+
+        # TOC §3.6: run_tool_critic_chunk already retried the full session once.
+        # After both sessions fail target-only protection, keep Python-delta TOC
+        # and still call arbiter on those bytes.
+        toc_guard_hit = (
+            protected is not None
+            and result.failure_reason is LoopFailureReason.TOOL_ERROR
+            and "toc target-only" in (result.detail or "")
+        )
+        if toc_guard_hit and draft is not None:
+            corrected[target_path] = draft
+            if on_successful_critic_chunk is not None:
+                on_successful_critic_chunk({target_path: draft})
+            continue
+
+        reason: _UnreviewedReason = "contract"
+        if result.failure_reason in {
+            LoopFailureReason.NO_FINISH,
+            LoopFailureReason.TURN_BUDGET,
+        }:
+            reason = "provider"
+        if result.detail in {error.value for error in AttemptError}:
+            reason = "provider"
+        mark_unreviewed(target_paths, reason)
+        if not pairs:
+            resource_review_reason = reason
 
     arbiter_targets: dict[str, bytes | None] = {
         path: corrected.get(path, translated_files.get(path)) for path in translated_files

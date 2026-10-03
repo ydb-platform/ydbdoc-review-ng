@@ -36,30 +36,19 @@ class _ObjectPairs(list[tuple[object, object]]):
 
 
 _CRITIC_CHECKLIST = (
-    "Before answering, check completeness, terminology, technical literals and "
-    "inline-code, damaged sentences, TOC correctness, and the complete requested "
-    "file set."
+    "Before finish, check completeness, terminology, technical literals and "
+    "inline-code, damaged sentences, TOC correctness, and the supplied pair. "
+    "Use tools only; end with finish after mandatory re-reads."
 )
 _ARBITER_CHECKLIST = (
     "Before answering, check completeness, terminology, technical literals and "
     "inline-code, damaged sentences, TOC correctness, and every supplied file."
 )
 # Live full-file probes against DeepSeek showed that larger review budgets let
-# synchronous calls run past the provider's silent-connection wall. These caps
-# leave room for complete files/findings while bounding review latency.
+# synchronous calls run past the provider's silent-connection wall. Arbiter still
+# returns findings JSON; critic tool turns only emit tool_calls.
 _ARBITER_MAX_OUTPUT_TOKENS = 12_288
-_CRITIC_MAX_OUTPUT_FLOOR = 16_384
-_CRITIC_MAX_OUTPUT_CEILING = 32_768
-
-
-def _critic_max_output_tokens(translated_files: Mapping[str, bytes | None]) -> int:
-    total = 0
-    for content in translated_files.values():
-        total += 512 if content is None else len(content)
-    return max(
-        _CRITIC_MAX_OUTPUT_FLOOR,
-        min(_CRITIC_MAX_OUTPUT_CEILING, total),
-    )
+_CRITIC_TOOL_MAX_OUTPUT_TOKENS = 4_096
 
 
 def _has_duplicate(value: object) -> bool:
@@ -134,6 +123,12 @@ def build_pr_critic_request(
     binary_manifest: Mapping[str, Mapping[str, str]] | None = None,
     presentation_reference_files: Mapping[str, bytes] | None = None,
 ) -> ModelRequest:
+    """Build the initial critic tool-turn request (packing / prompt witness)."""
+    from ydbdoc_review_ng.quality.tool_critic import (
+        build_critic_tool_request,
+        initial_critic_messages,
+    )
+
     template = (
         resources.files("ydbdoc_review_ng.quality")
         .joinpath("prompts/critic.txt")
@@ -149,26 +144,13 @@ def build_pr_critic_request(
         checklist=_CRITIC_CHECKLIST,
         presentation_reference_files=presentation_reference_files,
     )
-    schema = {
-        "type": "object",
-        "properties": {
-            "files": {
-                "type": "object",
-                "properties": {path: {"type": "string"} for path in translated_files},
-                "required": list(translated_files),
-                "additionalProperties": False,
-            }
-        },
-        "required": ["files"],
-        "additionalProperties": False,
-    }
-    return ModelRequest(
-        ModelRole.CRITIC,
-        model,
-        prompt,
-        cast(FrozenJson, schema),
+    messages = initial_critic_messages(developer_prompt=template, user_prompt=prompt)
+    return build_critic_tool_request(
+        model=model,
+        messages=messages,
+        max_output_tokens=_CRITIC_TOOL_MAX_OUTPUT_TOKENS,
+        prompt=prompt,
         developer_prompt=template,
-        max_output_tokens=_critic_max_output_tokens(translated_files),
     )
 
 

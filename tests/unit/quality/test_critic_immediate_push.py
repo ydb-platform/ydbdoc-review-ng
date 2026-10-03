@@ -4,19 +4,11 @@ from __future__ import annotations
 
 import json
 
+from tests.support.scripted_models import ScriptedModels
 from ydbdoc_review_ng.domain import ModelRole
 from ydbdoc_review_ng.models import ModelCallResult
 from ydbdoc_review_ng.quality.repair import review_pr
 from ydbdoc_review_ng.quality.types import Verdict
-
-
-class _Tracking:
-    def __init__(self, payloads: list[str]) -> None:
-        self.payloads = list(payloads)
-
-    def invoke(self, request) -> ModelCallResult:
-        text = self.payloads.pop(0)
-        return ModelCallResult(text, None, ())
 
 
 def test_successful_critic_chunk_publishes_before_arbiter() -> None:
@@ -27,7 +19,7 @@ def test_successful_critic_chunk_publishes_before_arbiter() -> None:
     def on_chunk(files: dict[str, bytes]) -> None:
         timeline.append(("push", {path: files[path].decode() for path in sorted(files)}))
 
-    class Tracking(_Tracking):
+    class Tracking(ScriptedModels):
         def invoke(self, request) -> ModelCallResult:
             timeline.append(request.role.value)
             return super().invoke(request)
@@ -50,10 +42,10 @@ def test_successful_critic_chunk_publishes_before_arbiter() -> None:
         on_successful_critic_chunk=on_chunk,
     )
 
-    assert timeline == [
-        ModelRole.CRITIC.value,
-        ("push", {"docs/en/a.md": "# Fixed\n"}),
-        ModelRole.ARBITER.value,
-    ]
+    assert timeline[0] == ModelRole.CRITIC.value
+    assert ("push", {"docs/en/a.md": "# Fixed\n"}) in timeline
+    assert timeline[-1] == ModelRole.ARBITER.value
+    push_at = timeline.index(("push", {"docs/en/a.md": "# Fixed\n"}))
+    assert all(item == ModelRole.CRITIC.value for item in timeline[:push_at])
     assert result_files == {path: text.encode() for path, text in corrected.items()}
     assert final.verdict is Verdict.GREEN

@@ -4,8 +4,8 @@ import json
 
 import pytest
 
+from tests.support.scripted_models import ScriptedModels
 from ydbdoc_review_ng.domain import GitSha, RepoPath, RepositoryId, SnapshotRef
-from ydbdoc_review_ng.models import ModelCallResult, ModelRequest
 from ydbdoc_review_ng.parser.markdown import build_markdown_plan
 from ydbdoc_review_ng.quality import QualityInputError, Verdict
 from ydbdoc_review_ng.quality.repair import _derive_target_translations, review_pr
@@ -17,32 +17,27 @@ TARGET_PATH = RepoPath("ydb/docs/ru/example.md")
 
 
 def test_review_pr_arbiter_validates_findings_against_corrected_final_bytes() -> None:
-    class Models:
-        def __init__(self) -> None:
-            self.responses = iter(
-                [
-                    '{"files":{"en/a.md":"# Corrected\\n"}}',
-                    json.dumps(
+    models = ScriptedModels(
+        [
+            '{"files":{"en/a.md":"# Corrected\\n"}}',
+            json.dumps(
+                {
+                    "verdict": "YELLOW",
+                    "findings": [
                         {
-                            "verdict": "YELLOW",
-                            "findings": [
-                                {
-                                    "target_path": "en/a.md",
-                                    "searchable_snippet": "Corrected",
-                                    "reason": "Неточно переведён заголовок.",
-                                    "expected_correction": "Уточните заголовок по исходному тексту.",
-                                }
-                            ],
+                            "target_path": "en/a.md",
+                            "searchable_snippet": "Corrected",
+                            "reason": "Неточно переведён заголовок.",
+                            "expected_correction": "Уточните заголовок по исходному тексту.",
                         }
-                    ),
-                ]
-            )
-
-        def invoke(self, request: ModelRequest, /) -> ModelCallResult:
-            return ModelCallResult(next(self.responses), None, ())
+                    ],
+                }
+            ),
+        ]
+    )
 
     corrected, final = review_pr(
-        Models(),
+        models,
         critic_model="critic",
         arbiter_model="arbiter",
         source_files={"ru/a.md": "# Исходный\n".encode()},
@@ -122,17 +117,12 @@ def test_review_pr_soft_publishes_malformed_yaml_critic_correction() -> None:
     request = build_translation_request(source, plan)
     target = "ydb/docs/ru/example.md"
 
-    class Models:
-        def __init__(self) -> None:
-            self.responses = iter(
-                [
-                    json.dumps({"files": {target: malformed.decode("utf-8")}}),
-                    json.dumps({"verdict": "GREEN", "findings": []}),
-                ]
-            )
-
-        def invoke(self, request: ModelRequest, /) -> ModelCallResult:
-            return ModelCallResult(next(self.responses), None, ())
+    models = ScriptedModels(
+        [
+            json.dumps({"files": {target: malformed.decode("utf-8")}}),
+            json.dumps({"verdict": "GREEN", "findings": []}),
+        ]
+    )
 
     def validate(files: dict[str, bytes]) -> None:
         for name, content in files.items():
@@ -142,7 +132,7 @@ def test_review_pr_soft_publishes_malformed_yaml_critic_correction() -> None:
                 return
 
     corrected, final = review_pr(
-        Models(),
+        models,
         critic_model="critic",
         arbiter_model="arbiter",
         source_files={"ydb/docs/en/example.md": source},

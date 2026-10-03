@@ -6,8 +6,7 @@ import json
 from typing import cast
 from unittest.mock import MagicMock
 
-import pytest
-
+from tests.support.scripted_models import ScriptedModels
 from ydbdoc_review_ng.domain import ModelRole
 from ydbdoc_review_ng.models import AttemptError, ModelCallResult, ModelRequest
 from ydbdoc_review_ng.quality.repair import review_pr
@@ -15,17 +14,8 @@ from ydbdoc_review_ng.quality.types import Verdict
 from ydbdoc_review_ng.runtime import RecordedModels
 
 
-class _Scripted:
-    def __init__(self, payloads: list[str | ModelCallResult]) -> None:
-        self.payloads = list(payloads)
-        self.calls: list[ModelRequest] = []
-
-    def invoke(self, request: ModelRequest) -> ModelCallResult:
-        self.calls.append(request)
-        item = self.payloads.pop(0)
-        if isinstance(item, ModelCallResult):
-            return item
-        return ModelCallResult(item, None, ())
+class _Scripted(ScriptedModels):
+    pass
 
 
 def test_recorded_models_exposes_prepare_request_for_chunk_fits() -> None:
