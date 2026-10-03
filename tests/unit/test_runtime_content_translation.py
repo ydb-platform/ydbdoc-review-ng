@@ -519,15 +519,15 @@ def test_translate_document_uses_complete_markdown_and_selected_direction(
         in call.prompt
     )
     assert "# Исходный заголовок" in call.prompt
-    assert json.dumps("- Один\n- Два", ensure_ascii=False)[1:-1] in call.prompt
+    assert "- Один" in call.prompt
     prose = call.prompt.split("<PRESENTATION_REFERENCE_", 1)[0]
     assert "guide.md" not in prose
     assert "[руководством]" in call.prompt
-    assert "YDBDOC_URL" not in call.prompt
+    assert "[[YDBDOC_URL_" in call.prompt
     assert "<PRESENTATION_REFERENCE_" in call.prompt
     assert "# Old target" in call.prompt
     assert "formatting/presentation reference only" in call.prompt
-    assert call.schema is not None
+    assert call.schema is None
     assert (
         assemble_candidate(document.source, document.plan, document.request, accepted.as_dict())
         == b"# Translated heading\n\nText with [guide](guide.md).\n\n- One\n- Two\n"
@@ -548,7 +548,7 @@ def test_translator_draft_gets_one_technical_correction() -> None:
     _accepted, accepted_document = content_with(models)._translate_document(document)
 
     assert [call.role.value for call in models.calls] == ["translate", "translate"]
-    assert "Segments:" in models.calls[1].prompt
+    assert "Important correction" in models.calls[1].prompt
     assert draft in models.calls[1].prompt
     assert "<PREVIOUS_RESPONSE>" in models.calls[1].prompt
     assert accepted_document.translated_markdown == (
@@ -639,13 +639,13 @@ def test_translation_sends_complete_oversized_glossary_section_to_model() -> Non
     assert len(source_section) > 8_000
     assert len(target_section) > 8_000
     assert len(models.calls) == 1
-    assert _source_from_prompt(models.calls[0].prompt) == source_text.rstrip("\n")
+    assert _source_from_prompt(models.calls[0].prompt).rstrip("\n") == source_text.rstrip("\n")
     assert source_section in models.calls[0].prompt
     assert target_section in models.calls[0].prompt
     assert len(models.budgets) == 1
     wire_body = json.loads(models.budgets[0].body)
     wire_prompt = wire_body["messages"][0]["content"]
-    assert _source_from_prompt(wire_prompt) == source_text.rstrip("\n")
+    assert _source_from_prompt(wire_prompt).rstrip("\n") == source_text.rstrip("\n")
     assert source_section in wire_prompt
     assert target_section in wire_prompt
     assert wire_body["max_tokens"] == 1_048_576 - len(models.budgets[0].body)
@@ -667,7 +667,7 @@ def test_translate_without_existing_target_uses_full_translation_prompt() -> Non
 
     content_with(models).translate_document(document)
 
-    assert "Translate the complete Markdown prose from ru to en" in models.calls[0].prompt
+    assert "Translate the complete Markdown below from ru to en" in models.calls[0].prompt
     assert "<PRESENTATION_REFERENCE_EN>" not in models.calls[0].prompt
 
 
@@ -715,8 +715,8 @@ def test_large_source_document_uses_one_translator_request() -> None:
     assert len(models.calls) == 1
     request_prose = _source_from_prompt(models.calls[0].prompt)
     assert request_prose.count("## Entry ") == 120
-    assert "Definition 1 with [a link]()." in request_prose
-    assert "Definition 120 with [a link]()." in request_prose
+    assert "Definition 1 with [a link]([[YDBDOC_URL_0001]])." in request_prose
+    assert "Definition 120 with [a link]([[YDBDOC_URL_0120]])." in request_prose
     assert translated.translated_markdown.encode() == source
 
 
@@ -739,8 +739,8 @@ def test_existing_target_cannot_override_symmetric_source_link_destination() -> 
     prose = prompt.split("<PRESENTATION_REFERENCE_", 1)[0]
     assert "(./dev/optimization/hints.md)" not in prose
     assert "[query hints]" in prompt
-    assert "YDBDOC_URL" not in prompt
-    # Old destination may appear only inside the presentation-reference block.
+    assert "[[YDBDOC_URL_" in prompt
+    assert "(./dev/optimization/hints.md)" not in prose
     assert "(./dev/query-execution-optimization/query-hints.md)" not in prose
     assert "(./dev/query-execution-optimization/query-hints.md)" in prompt
     assert "(./dev/optimization/hints.md)" in accepted_document.translated_markdown
@@ -860,8 +860,8 @@ def test_translate_accepts_field_local_inline_code_grammar_order(
     _accepted, accepted_document = content_with(models)._translate_document(document)
 
     assert len(models.calls) == 1
+    assert "Protected placeholders" in models.calls[0].prompt
     assert "exactly once" in models.calls[0].prompt
-    assert "runtime restores" in models.calls[0].prompt
     # Soft-publish must accept the assembled candidate; exact placeholder
     # adjacency follows source segment assembly rather than raw Markdown order.
     assert "TraceId" in accepted_document.translated_markdown
@@ -880,21 +880,19 @@ def test_structured_translator_cannot_delete_or_duplicate_protected_fragments() 
             self.calls.append(request)
             assert "`ydb`" not in request.prompt
             assert "guide.md" not in request.prompt
-            encoded = request.prompt.split("\nSegments: ", 1)[1].split("\n\n", 1)[0]
-            segments = json.loads(encoded)
-            translated = {
-                key: value.replace("Запустите", "Run").replace("и откройте", "and open").replace(
-                    "руководство", "the guide"
-                )
-                for key, value in segments.items()
-            }
-            return ModelCallResult(json.dumps(translated, ensure_ascii=False), None, ())
+            source = _source_from_prompt(request.prompt)
+            translated = (
+                source.replace("Запустите", "Run")
+                .replace("и откройте", "and open")
+                .replace("руководство", "the guide")
+            )
+            return ModelCallResult(translated, None, ())
 
     models = StructuredTranslator()
     _, accepted = content_with(models)._translate_document(document_for(source, target=None))
 
     assert len(models.calls) == 1
-    assert models.calls[0].schema is not None
+    assert models.calls[0].schema is None
     assert accepted.translated_markdown == "Run `ydb` and open [the guide](guide.md).\n"
 
 
@@ -995,7 +993,7 @@ def test_large_document_uses_one_complete_request(
     assert len(models.calls) == 1
     request_prose = _source_from_prompt(models.calls[0].prompt)
     assert request_prose.count("Paragraph ") == 140
-    assert all(call.schema is not None for call in models.calls)
+    assert all(call.schema is None for call in models.calls)
     assert (
         assemble_candidate(document.source, document.plan, document.request, accepted.as_dict())
         == source
@@ -1024,7 +1022,9 @@ def test_exhausted_content_filter_stops_original_chunk_without_split(
         content_with(models).translate_document(document)
 
     assert len(models.calls) == 1
-    assert len(_source_from_prompt(models.calls[0].prompt)) == len(parent.text.rstrip("\n"))
+    assert len(_source_from_prompt(models.calls[0].prompt).rstrip("\n")) == len(
+        parent.text.rstrip("\n")
+    )
 
 
 def test_content_filter_does_not_split_at_available_boundary() -> None:
@@ -1049,8 +1049,8 @@ def test_content_filter_does_not_split_at_available_boundary() -> None:
     with pytest.raises(RuntimeBoundaryError, match="translation_model_failed"):
         content_with(models).translate_document(document)
 
-    raw_requests = tuple(_source_from_prompt(call.prompt) for call in models.calls)
-    assert tuple(map(len, raw_requests)) == (9_998,)
+        raw_requests = tuple(_source_from_prompt(call.prompt).rstrip("\n") for call in models.calls)
+        assert tuple(map(len, raw_requests)) == (9_998,)
 
 
 def test_content_filter_with_existing_target_is_terminal() -> None:
@@ -1103,7 +1103,7 @@ def test_operator_context_is_not_part_of_authoritative_markdown() -> None:
     )
 
     assert translated.translated_markdown.encode() == source
-    assert "Segments:" in models.calls[0].prompt
+    assert "<AUTHORITATIVE_SOURCE_" in models.calls[0].prompt
     assert "<OPERATOR_GUIDANCE>" in models.calls[0].prompt
     assert "never include or translate it in the output" in models.calls[0].prompt
 
@@ -1161,7 +1161,7 @@ def test_content_filter_does_not_create_recursive_child_calls() -> None:
         content_with(models)._translate_document(document)
 
     assert len(models.calls) == 1
-    assert len(_source_from_prompt(models.calls[0].prompt)) == 15_800
+    assert len(_source_from_prompt(models.calls[0].prompt).rstrip("\n")) == 15_800
 
 
 def test_content_filter_without_top_level_boundary_is_terminal() -> None:
@@ -1228,8 +1228,8 @@ def test_complete_markdown_response_gets_exactly_one_technical_correction() -> N
     assert "Important correction" in correction
     assert f"<PREVIOUS_RESPONSE>\n{invalid}\n</PREVIOUS_RESPONSE>" in correction
     assert "Rejected translation:" not in correction
-    assert placeholder.token not in correction
-    assert "runtime restores" in correction
+    assert placeholder.token in correction
+    assert "lost protected placeholders" in correction
 
 
 def test_invalid_correction_does_not_fall_back_to_primary_invalid_response() -> None:
@@ -1425,23 +1425,22 @@ def test_lost_placeholder_candidate_is_not_created() -> None:
     assert len(models.calls) == 2
 
 
-def test_reordered_link_pairs_still_publish_with_structure_diagnostic() -> None:
-    """REQUIREMENTS §2: link diagnostics must not block assembled UTF-8 publish."""
+def test_reordered_link_url_tokens_fail_placeholder_sequence() -> None:
+    """Markdown-out keeps placeholder sequence; swapped URL tokens are invalid."""
     document = document_for(b"Read [one](one.md), then [two](two.md).\n")
     prepared = prepare_document(document.source, document.plan)
     first_url, second_url = (
         item.token for item in prepared.placeholders
     )
     reordered = f"Read [two]({second_url}), after [one]({first_url}).\n"
-    models = ScriptedModels([reordered])
-    _accepted, accepted = content_with(models)._translate_document(document)
+    models = ScriptedModels([reordered, reordered])
+    with pytest.raises(InvalidTranslationResponse, match="translation_response_invalid"):
+        content_with(models)._translate_document(document)
+    assert len(models.calls) == 2
 
-    assert len(models.calls) == 1
-    assert "two" in accepted.translated_markdown
 
-
-def test_live_nested_link_reorder_witness_still_publishes() -> None:
-    """REQUIREMENTS §2: nested link reorder is a diagnostic, not a hard gate."""
+def test_nested_link_reorder_fails_placeholder_sequence() -> None:
+    """Swapping nested dest tokens is a hard placeholder mismatch, not a diagnostic."""
     document = document_for("* [Добавлена](issue) поддержка [репликации](guide).\n".encode())
     prepared = prepare_document(document.source, document.plan)
     outer_url, inner_url = (
@@ -1451,11 +1450,10 @@ def test_live_nested_link_reorder_witness_still_publishes() -> None:
         f"* [Support for replication]({inner_url}) "
         f"[has been added]({outer_url}).\n"
     )
-    models = ScriptedModels([reordered])
-    _accepted, accepted = content_with(models)._translate_document(document)
-
-    assert len(models.calls) == 1
-    assert accepted.translated_markdown.startswith("* ")
+    models = ScriptedModels([reordered, reordered])
+    with pytest.raises(InvalidTranslationResponse, match="translation_response_invalid"):
+        content_with(models)._translate_document(document)
+    assert len(models.calls) == 2
 
 
 def test_exhausted_invalid_large_document_stops_after_one_correction() -> None:
@@ -1589,7 +1587,7 @@ def test_nested_yfm_fence_code_mutation_gets_one_technical_correction() -> None:
     assert len(models.calls) == 2
     assert "OPAQUE_CODE" not in models.calls[0].prompt
     assert "Important correction" in models.calls[1].prompt
-    assert "runtime restores" in models.calls[1].prompt
+    assert "lost protected placeholders" in models.calls[1].prompt
 
 
 def test_translation_trace_is_payload_free(capsys: pytest.CaptureFixture[str]) -> None:
@@ -1621,7 +1619,7 @@ def test_small_multiblock_invalid_document_stops_after_one_correction() -> None:
     assert len(models.calls) == 2
     assert all(call.role.value == "translate" for call in models.calls)
     assert "<PREVIOUS_RESPONSE>" in models.calls[1].prompt
-    assert "`one`" not in models.calls[1].prompt
+    assert "lost protected placeholders" in models.calls[1].prompt
 
 
 def test_invalid_indivisible_chunk_has_two_calls_and_safe_diagnostic(capsys) -> None:

@@ -9,8 +9,9 @@ Semantic flow в `REQUIREMENTS_RU.md`:
 3. Prep: placeholders + **identifier atoms** (underscore + CamelCase product) +
    presentation map from old target (atoms, CLI flags, short ALLCAPS, colon-form).
 4. Whole-file translate (old target = presentation reference only when present) → **draft**.
-5. Critic = обязательный tool-using gate (§4.1): workspace + read/grep/apply_patch
-   + mandatory re-read → **reviewed** commits; fail → RED.
+5. Critic = обязательный tool-using gate (§4.1): DeepSeek всегда, scope =
+   source PR delta + previous EN; Python drop out-of-delta findings;
+   workspace + read/grep/apply_patch + mandatory re-read → **reviewed**.
 6. Arbiter только на reviewed bytes: GREEN / YELLOW / RED (judge-only, no repair).
 7. YELLOW = успех; RED = continue / ручная правка + `doc_verify`.
 8. Soft-publish diagnostics ≠ reader-facing product success.

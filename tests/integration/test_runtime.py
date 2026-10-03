@@ -680,8 +680,7 @@ def test_runtime_preserves_list_formatting_drift_through_critic() -> None:
     )
 
     assert exit_code == 0
-    # §2.2: one technical correction retry after untranslated_source_prose.
-    assert services.raw_calls == 2
+    assert services.raw_calls == 1
     assert services.files["ydb/docs/en/core/page.md"] == (
         b"* Parent translated\n"
         b"* `enable_strict_user_management` "
@@ -708,7 +707,11 @@ class ContentFilterServices(RuntimeServices):
         body = json.loads(request.body)
         schema_wrapper = request_schema(body)
         properties = None if schema_wrapper is None else schema_wrapper["schema"]["properties"]
-        if properties is not None and all(key.startswith("segment_") for key in properties):
+        is_markdown_translate = properties is None
+        is_segment_translate = properties is not None and all(
+            key.startswith("segment_") for key in properties
+        )
+        if is_markdown_translate or is_segment_translate:
             self.raw_request_bodies.append(request.body)
             response = super().model(request)
             if len(self.raw_request_bodies) <= self.filtered_responses:

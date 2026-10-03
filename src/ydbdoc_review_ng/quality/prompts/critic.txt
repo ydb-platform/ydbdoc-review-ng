@@ -49,3 +49,8 @@ Strategy (stay within the turn budget):
 3. If the draft already matches source meaning and presentation is acceptable,
    call finish after a short check. Do not burn turns re-reading clean pages.
 4. Never loop grep/read without either apply_patch or finish.
+5. If the source PR only rewrote link destinations and those dests are already
+   in the draft, finish. Do not restyle the rest of a long changelog.
+6. Operator-context CHANGE CLASS / source delta / touched EN lines are the
+   assignment. Patch only those lines (or regressions vs presentation-reference
+   on those lines). Historical changelog outside the delta is out of scope.

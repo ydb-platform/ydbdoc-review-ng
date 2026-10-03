@@ -16,10 +16,11 @@
 Placeholders + identifier atoms (не рвать `BS\_CONTROLLER` на ESCAPE).
 Если есть old target и source before/after PR (merged: parent/merge, не
 текущий `main`): surgical update (уникальные URL/строки без модели, иначе
-модель только на hunks). Иначе целый файл одним request. Old target в
-hunk-prompt только как fragment; в whole-file fallback как presentation
-reference. Segment ID map → runtime restore + apply map. Собранный UTF-8 →
-**draft** soft-publish (diagnostics ≠ product).
+модель только на hunks, Markdown с placeholders). Иначе целый файл одним
+Markdown request. Hunk: old target = semantic baseline. Whole-file fallback:
+presentation reference. Restore placeholders из source. Без глобального
+presentation map на unique dest. Собранный UTF-8 → **draft** soft-publish
+(diagnostics ≠ product).
 
 ## TOC
 
@@ -29,10 +30,8 @@ PR. Покрыть тестами.
 
 ## Critic / arbiter
 
-Critic: обязательный tool-using gate на source + draft (+ optional
-presentation-reference). Workspace tools: `read` / `grep` / `apply_patch` /
-`finish`; после каждого patch — mandatory re-read; **reviewed** push =
-runtime-applied bytes. Fail/503/protocol/unreviewed → RED; arbiter на сырой
-dump не вызывается. Arbiter: только reviewed bytes, GREEN/YELLOW/RED +
-findings, без автопочинки и без цикла назад в critic. YELLOW не открывает
-checkpoint. Plan: `tool-using-critic-plan.md`.
+Critic: tool-using DeepSeek всегда, включая unique dest. Задание — source
+delta + previous EN, не весь файл. Патч вне touched lines отклоняется.
+Fail/503/protocol/unreviewed → RED; arbiter на сырой dump не вызывается.
+Arbiter: тот же scope; Python drop out-of-delta findings → GREEN если дельта
+верна. YELLOW не открывает checkpoint.

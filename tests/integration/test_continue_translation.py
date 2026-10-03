@@ -30,6 +30,24 @@ EN = "ydb/docs/en/core/"
 CONTEXT = "Private operator guidance\nUse the frozen Russian source.\nhttps://operator.test/context-only\n"
 
 
+def _model_role(body: dict) -> str:
+    if body.get("tools"):
+        return "critic"
+    schema = request_schema(body)
+    if schema is None:
+        return "translate"
+    props = schema["schema"]["properties"]
+    if "translation_required" in props:
+        return "direction"
+    if "files" in props:
+        return "critic"
+    if "findings" in props:
+        return "arbiter"
+    if "strings" in props:
+        return "toc"
+    return "translate"
+
+
 class ContinueServices(CaptureServices):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -125,7 +143,7 @@ class ContinueServices(CaptureServices):
             else:
                 raw = source.replace("Source", "Resumed")
             if self.invalid_pending and self.invalid_pending in source:
-                raw = "{}"
+                raw = '{"document_chunk": "invalid"}'
             return HttpResponse(200, replace_response_text(response.body, raw), Decimal("0.01"))
         if values is not None:
             response = HttpResponse(
@@ -903,22 +921,8 @@ def test_continue_review_allows_missing_soft_published_target() -> None:
 
     class FailB(ContinueServices):
         def model(self, request):
-
             body = json.loads(request.body)
-            if body.get("tools"):
-                return super().model(request)
-            props = request_schema(body)["schema"]["properties"]
-            role = (
-                "direction"
-                if "translation_required" in props
-                else "critic"
-                if "files" in props
-                else "arbiter"
-                if "findings" in props
-                else "toc"
-                if "strings" in props
-                else "translate"
-            )
+            role = _model_role(body)
             prompt = request_prompt(body)
             if not self.continuing and (
                 role == "critic" or (role == "translate" and "Source b" in prompt)
@@ -949,29 +953,8 @@ def test_zero_commit_null_toc_keeps_review_checkpoint() -> None:
 
     class NullToc(ContinueServices):
         def model(self, request):
-
             body = json.loads(request.body)
-            if body.get("tools"):
-                roles = [
-                    message.get("role")
-                    for message in body.get("messages", [])
-                    if isinstance(message, dict)
-                ]
-                if roles == ["developer", "user"] or roles == ["user"]:
-                    self.roles.append("critic")
-                return HttpResponse(503, b"{}", None)
-            props = request_schema(body)["schema"]["properties"]
-            role = (
-                "direction"
-                if "translation_required" in props
-                else "critic"
-                if "files" in props
-                else "arbiter"
-                if "findings" in props
-                else "toc"
-                if "strings" in props
-                else "translate"
-            )
+            role = _model_role(body)
             if role == "critic":
                 self.roles.append(role)
                 return HttpResponse(503, b"{}", None)
@@ -1003,31 +986,8 @@ def test_toc_only_null_checkpoint_is_continuable() -> None:
 
     class NullToc(ContinueServices):
         def model(self, request):
-
             body = json.loads(request.body)
-            if body.get("tools"):
-                if not self.continuing:
-                    roles = [
-                        message.get("role")
-                        for message in body.get("messages", [])
-                        if isinstance(message, dict)
-                    ]
-                    if roles == ["developer", "user"] or roles == ["user"]:
-                        self.roles.append("critic")
-                    return HttpResponse(503, b"{}", None)
-                return super().model(request)
-            props = request_schema(body)["schema"]["properties"]
-            role = (
-                "direction"
-                if "translation_required" in props
-                else "critic"
-                if "files" in props
-                else "arbiter"
-                if "findings" in props
-                else "toc"
-                if "strings" in props
-                else "translate"
-            )
+            role = _model_role(body)
             if role == "critic" and not self.continuing:
                 self.roles.append(role)
                 return HttpResponse(503, b"{}", None)
@@ -1064,45 +1024,8 @@ def test_resource_only_red_checkpoint_is_continuable() -> None:
 
     class ResOnly(ContinueServices):
         def model(self, request):
-
             body = json.loads(request.body)
-            if body.get("tools"):
-                if not self.continuing:
-                    roles = [
-                        message.get("role")
-                        for message in body.get("messages", [])
-                        if isinstance(message, dict)
-                    ]
-                    if roles == ["developer", "user"] or roles == ["user"]:
-                        self.roles.append("critic")
-                    payload = {
-                        "model": "t",
-                        "choices": [
-                            {
-                                "finish_reason": "length",
-                                "message": {
-                                    "role": "assistant",
-                                    "content": None,
-                                    "tool_calls": [],
-                                },
-                            }
-                        ],
-                        "usage": {"prompt_tokens": 1, "completion_tokens": 1},
-                    }
-                    return HttpResponse(200, json.dumps(payload).encode(), Decimal(".01"))
-                return super().model(request)
-            props = request_schema(body)["schema"]["properties"]
-            role = (
-                "direction"
-                if "translation_required" in props
-                else "critic"
-                if "files" in props
-                else "arbiter"
-                if "findings" in props
-                else "toc"
-                if "strings" in props
-                else "translate"
-            )
+            role = _model_role(body)
             if role == "critic" and not self.continuing:
                 self.roles.append(role)
                 payload = {
@@ -1143,22 +1066,8 @@ def test_delete_only_non_final_checkpoint_is_continuable() -> None:
 
     class DeleteOnly(ContinueServices):
         def model(self, request):
-
             body = json.loads(request.body)
-            if body.get("tools"):
-                return super().model(request)
-            props = request_schema(body)["schema"]["properties"]
-            role = (
-                "direction"
-                if "translation_required" in props
-                else "critic"
-                if "files" in props
-                else "arbiter"
-                if "findings" in props
-                else "toc"
-                if "strings" in props
-                else "translate"
-            )
+            role = _model_role(body)
             if role == "arbiter" and not self.continuing:
                 self.roles.append(role)
                 payload = {
@@ -1166,7 +1075,10 @@ def test_delete_only_non_final_checkpoint_is_continuable() -> None:
                     "choices": [
                         {
                             "finish_reason": "length",
-                            "message": {"role": "assistant", "content": '{"verdict":"GREEN","findings":[]}'},
+                            "message": {
+                                "role": "assistant",
+                                "content": '{"verdict":"GREEN","findings":[]}',
+                            },
                         }
                     ],
                     "usage": {"prompt_tokens": 1, "completion_tokens": 1},
@@ -1195,22 +1107,8 @@ def test_mixed_markdown_and_binary_continue_skips_asset_utf8_restore() -> None:
 
     class Mix(ContinueServices):
         def model(self, request):
-
             body = json.loads(request.body)
-            if body.get("tools"):
-                return super().model(request)
-            props = request_schema(body)["schema"]["properties"]
-            role = (
-                "direction"
-                if "translation_required" in props
-                else "critic"
-                if "files" in props
-                else "arbiter"
-                if "findings" in props
-                else "toc"
-                if "strings" in props
-                else "translate"
-            )
+            role = _model_role(body)
             response = super().model(request)
             if role == "arbiter" and not self.continuing:
                 payload = {
@@ -1262,43 +1160,8 @@ def test_continue_still_zero_commit_red_keeps_null_checkpoint_and_reports() -> N
 
     class AlwaysFailTranslate(ContinueServices):
         def model(self, request):
-
             body = json.loads(request.body)
-            if body.get("tools"):
-                roles = [
-                    message.get("role")
-                    for message in body.get("messages", [])
-                    if isinstance(message, dict)
-                ]
-                if roles == ["developer", "user"] or roles == ["user"]:
-                    self.roles.append("critic")
-                payload = {
-                    "model": "t",
-                    "choices": [
-                        {
-                            "finish_reason": "length",
-                            "message": {
-                                "role": "assistant",
-                                "content": None,
-                                "tool_calls": [],
-                            },
-                        }
-                    ],
-                    "usage": {"prompt_tokens": 1, "completion_tokens": 1},
-                }
-                return HttpResponse(200, json.dumps(payload).encode(), Decimal(".01"))
-            props = request_schema(body)["schema"]["properties"]
-            role = (
-                "direction"
-                if "translation_required" in props
-                else "critic"
-                if "files" in props
-                else "arbiter"
-                if "findings" in props
-                else "toc"
-                if "strings" in props
-                else "translate"
-            )
+            role = _model_role(body)
             if role == "direction":
                 return super().model(request)
             if role == "translate":

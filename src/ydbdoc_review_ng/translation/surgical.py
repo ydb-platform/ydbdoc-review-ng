@@ -56,11 +56,52 @@ def _affix_replacement(before_line: bytes, after_line: bytes) -> tuple[bytes, by
     return old, new
 
 
+def _dest_path(destination: bytes) -> bytes:
+    return destination.split(b"#", 1)[0].split(b"?", 1)[0]
+
+
+def _changed_link_dest_pairs(
+    source_before: bytes, source_after: bytes
+) -> tuple[tuple[bytes, bytes], ...] | None:
+    before_lines = source_before.splitlines(keepends=True)
+    after_lines = source_after.splitlines(keepends=True)
+    if len(before_lines) != len(after_lines):
+        return None
+    mapping: dict[bytes, bytes] = {}
+    for before_line, after_line in zip(before_lines, after_lines, strict=True):
+        if before_line == after_line:
+            continue
+        olds = _LINK_DESTINATION.findall(before_line)
+        news = _LINK_DESTINATION.findall(after_line)
+        if len(olds) != len(news) or not olds:
+            return None
+        rebuilt = before_line
+        for old, new in zip(olds, news, strict=True):
+            old_path, new_path = _dest_path(old), _dest_path(new)
+            if old_path == new_path:
+                continue
+            if old_path in mapping and mapping[old_path] != new_path:
+                return None
+            mapping[old_path] = new_path
+            rebuilt = rebuilt.replace(old_path, new_path, 1)
+        if rebuilt != after_line:
+            return None
+    if not mapping:
+        return None
+    pairs = tuple(mapping.items())
+    if apply_unique_replacements(source_before, pairs) != source_after:
+        return None
+    return pairs
+
+
 def collect_unique_replacements(
     source_before: bytes, source_after: bytes
 ) -> tuple[tuple[bytes, bytes], ...] | None:
     if source_before == source_after:
         return ()
+    dest_pairs = _changed_link_dest_pairs(source_before, source_after)
+    if dest_pairs is not None:
+        return dest_pairs
     before_lines = source_before.splitlines(keepends=True)
     after_lines = source_after.splitlines(keepends=True)
     if len(before_lines) != len(after_lines):
@@ -92,7 +133,9 @@ def apply_unique_replacements(
     patched = text
     for old, new in sorted(pairs, key=lambda item: len(item[0]), reverse=True):
         if old not in patched:
-            return None
+            if new not in patched:
+                return None
+            continue
         patched = patched.replace(old, new)
     return patched
 

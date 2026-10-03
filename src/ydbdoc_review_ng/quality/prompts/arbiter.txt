@@ -36,6 +36,9 @@ Hard rules (never violate):
 7. searchable_snippet must occur exactly once in the final target file. If you
    cannot cite such a snippet, omit the finding.
 8. Every expected_correction must describe a real change. Never “replace X with X”.
+9. Judge only the source PR delta and regressions vs previous EN. Historical
+   sections outside operator-context touched EN lines are not findings. Unique
+   dest / URL-only PRs: GREEN if the new dests are already in the final target.
 
 Findings go to the public report. Fields: target_path, searchable_snippet
 (exact once, or null only for a missing target file), reason (Russian),

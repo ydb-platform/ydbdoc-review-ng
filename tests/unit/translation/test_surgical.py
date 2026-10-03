@@ -96,6 +96,55 @@ def test_prose_change_with_shared_url_yields_located_hunk() -> None:
     assert b"* Previous English" not in stitched
 
 
+def test_unique_url_replacements_do_not_rewrite_sibling_manual_paths() -> None:
+    sibling = b"./maintenance/manual/virtual_storage_groups_decommit.md"
+    source_before = (
+        b"* [cfg](./maintenance/manual/dynamic-config).\n"
+        b"* [other](" + sibling + b").\n"
+    )
+    source_after = (
+        b"* [cfg](./devops/configuration-management/configuration-v1/dynamic-config).\n"
+        b"* [other](" + sibling + b").\n"
+    )
+    existing_en = (
+        b"* [cfg](./devops/configuration-management/configuration-v1/dynamic-config).\n"
+        b"* [other](" + sibling + b").\n"
+    )
+    plan = plan_surgical_update(source_before, source_after, existing_en)
+    assert plan.mode is SurgicalMode.UNIQUE_REPLACEMENTS
+    assert plan.patched_target == existing_en
+    assert sibling in plan.patched_target
+
+
+def test_unique_path_replacements_keep_english_anchor_fragments() -> None:
+    source_before = b"* [cfg](./maintenance/manual/dynamic-config#ru-anchor).\n"
+    source_after = (
+        b"* [cfg](./devops/configuration-management/configuration-v1/dynamic-config#ru-anchor).\n"
+    )
+    existing_en = (
+        b"* [cfg](./devops/configuration-management/configuration-v1/dynamic-config#en-anchor).\n"
+    )
+    plan = plan_surgical_update(source_before, source_after, existing_en)
+    assert plan.mode is SurgicalMode.UNIQUE_REPLACEMENTS
+    assert plan.patched_target == existing_en
+
+
+def test_runtime_unique_replacements_do_not_run_presentation_map() -> None:
+    source_before = b"* Enable views in [cfg](" + OLD + b").\n"
+    source_after = b"* Enable views in [cfg](" + NEW + b").\n"
+    existing_en = (
+        b"* Enable views in [cfg](" + OLD + b").\n"
+        b"* Added `SELECT` support and also SELECT again.\n"
+    )
+    content = RuntimeContent(_SourceBefore(source_before, source_after), _BoomModels(), {})
+
+    _accepted, translated = content._translate_document(_document(source_after, existing_en))
+
+    assert "also SELECT again" in translated.translated_markdown
+    assert "`SELECT` support" in translated.translated_markdown
+    assert NEW.decode() in translated.translated_markdown
+
+
 def test_already_applied_english_is_unique_replacements_noop() -> None:
     source_before = b"* See [cfg](" + OLD + b").\n"
     source_after = b"* See [cfg](" + NEW + b").\n"

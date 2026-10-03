@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from typing import Literal, Protocol
 
 import yaml
@@ -17,6 +17,12 @@ from ydbdoc_review_ng.quality.critic import (
     build_pr_arbiter_request,
     build_pr_critic_request,
     parse_pr_arbiter_response,
+)
+from ydbdoc_review_ng.quality.delta_scope import (
+    PairDeltaScope,
+    apply_delta_finding_filter,
+    delta_touched_guard,
+    format_delta_brief,
 )
 from ydbdoc_review_ng.quality.tool_critic import (
     run_tool_critic_chunk,
@@ -159,6 +165,20 @@ def _subset_toc_snapshots(
         return None
     sources = {source for source, _target in pairs}
     return {path: snapshot for path, snapshot in toc_snapshots.items() if path in sources}
+
+
+def _compose_after_patch(*guards: Callable[[bytes], None] | None):
+    active = tuple(guard for guard in guards if guard is not None)
+    if not active:
+        return None
+    if len(active) == 1:
+        return active[0]
+
+    def after_patch(candidate: bytes) -> None:
+        for guard in active:
+            guard(candidate)
+
+    return after_patch
 
 
 def _critic_operator_context(
@@ -340,9 +360,17 @@ def review_pr(
     toc_snapshots: Mapping[str, Mapping[str, str | None]] | None = None,
     binary_manifest: Mapping[str, Mapping[str, str]] | None = None,
     presentation_reference_files: Mapping[str, bytes] | None = None,
+    model_exempt_targets: Collection[str] | None = None,
+    delta_scopes: Mapping[str, PairDeltaScope] | None = None,
 ) -> tuple[dict[str, bytes], CriticResult]:
     """Correct/judge the PR in context-fitting whole source/target pair chunks."""
-    pairs = _review_pairs(source_files, translated_files)
+    inventory_pairs = _review_pairs(source_files, translated_files)
+    exempt = frozenset({} if model_exempt_targets is None else model_exempt_targets)
+    pairs = tuple(pair for pair in inventory_pairs if pair[1] not in exempt)
+    scopes = {} if delta_scopes is None else dict(delta_scopes)
+    brief = format_delta_brief(tuple(scopes[target] for _source, target in pairs if target in scopes))
+    if brief:
+        operator_context = brief if not operator_context else f"{brief}\n\n{operator_context}"
     corrected: dict[str, bytes] = {
         path: content for path, content in translated_files.items() if content is not None
     }
@@ -390,8 +418,10 @@ def review_pr(
     for _source, target in pairs:
         if target not in packed_targets:
             mark_unreviewed((target,), "context")
-    if not pairs:
+    if not inventory_pairs:
         critic_chunks = ((),)
+    elif not pairs:
+        critic_chunks = ()
 
     for chunk_pairs in critic_chunks:
         target_paths = tuple(target for _source, target in chunk_pairs)
@@ -454,6 +484,17 @@ def review_pr(
                         source_after=source_after.encode("utf-8"),
                         protected_refs=protected,
                     )
+        scope = scopes.get(target_path)
+        if (
+            scope is not None
+            and scope.restrict_findings
+            and scope.touched_lines
+            and draft is not None
+        ):
+            after_patch = _compose_after_patch(
+                after_patch,
+                delta_touched_guard(draft, scope.touched_lines, pad=scope.pad),
+            )
 
         result = run_tool_critic_chunk(
             executor.invoke,
@@ -541,7 +582,7 @@ def review_pr(
             mark_unreviewed((target,), "context")
 
     results: list[CriticResult] = []
-    if not pairs:
+    if not inventory_pairs:
         # Zero-text still calls arbiter once, unless critic already marked NON_FINAL.
         arbiter_chunks = () if resource_review_reason is not None else ((),)
 
@@ -562,14 +603,18 @@ def review_pr(
             continue
         try:
             parsed = parse_pr_arbiter_response(response.text, target_files=chunk_files)
-            results.append(
-                _filter_source_only_toc_arbiter_findings(
-                    parsed,
-                    chunk_pairs=chunk_pairs,
-                    toc_snapshots=toc_snapshots,
-                    target_files=arbiter_targets,
-                )
+            parsed = _filter_source_only_toc_arbiter_findings(
+                parsed,
+                chunk_pairs=chunk_pairs,
+                toc_snapshots=toc_snapshots,
+                target_files=arbiter_targets,
             )
+            verdict, findings = apply_delta_finding_filter(
+                parsed.verdict,
+                parsed.findings,
+                {target: scopes[target] for _source, target in chunk_pairs if target in scopes},
+            )
+            results.append(CriticResult(verdict, findings))
         except Exception:
             mark_unreviewed(tuple(target for _source, target in chunk_pairs), "contract")
             if not chunk_pairs:

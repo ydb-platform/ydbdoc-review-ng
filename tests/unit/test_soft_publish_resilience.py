@@ -44,8 +44,8 @@ SOURCE_PATH = RepoPath("ydb/docs/ru/core/page.md")
 TARGET_PATH = RepoPath("ydb/docs/en/core/page.md")
 
 
-def test_raw_markdown_without_segment_id_map_is_rejected() -> None:
-    """REQUIREMENTS §2: only the segment ID-map contract is accepted (#22)."""
+def test_raw_markdown_with_placeholders_is_accepted() -> None:
+    """REQUIREMENTS §2: translator returns Markdown with placeholders, not a JSON ID map."""
     document = document_for(b"# Source heading\n\nPlain paragraph for translation.\n")
 
     class RawMarkdownModels:
@@ -54,16 +54,22 @@ def test_raw_markdown_without_segment_id_map_is_rejected() -> None:
 
         def invoke(self, request: ModelRequest, /) -> ModelCallResult:
             self.calls.append(request)
+            marker = "<AUTHORITATIVE_SOURCE_"
+            start = request.prompt.index("\n", request.prompt.index(marker)) + 1
+            end = request.prompt.index("</AUTHORITATIVE_SOURCE_", start)
+            source = request.prompt[start:end]
             return ModelCallResult(
-                "This is a raw Markdown response, not the ID map.\n", None, ()
+                source.replace("Source heading", "Target heading").replace(
+                    "Plain paragraph for translation", "Plain paragraph translated"
+                ),
+                None,
+                (),
             )
 
     models = RawMarkdownModels()
-
-    with pytest.raises(InvalidTranslationResponse, match="translation_response_invalid"):
-        content_with(models)._translate_document(document)
-
-    assert len(models.calls) == 2
+    _accepted, accepted = content_with(models)._translate_document(document)
+    assert "Target heading" in accepted.translated_markdown
+    assert len(models.calls) == 1
 
 
 def test_assembled_utf8_with_table_shape_mismatch_is_published() -> None:
@@ -192,22 +198,20 @@ class _TableShapeMismatchModels:
 
     def invoke(self, request: ModelRequest, /) -> ModelCallResult:
         self.calls.append(request)
-        encoded = request.prompt.split("\nSegments: ", 1)[1].split("\n\n", 1)[0]
-        values = json.loads(encoded)
-        # Widen the first table-looking segment to three columns when possible.
-        for key, value in list(values.items()):
-            if "| A | B |" in value:
-                values[key] = value.replace("| A | B |", "| A | B | C |").replace(
-                    "| --- | --- |", "| --- | --- | --- |"
-                ).replace("| 1 | 2 |", "| 1 | 2 | 3 |")
-                break
-            if value.strip() == "A | B":
-                values[key] = "A | B | C"
-            elif value.strip() == "--- | ---":
-                values[key] = "--- | --- | ---"
-            elif value.strip() == "1 | 2":
-                values[key] = "1 | 2 | 3"
-        return ModelCallResult(json.dumps(values, ensure_ascii=False), None, ())
+        marker = "<AUTHORITATIVE_SOURCE_"
+        prompt = request.prompt
+        start = prompt.index("\n", prompt.index(marker)) + 1
+        end = prompt.index("</AUTHORITATIVE_SOURCE_", start)
+        text = prompt[start:end]
+        text = (
+            text.replace("| A | B |", "| A | B | C |")
+            .replace("| --- | --- |", "| --- | --- | --- |")
+            .replace("| 1 | 2 |", "| 1 | 2 | 3 |")
+            .replace("A | B\n", "A | B | C\n")
+            .replace("--- | ---\n", "--- | --- | ---\n")
+            .replace("1 | 2\n", "1 | 2 | 3\n")
+        )
+        return ModelCallResult(text, None, ())
 
 
 def test_markdown_spacing_diagnostic_does_not_block_validate_plan() -> None:

@@ -204,7 +204,7 @@ def test_toc_critic_receives_runtime_computed_target_only_references() -> None:
     )
 
     prompt = models.calls[0].prompt
-    assert "mandatory preserved target references" in prompt
+    assert "mandatory preserved target-only references" in prompt
     assert '["href:replacing_nodes.md"]' in prompt
 
 

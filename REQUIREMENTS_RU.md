@@ -8,10 +8,12 @@
 1. Техпис ставит label на PR.
 2. Runtime берёт immutable snapshot source PR, при необходимости дотягивает
    зависимости без target-перевода, переводит файлы и публикует translation branch.
-3. Critic — обязательный tool-using gate (§4.1): in-memory workspace чанка,
-   tools `read` / `grep` / `apply_patch` / `finish`, mandatory re-read после
-   каждого успешного patch. Reviewed bytes = runtime-applied patches в ту же
-   ветку. Whole-file JSON `{"files": …}` не primary path.
+3. Critic — обязательный quality gate (§4.1). DeepSeek вызывается всегда
+   (unique dest тоже). Задание как в чате: судить **дельту source PR** и
+   регрессии относительно previous EN, не исторический changelog. Python
+   отбрасывает findings вне touched EN lines. Tool-using DeepSeek (`read` /
+   `grep` / `apply_patch` / `finish`, mandatory re-read). Whole-file JSON
+   `{"files": …}` не primary path.
 4. Arbiter независимо смотрит окончательный результат и публикует
    `GREEN` / `YELLOW` / `RED`.
 5. Build и CI не участвуют в semantic verdict.
@@ -59,9 +61,9 @@ provider error / невалидном JSON. Вторая неудача → job 
   merged: first parent merge-commit / merge-commit, не плавающий `base.sha`
   и не текущий tip `main`), runtime сначала пробует
   **surgical update**: перенести только source-delta на существующий target
-  (уникальные замены URL/строк без модели; иначе модель переводит только
-  выровненные hunks). Whole-file перевод — fallback, если выровнять нельзя
-  или target/source-before нет;
+  (уникальные замены URL/строк без модели и без presentation-map; иначе модель
+  переводит только выровненные hunks). Whole-file перевод — fallback, если
+  выровнять нельзя или target/source-before нет;
 - delete → удалить парный target;
 - rename → зеркально переименовать target; если содержимое ещё изменилось → перевести;
 - locale-relative resource/binary → copy/delete/rename без модели;
@@ -119,10 +121,9 @@ front matter `title`/`description`, заголовки YFM note/cut/tab, ком�
 `CREATE_FAILED` / `POOL_NAME`; CamelCase product names вроде `BlobDepot` /
 `LogoBlob`; не рвать на bare ESCAPE `\_` внутри),
 templates, inline code, код вне комментариев, Mermaid, include, прочий
-front matter, technical HTML. Если old target есть — Python строит
-presentation map (какие атомы / CLI flags / short ALLCAPS states /
-colon-form tokens были в backticks / без escapes) и накладывает
-её на draft после restore; если нет — apply no-op.
+front matter, technical HTML. Если old target есть, Python не накладывает глобальный presentation map
+после restore. Unique dest: presentation-map запрещён. Hunks/whole-file:
+оформление литералов решает translator/critic на видимой прозе.
 
 Внутренние YDB URL: только `/docs/ru/` ↔ `/docs/en/`. Для `glossary.md`
 fragment ищется в реальном target glossary; иначе fail-open diagnostic.
@@ -130,9 +131,10 @@ fragment ищется в реальном target glossary; иначе fail-open 
 без query/fragment → MediaWiki `langlinks`; нет соответствия → source URL,
 arbiter может поставить YELLOW.
 
-Модель возвращает JSON-карту segment IDs без placeholders. Runtime вставляет
-protected fragments из source (плюс locale/Wikipedia/glossary rules). Одна
-техническая коррекция при ответе, из которого нельзя собрать UTF-8 файл.
+Модель возвращает **Markdown** с теми же placeholders внутри предложений, не
+JSON-карту segment IDs. Runtime подставляет protected fragments из source
+(плюс locale/Wikipedia/glossary rules). Одна техническая коррекция при ответе,
+из которого нельзя собрать UTF-8 файл. JSON segment map → retry, затем fail.
 Собранный UTF-8 файл публикуется как **draft** (технический soft-publish /
 diagnostics). Markdown/YFM/links/anchors/protected diagnostics не блокируют
 draft-публикацию, но draft **не** является reader-facing product success.
@@ -141,8 +143,9 @@ draft-публикацию, но draft **не** является reader-facing p
 лимита числа/размера; при равенстве — порядок по anchor. Это контекст, не
 текст для вставки.
 
-Existing target в prompt перевода передаётся только как presentation
-reference (тег presentation-reference), когда файл уже существовал.
+Для surgical hunks existing target fragment — semantic baseline этого hunk.
+Для whole-file fallback existing target — formatting/presentation reference,
+не semantic baseline всего файла.
 
 ### 2.1 Комментарии в code fence
 
@@ -220,7 +223,16 @@ runs 37009373894 / 37027975808). `NON_FINAL` → чанк непроверен, 
 
 ### 4.1 Critic
 
-Обязательный quality gate и **единственный** model-editor после draft.
+Обязательный quality gate. DeepSeek вызывается всегда, в том числе на unique
+dest surgical. Python задаёт scope как в чате: source-delta + previous EN,
+touched EN lines. Critic патчит только этот scope (патч вне дельты
+отклоняется). Если dest mapping уже в draft — `finish` без правок. Reviewed
+bytes = workspace после finish.
+
+Это тот же объём проверки, что у редактора на changelog из четырёх URL:
+исторические релизы вне дельты не аудиторятся.
+
+Иначе — **единственный** model-editor после draft.
 Вход чанка: полные source + **draft** target одной пары frozen group
 (статья или TOC), optional presentation-reference (old target по path),
 relevant paired glossary без лимита, manifest binary при необходимости,
@@ -354,6 +366,9 @@ arbiter). Critic unavailable ≠ GREEN/YELLOW на raw translator dump.
 Вход: окончательные source/target **только после успешного critic**
 (reviewed bytes), тот же glossary/manifest подход, чанки заново по
 финальным размерам. Unreviewed пути уже RED и в arbiter не идут.
+Unique dest surgical: DeepSeek всё равно вызывается. Scope = PR delta +
+previous EN. Findings вне touched EN lines Python отбрасывает; пустой набор
+→ GREEN. Не судить исторический changelog, который PR не менял.
 
 Ответ только:
 

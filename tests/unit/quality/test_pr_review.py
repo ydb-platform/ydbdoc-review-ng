@@ -171,3 +171,150 @@ def test_fitting_pairs_still_split_one_per_chunk_and_keep_fixture_glossary():
     assert prompt_map(critic_calls[1], "source-pr-files") == {"ru/b.md": full}
     for call in executor.calls:
         assert prompt_map(call, "project-glossary") == {"glossary.md": glossary}
+
+
+def test_model_exempt_targets_are_python_reviewed_green_without_model() -> None:
+    class Boom:
+        def invoke(self, request):
+            raise AssertionError(f"model must not run: {request.role}")
+
+    corrected, result = quality.review_pr(
+        Boom(),
+        critic_model="editor",
+        arbiter_model="judge",
+        source_files={"ru/a.md": b"* [cfg](./new.md).\n"},
+        translated_files={"en/a.md": b"* [cfg](./new.md).\n"},
+        glossary_files={},
+        validate_files=lambda files: None,
+        model_exempt_targets=frozenset({"en/a.md"}),
+    )
+    assert corrected == {"en/a.md": b"* [cfg](./new.md).\n"}
+    assert result.verdict is quality.Verdict.GREEN
+    assert result.findings == ()
+
+
+def test_mixed_pr_exempts_only_unique_replacement_target() -> None:
+    original = {"en/a.md": b"# A\n", "en/b.md": b"# B\n"}
+    executor = FifoModels(
+        [
+            json.dumps({"files": {"en/b.md": "# B reviewed\n"}}),
+            json.dumps({"verdict": "GREEN", "findings": []}),
+        ]
+    )
+    corrected, result = quality.review_pr(
+        executor,
+        critic_model="editor",
+        arbiter_model="judge",
+        source_files={"ru/a.md": b"# A\n", "ru/b.md": b"# B\n"},
+        translated_files=original,
+        glossary_files={},
+        validate_files=lambda files: None,
+        model_exempt_targets=frozenset({"en/a.md"}),
+    )
+    assert result.verdict is quality.Verdict.GREEN
+    assert corrected["en/a.md"] == b"# A\n"
+    assert corrected["en/b.md"] == b"# B reviewed\n"
+    critic_calls = [call for call in executor.calls if call.role is ModelRole.CRITIC]
+    arbiter_calls = [call for call in executor.calls if call.role is ModelRole.ARBITER]
+    assert all("en/a.md" not in (call.prompt or "") for call in critic_calls)
+    assert all("en/a.md" not in (call.prompt or "") for call in arbiter_calls)
+    assert arbiter_calls
+
+
+def test_delta_scope_injects_brief_and_drops_historical_findings() -> None:
+    from ydbdoc_review_ng.quality.delta_scope import build_pair_delta_scope
+
+    source_before = b"* [cfg](./old.md).\n"
+    source_after = b"* [cfg](./new.md).\n"
+    draft = b"* [cfg](./new.md).\n* Old historical period style\n"
+    scope = build_pair_delta_scope(
+        source_before,
+        source_after,
+        draft,
+        source_path="ru/a.md",
+        target_path="en/a.md",
+    )
+    assert scope.change_class == "unique_dest"
+    assert scope.restrict_findings
+    executor = FifoModels(
+        [
+            json.dumps({"files": {"en/a.md": draft.decode()}}),
+            json.dumps(
+                {
+                    "verdict": "YELLOW",
+                    "findings": [
+                        {
+                            "target_path": "en/a.md",
+                            "searchable_snippet": "* Old historical period style",
+                            "reason": "Исторический стиль.",
+                            "expected_correction": "Поставить точку в конце.",
+                        }
+                    ],
+                }
+            ),
+        ]
+    )
+    _corrected, result = quality.review_pr(
+        executor,
+        critic_model="editor",
+        arbiter_model="judge",
+        source_files={"ru/a.md": source_after},
+        translated_files={"en/a.md": draft},
+        glossary_files={},
+        validate_files=lambda files: None,
+        delta_scopes={"en/a.md": scope},
+    )
+    assert result.verdict is quality.Verdict.GREEN
+    assert result.findings == ()
+    critic_calls = [call for call in executor.calls if call.role is ModelRole.CRITIC]
+    arbiter_calls = [call for call in executor.calls if call.role is ModelRole.ARBITER]
+    assert critic_calls
+    assert arbiter_calls
+    assert "CHANGE CLASS: unique_dest" in (critic_calls[0].prompt or "")
+    assert "CHANGE CLASS: unique_dest" in (arbiter_calls[0].prompt or "")
+
+
+def test_delta_scope_keeps_finding_on_touched_line() -> None:
+    from ydbdoc_review_ng.quality.delta_scope import build_pair_delta_scope
+
+    source_before = b"* [cfg](./old.md).\n"
+    source_after = b"* [cfg](./new.md).\n"
+    draft = b"* [cfg](./old.md).\n"
+    scope = build_pair_delta_scope(
+        source_before,
+        source_after,
+        draft,
+        source_path="ru/a.md",
+        target_path="en/a.md",
+    )
+    executor = FifoModels(
+        [
+            json.dumps({"files": {"en/a.md": draft.decode()}}),
+            json.dumps(
+                {
+                    "verdict": "YELLOW",
+                    "findings": [
+                        {
+                            "target_path": "en/a.md",
+                            "searchable_snippet": "* [cfg](./old.md).",
+                            "reason": "Dest не перенесён.",
+                            "expected_correction": "Заменить на ./new.md.",
+                        }
+                    ],
+                }
+            ),
+        ]
+    )
+    _corrected, result = quality.review_pr(
+        executor,
+        critic_model="editor",
+        arbiter_model="judge",
+        source_files={"ru/a.md": source_after},
+        translated_files={"en/a.md": draft},
+        glossary_files={},
+        validate_files=lambda files: None,
+        delta_scopes={"en/a.md": scope},
+    )
+    assert result.verdict is quality.Verdict.YELLOW
+    assert len(result.findings) == 1
+

@@ -81,6 +81,7 @@ from ydbdoc_review_ng.quality import (
     Verdict,
     review_pr,
 )
+from ydbdoc_review_ng.quality.delta_scope import PairDeltaScope, build_pair_delta_scope
 from ydbdoc_review_ng.quality.repair import _derive_target_translations
 from ydbdoc_review_ng.reporting import ProbableDuplicate, report_classification
 from ydbdoc_review_ng.repository import ResolvedRepositorySnapshots
@@ -117,18 +118,23 @@ from ydbdoc_review_ng.translation import (
     Placeholder,
     TranslationField,
     TranslationRequest,
+    apply_presentation_map,
     assemble_candidate,
+    build_presentation_map,
     build_translation_request,
     document_operator_guidance,
     parse_translation_response,
-    apply_presentation_map,
-    build_presentation_map,
     prepare_document,
     restore_document,
     validate_chunk_response,
     validate_translation_values,
 )
-from ydbdoc_review_ng.translation.document import verify_document_candidate_with_links
+from ydbdoc_review_ng.translation.document import (
+    _normalize_provider_wrapping,
+    build_document_correction_note,
+    build_document_prompt,
+    verify_document_candidate_with_links,
+)
 from ydbdoc_review_ng.translation.language import validate_translated_prose
 from ydbdoc_review_ng.translation.surgical import SurgicalMode, plan_surgical_update
 from ydbdoc_review_ng.translation_plan import (
@@ -641,6 +647,7 @@ class RuntimeContent:
         self.review_paths: tuple[RepoPath, ...] | None = None
         self.review_operator_context: str | None = None
         self._source_echo_diagnostics: list[str] = []
+        self._unique_replacement_targets: set[str] = set()
         self.publisher: GitPublicationAdapter
         # Continue harness only: reopen unfinished translation checkpoints.
         self._legacy_pending_translation_stop = False
@@ -1789,6 +1796,7 @@ class RuntimeContent:
             prepared_doc=prepared,
             presentation_bytes: bytes | None = None,
             chunks_total: int = 1,
+            semantic_baseline: bool = False,
         ) -> tuple[str | None, AttemptError | None, bool]:
             note: str | None = None
             previous_response: str | None = None
@@ -1798,80 +1806,72 @@ class RuntimeContent:
             )
 
             for attempt in (1, 2):
-                base_request = ModelRequest(
-                    ModelRole.TRANSLATE,
-                    self.model,
-                    "translate document chunk prose",
-                    None,
-                    target_path=entry.pair.target_path,
-                )
-                segment_request, segment_field, segment_contract, segments = (
-                    _document_chunk_translation_request(
-                        base_request,
-                        chunk,
-                        prepared_doc.placeholders,
-                        entry.pair.source_locale.value,
-                        entry.pair.target_locale.value,
+                missing: tuple[str, ...] = ()
+                if attempt == 2 and note == "document_response:placeholder_mismatch":
+                    expected = tuple(item.token for item in prepared_doc.placeholders)
+                    missing = tuple(
+                        token
+                        for token in expected
+                        if previous_response is None or token not in previous_response
                     )
+                prompt = build_document_prompt(
+                    chunk,
+                    entry.pair.source_locale.value,
+                    entry.pair.target_locale.value,
+                    correction=attempt == 2,
+                    correction_note=(
+                        None
+                        if attempt == 1
+                        else build_document_correction_note(
+                            document.source,
+                            chunk,
+                            prepared_doc.placeholders,
+                            missing,
+                            validation_problem=note or "document_response:placeholder_mismatch",
+                        )
+                    ),
+                    previous_response=previous_response,
+                    terminology_context=chunk_terminology_context,
                 )
-                prompt = segment_request.prompt
-                if chunk_terminology_context:
-                    prompt += (
-                        "\n\nProject glossary is reference context only. Use target terms "
-                        "consistently and do not output the glossary itself.\n<PROJECT_GLOSSARY>\n"
-                        + chunk_terminology_context
-                        + "\n</PROJECT_GLOSSARY>"
-                    )
                 if presentation_bytes is not None:
                     try:
                         reference_text = presentation_bytes.decode("utf-8")
                     except UnicodeDecodeError:
                         reference_text = None
                     if reference_text is not None:
+                        if semantic_baseline:
+                            prompt += (
+                                "\n\nExisting target fragment is the semantic baseline for this "
+                                "hunk. Keep its wording when the source meaning is unchanged; "
+                                "only update destinations, labels, or prose that the source hunk "
+                                "changed.\n"
+                            )
+                        else:
+                            prompt += (
+                                "\n\nExisting target is a formatting/presentation reference only. "
+                                "Match inline-code and identifier presentation when helpful; "
+                                "do not keep its wording as a semantic baseline.\n"
+                            )
                         prompt += (
-                            "\n\nExisting target is a formatting/presentation reference only. "
-                            "Match inline-code and identifier presentation when helpful; "
-                            "do not keep its wording as a semantic baseline.\n"
                             f"<PRESENTATION_REFERENCE_{entry.pair.target_locale.value.upper()}>\n"
                             + reference_text
                             + f"\n</PRESENTATION_REFERENCE_{entry.pair.target_locale.value.upper()}>"
                         )
                 if operator_context is not None:
                     prompt += document_operator_guidance(operator_context)
-                if attempt == 2:
-                    prompt += (
-                        "\n\nImportant correction: the previous response did not satisfy the "
-                        "required segment JSON/Markdown contract"
-                        + (" (" + note + ")" if note else "")
-                        + ". Return every requested segment exactly once. Do not return protected "
-                        "placeholders; the runtime restores them."
-                    )
-                    if previous_response is not None:
-                        prompt += (
-                            "\n<PREVIOUS_RESPONSE>\n" + previous_response + "\n</PREVIOUS_RESPONSE>"
-                        )
                 request = ModelRequest(
-                    segment_request.role,
-                    segment_request.model,
+                    ModelRole.TRANSLATE,
+                    self.model,
                     prompt,
-                    None
-                    if segment_request.schema is None
-                    else cast(FrozenJson, mutable_json(segment_request.schema)),
-                    segment_request.target_path,
+                    None,
+                    target_path=entry.pair.target_path,
                 )
                 result = self.models.invoke(request)
                 if not result.success or result.text is None:
                     return None, result.failure, False
-                try:
-                    response = _assemble_document_chunk_segments(
-                        segment_field,
-                        segment_contract,
-                        segments,
-                        result.text,
-                    )
-                except (AssemblyError, ValueError) as error:
-                    # REQUIREMENTS §2: only the segment ID-map is accepted. Raw
-                    # Markdown must not bypass the contract (#22).
+                if result.text.lstrip().startswith("{") and (
+                    '"document_chunk"' in result.text or "\nSegments: " in result.text
+                ):
                     write_trace(
                         "translation",
                         "chunk_validation",
@@ -1880,14 +1880,14 @@ class RuntimeContent:
                         chunk_index=chunk_index,
                         chunks_total=chunks_total,
                         attempt=attempt,
-                        code="segment_map_invalid",
-                        error_type=type(error).__name__,
+                        code="json_segment_map_rejected",
                     )
                     if attempt == 2:
                         return None, None, True
-                    note = "segment_map_invalid"
+                    note = "json_segment_map_rejected"
                     previous_response = result.text
                     continue
+                response = _normalize_provider_wrapping(result.text)
                 try:
                     validate_chunk_response(chunk, prepared_doc.placeholders, response)
                 except DocumentTranslationError as error:
@@ -1974,6 +1974,7 @@ class RuntimeContent:
             raise AssertionError("translation technical attempt bound exhausted")
 
         surgical_candidate: bytes | None = None
+        surgical_mode: SurgicalMode | None = None
         source_before = _read_source_before(self.source, entry.pair.source_path)
         source_after = (
             _read_source_snapshot(self.source, "source_change_snapshot", entry.pair.source_path)
@@ -1983,6 +1984,7 @@ class RuntimeContent:
             surgical = plan_surgical_update(
                 source_before, source_after, target_reference_bytes
             )
+            surgical_mode = surgical.mode
             write_trace(
                 "translation",
                 "surgical",
@@ -1995,6 +1997,7 @@ class RuntimeContent:
                 and surgical.patched_target is not None
             ):
                 surgical_candidate = surgical.patched_target
+                self._unique_replacement_targets.add(entry.pair.target_path.value)
             elif surgical.mode is SurgicalMode.HUNKS:
                 patched = target_reference_bytes
                 translated_hunks: list[tuple[tuple[int, int], bytes]] = []
@@ -2022,6 +2025,7 @@ class RuntimeContent:
                             prepared_doc=hunk_prepared,
                             presentation_bytes=hunk.existing_target_fragment,
                             chunks_total=len(surgical.hunks),
+                            semantic_baseline=True,
                         )
                     if accepted_response is None:
                         translated_hunks = []
@@ -2112,18 +2116,19 @@ class RuntimeContent:
                 for token, source_bytes in by_token.items():
                     rendered = rendered.replace(token, source_bytes.decode("utf-8"))
                 candidate = rendered.encode("utf-8")
-        # Optional old target is formatting reference only (§1.2 / §2).
-        presentation = build_presentation_map(
-            target_reference_bytes,
-            source_snapshot=document.plan.source_snapshot,
-            source_path=entry.pair.target_path,
-        )
-        candidate = apply_presentation_map(
-            candidate,
-            presentation,
-            source_snapshot=document.plan.source_snapshot,
-            source_path=entry.pair.target_path,
-        )
+        # Existing EN is already the presentation baseline for unique rewrites.
+        if surgical_mode is not SurgicalMode.UNIQUE_REPLACEMENTS:
+            presentation = build_presentation_map(
+                target_reference_bytes,
+                source_snapshot=document.plan.source_snapshot,
+                source_path=entry.pair.target_path,
+            )
+            candidate = apply_presentation_map(
+                candidate,
+                presentation,
+                source_snapshot=document.plan.source_snapshot,
+                source_path=entry.pair.target_path,
+            )
         try:
             candidate_plan = build_markdown_plan(
                 document.plan.source_snapshot, entry.pair.target_path, candidate
@@ -2522,6 +2527,28 @@ class RuntimeContent:
             validate_target_only_toc_references(source_after, expected, corrected)
         _ = (snapshot, path, expected)
 
+    def _markdown_delta_scopes(
+        self,
+        source_files: Mapping[str, bytes],
+        translated_files: Mapping[str, bytes | None],
+    ) -> dict[str, PairDeltaScope]:
+        scopes: dict[str, PairDeltaScope] = {}
+        for document in self.documents:
+            source_path = document.entry.pair.source_path
+            target_path = document.entry.pair.target_path.value
+            draft = translated_files.get(target_path)
+            source_after = source_files.get(source_path.value)
+            if draft is None or source_after is None:
+                continue
+            scopes[target_path] = build_pair_delta_scope(
+                _read_source_before(self.source, source_path),
+                source_after,
+                draft,
+                source_path=source_path.value,
+                target_path=target_path,
+            )
+        return scopes
+
     def review(
         self,
         snapshot: ImmutableRunSnapshot,
@@ -2688,6 +2715,7 @@ class RuntimeContent:
             toc_snapshots=toc_snapshots,
             binary_manifest=binary_manifest,
             presentation_reference_files=presentation_reference_files,
+            delta_scopes=self._markdown_delta_scopes(source_files, translated_files),
         )
         repaired = corrected != translated_files
         files.update(corrected)
