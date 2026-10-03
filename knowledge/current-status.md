@@ -22,15 +22,18 @@ Semantic flow в `REQUIREMENTS_RU.md`:
 |---|---|
 | Identifier atoms / presentation map / draft-reviewed gate | **DONE** (prior) |
 | P2 BlobDepot golden harness (one-shot critic era) | **DONE** (prior) |
-| REQUIREMENTS §4.1 tool-using critic | **DONE (docs)** |
-| Plan `knowledge/tool-using-critic-plan.md` | **DONE (docs)** |
+| REQUIREMENTS §4.1 tool-using critic | **DONE (docs)** + adversarial fixups |
+| Plan `knowledge/tool-using-critic-plan.md` | **DONE (docs)** + adversarial fixups |
 | Runtime tool loop / client `tool_calls` | **NOT STARTED** |
 | P0 live DeepSeek tools capability probe | **NOT STARTED** |
 | Offline stub-tool integration tests | **NOT STARTED** |
 
-> [!important] Implementation freeze until independent plan review + P0 probe
-> Tip still runs one-shot JSON critic. Do not claim tool-critic in production
-> until P1 lands and suite is green.
+> [!important] Implementation freeze until P0 probe go
+> Independent plan review (2026-10-03): **GO with blockers** (P0 provider
+> tools proof; YC live creds for #54888 re-run). Contract holes fixed in
+> §0/§3.6/§4.1: workspace RO mounts, enforceable re-read FSM,
+> `finish_reason=tool_calls`, TOC exception vs fail→RED, cutover/rollback.
+> Tip still runs one-shot JSON critic until P1 cutover.
 
 ## Critic TRANSPORT (runs 37009373894 → 37027975808) — real root cause
 
@@ -73,6 +76,6 @@ smoke aliases `YC_API_KEY` / `YDBDOC_YC_API_KEY` / `YC_FOLDER_ID` /
 `YDBDOC_MODEL_TRANSLATE`, hardcoded `OPENAI_ENDPOINT` / `NATIVE_ENDPOINT`.
 
 **Missing for grant-limited paid tests:** grant id / remaining quota env names;
-unified live creds (prod `YANDEX_*` vs smoke `YC_*`); tool-feature flag env;
-checked-in DeepSeek tool_calls proof. Details:
-`knowledge/tool-using-critic-plan.md` § Yandex Cloud.
+unified live creds (prod `YANDEX_*` vs smoke `YC_*`); checked-in DeepSeek
+tool_calls proof. Production tools feature-flag dual-path **rejected**
+(rollback = tip revert). Details: `knowledge/tool-using-critic-plan.md`.

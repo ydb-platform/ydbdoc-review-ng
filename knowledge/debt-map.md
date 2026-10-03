@@ -24,7 +24,7 @@
 | 14 | Live PR after redesign | critic fell on 180s timeout; quality hotfix next |
 | 15 | Critic HTTP timeout 180→600 + presentation/CLI/CamelCase | **done** (2026-10-02) |
 | 16 | Critic mega-request TRANSPORT @ ~270s (provider idle wall) | **done** (2026-10-02): 1 pair/chunk, relevant glossary, max_output_tokens cap |
-| 17 | Tool-using critic (workspace + patch + re-read); no arbiter repair loop | **docs/plan** (2026-10-03); runtime **not started** — see `tool-using-critic-plan.md` |
+| 17 | Tool-using critic (workspace + patch + re-read); no arbiter repair loop | **docs/plan** (2026-10-03); adversarial review fixed §0/§3.6/§4.1 holes; runtime **not started**; P0 probe still blocks code — see `tool-using-critic-plan.md` |
 
 ## CI translation redesign (2026-10-02)
 

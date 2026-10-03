@@ -8,9 +8,10 @@
 1. Техпис ставит label на PR.
 2. Runtime берёт immutable snapshot source PR, при необходимости дотягивает
    зависимости без target-перевода, переводит файлы и публикует translation branch.
-3. Critic получает полные source-файлы группы и полные target-файлы перевода,
-   находит проблемы и сразу возвращает исправленные target-файлы. Runtime
-   применяет их в ту же ветку.
+3. Critic — обязательный tool-using gate (§4.1): in-memory workspace чанка,
+   tools `read` / `grep` / `apply_patch` / `finish`, mandatory re-read после
+   каждого успешного patch. Reviewed bytes = runtime-applied patches в ту же
+   ветку. Whole-file JSON `{"files": …}` не primary path.
 4. Arbiter независимо смотрит окончательный результат и публикует
    `GREEN` / `YELLOW` / `RED`.
 5. Build и CI не участвуют в semantic verdict.
@@ -166,11 +167,14 @@ diagnostic для critic/arbiter.
 6. Critic/arbiter получают полный target TOC (или `null`) и source TOC
    before/after. Critic правит TOC только через tool-workspace §4.1
    (`apply_patch` по seeded target TOC), не целым JSON-файлом как primary
-   path. Перед публикацией Python проверяет, что critic не удалил
+   path. Перед принятием patch Python проверяет, что critic не удалил
    target-записи, которых не касалась source-дельта PR. Нарушение делает
-   правку невалидной и запускает обычную единственную повторную попытку
-   §4.1; после второй ошибки сохраняется TOC, уже построенный Python по
-   дельте, и именно он идёт arbiter.
+   **этот patch** невалидным (как oversized/invalid hunk): одна повторная
+   попытка всей critic-сессии §4.1. После второй такой ошибки по TOC —
+   исключение из fail→RED: сохраняется TOC, уже построенный Python по
+   дельте, и **именно он** идёт в reviewed bytes и дальше в arbiter.
+   Transport/protocol/turn-budget ошибки critic по TOC-чанку по-прежнему
+   дают unreviewed RED без arbiter на сыром draft.
 
 Покрывается unit/integration tests на дельту, идемпотентность, новый TOC,
 diagnostics.
@@ -204,23 +208,32 @@ runs 37009373894 / 37027975808). `NON_FINAL` → чанк непроверен, 
 Вход чанка: полные source + **draft** target одной пары frozen group
 (статья или TOC), optional presentation-reference (old target по path),
 relevant paired glossary без лимита, manifest binary при необходимости,
-для TOC — before/after source. Отсутствующий обязательный target = `null` в
-workspace → critic обязан создать файл через tools (серия `apply_patch` /
-эквивалент создания), не через dump целого PR.
+для TOC — before/after source.
 
 #### Роль и границы
 
 - Critic = tool-using editor: читает, ищет, патчит, **обязательно**
-  перечитывает затронутые строки, завершает сессию.
+  перечитывает затронутые строки, завершает сессию через tool `finish`.
 - Arbiter = judge-only (§4.2). Findings арбитра **не** запускают critic и не
   чинятся автоматически в том же job.
-- Translator и Python TOC-delta (§2–§3) не меняются этим контрактом.
+- Translator и Python TOC-delta (§2–§3) не меняются этим контрактом, кроме
+  wiring входа/выхода critic и TOC-исключения §3.6.
 
 #### Workspace и tools
 
-Runtime готовит in-memory workspace = draft bytes чанка. Модель ходит в
-OpenAI-compatible tool loop (DeepSeek). Primary path — tools, **не**
-whole-file JSON `{"files": …}`.
+Runtime готовит in-memory workspace на чанк:
+
+| Path class | Содержимое | Доступ |
+|---|---|---|
+| Writable draft target | draft bytes; если обязательный target отсутствует — **seed пустого файла** (0 bytes), не JSON-`null` как единственный способ создания | `read` / `grep` / `apply_patch` |
+| Read-only source | полные source bytes пары | только `read` / `grep` |
+| Read-only glossary | relevant paired sections | только `read` / `grep` |
+| Read-only presentation-reference | old target по path, если был | только `read` / `grep` |
+| Read-only TOC snapshots | source TOC before/after (для TOC-чанка) | только `read` / `grep` |
+
+`apply_patch` на read-only path → invalid tool args. Path traversal / escape
+из workspace → invalid tool args. Модель ходит в OpenAI-compatible tool loop
+(DeepSeek). Primary path — tools, **не** whole-file JSON `{"files": …}`.
 
 Обязательные tools:
 
@@ -228,34 +241,71 @@ whole-file JSON `{"files": …}`.
 |---|---|
 | `read` | Байты/строки path из workspace (1-based window). |
 | `grep` | Поиск pattern в workspace path(s). |
-| `apply_patch` | Unified diff / hunks к одному path; runtime применяет. |
-| `finish` | Явное завершение сессии после всех re-read. |
+| `apply_patch` | Unified diff / hunks к **одному** writable path; runtime применяет. |
+| `finish` | Явное завершение сессии после всех обязательных re-read. |
 
 Другие tools в v1 запрещены. Verdict/findings в ответе critic запрещены.
+Finish signal = только tool `finish` (не «финальный JSON без tools»).
 
-#### Обязательный re-read
+#### Протокол хода (enforceable FSM)
 
-После каждого успешного `apply_patch` critic **обязан** вызвать `read`,
-покрывающий все затронутые строки, до следующего patch или `finish`.
-Нарушение = invalid contract → один retry сессии → иначе unreviewed RED.
+Runtime, не prompt, enforced:
+
+1. **Один mutating tool за assistant-turn:** в сообщении с `apply_patch` не
+   может быть других tool_calls. Иначе protocol error.
+2. Parallel `read`/`grep` в одном turn допустимы только когда нет pending
+   re-read и нет `apply_patch` в этом же turn.
+3. После **успешного** `apply_patch` runtime вычисляет touched line ranges
+   **после** применения hunk и ставит `pending_reread`. Пока
+   `pending_reread` не пуст, единственные допустимые tools — `read`, и
+   объединение окон `read` должно покрыть каждый pending range. Любой
+   `apply_patch` / `grep` / `finish` при непустом pending → protocol error.
+4. `finish` при непустом `pending_reread` → protocol error.
+5. `finish` на пустом seed без единого успешного patch допустим (no-op
+   review): reviewed bytes = seed/draft без изменений.
+6. `finish_reason=tool_calls` (или эквивалент provider) при валидных
+   `tool_calls` — **нормальный промежуточный** ответ, не `NON_FINAL` и не
+   `EMPTY_TEXT` из-за `content=null`.
+7. Retry = **полный рестарт** critic-сессии с исходного draft/seed workspace
+   и чистой history; не продолжение сломанного multi-turn.
+
+Нарушение protocol → один retry сессии → иначе unreviewed RED (кроме
+TOC-исключения §3.6 после двух ошибок защиты target-only записей).
 
 #### Финальные bytes
 
-Reviewed bytes чанка = workspace после runtime-applied patches. Текст
-ассистента и tool args сами по себе не публикуются. Нет успешного `finish`
-с валидным workspace → чанк непроверен.
+Reviewed bytes чанка = workspace writable paths после runtime-applied
+patches. Текст ассистента и tool args сами по себе не публикуются. Нет
+успешного `finish` с валидным workspace → чанк непроверен.
 
 #### Лимиты надёжности
 
 - Max tool turns на чанк (дефолт 12; override env
   `YDBDOC_CRITIC_MAX_TOOL_TURNS` при реализации). Превышение → RED.
+- Per-turn `max_output_tokens` для critic-turn ограничен (как сейчас против
+  silent-connection wall); history tool-loop не должна заново класть полные
+  файлы в каждый user-turn — только начальный context + tool results.
 - Patch-not-full-file: runtime отвергает огромные hunks (пороги в плане
-  P1; цель — хирургические правки, не пересылка целого файла).
+  P1; цель — хирургические правки, не пересылка целого файла). Для seed
+  0-byte файла создание содержимого через один или несколько patch
+  допустимо, пока каждый hunk проходит byte/span cap относительно
+  **результата** применения (порог «% файла» для пустого seed не блокирует
+  первую осмысленную запись; абсолютный byte cap всё равно действует).
 - Чанки строго по **одной** source/target паре (TOC отдельно). Пара не
   делится. Не влезла → unreviewed, остальные идут.
 - Полный bilingual glossary.md не кладётся: только relevant paired sections.
-- Один retry на transport/503/invalid contract/NON_FINAL/protocol (как
-  сегодня по смыслу fail→RED).
+- Один retry на transport/503/invalid contract/protocol (см. FSM).
+  `NON_FINAL` на промежуточном tool-turn не применяется к `tool_calls`;
+  `NON_FINAL`/`length` без валидных tool_calls или на `finish`-turn → как
+  сегодня: retry → unreviewed RED.
+
+#### Cutover и rollback
+
+До P0 probe green + P1 suite tip может ещё исполнять one-shot JSON critic
+(факт кода). Это не второй канон и не production dual-path.
+После cutover silent fallback на whole-file `{"files": …}` **запрещён**.
+Env-flag «tools on/off» в production **не** вводим. Rollback = revert
+release tip / остановить `doc_translate`, не параллельный JSON-path.
 
 #### Качество правок
 
@@ -270,7 +320,8 @@ diagnostics §2 по-прежнему не gate.
 Успешный чанк → **reviewed** commit/push workspace bytes. Первый успех может
 создать branch/PR, если translator опубликовал только draft. Ошибка после
 retry → unreviewed RED; arbiter по этим путям **не** вызывается на сыром
-draft. Critic unavailable ≠ GREEN/YELLOW на raw translator dump.
+draft (TOC-исключение §3.6 — единственное: Python-delta TOC всё же идёт в
+arbiter). Critic unavailable ≠ GREEN/YELLOW на raw translator dump.
 
 При нуле текстовых пар → пустой tool-сеанс / no-op `finish`, вызов gate
 всё равно есть (как раньше пустой `{"files": {}}`).

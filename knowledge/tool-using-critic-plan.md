@@ -1,9 +1,10 @@
 # Plan: tool-using critic (reliable rollout)
 
 Status: **plan + requirements only** (2026-10-03). Runtime tool loop **not**
-implemented yet. Independent review of this plan is the next gate before code.
+implemented yet. Independent adversarial review applied; contract holes below
+are frozen in `REQUIREMENTS_RU.md` §0 / §3.6 / §4.1 before any code.
 
-Canon after this commit: `REQUIREMENTS_RU.md` §4.1 (tool workspace + patches).
+Canon: `REQUIREMENTS_RU.md` §4.1 (tool workspace + patches + enforceable FSM).
 This file is the execution plan: phases, TDD list, risks, acceptance, delivery.
 
 ## Problem
@@ -27,14 +28,17 @@ the workspace bytes as reviewed. Arbiter remains a single judge pass.
 ### Goals
 
 1. Critic edits draft target through bounded tools (`read` / `grep` /
-   `apply_patch`), not by dumping whole files as the primary response.
+   `apply_patch` / `finish`), not by dumping whole files as the primary response.
 2. After every successful patch, critic **must** re-read the touched region;
-   session fails closed if it skips re-read.
+   session fails closed if it skips re-read (runtime FSM, not prompt hope).
 3. **Final published bytes** = runtime-applied patch accumulation on the
    draft workspace (not model-echoed full files, not arbiter text).
 4. Arbiter stays judge-only on reviewed bytes. No arbiter↔repair loop.
-5. Fail / budget / invalid tool use → RED / unreviewed like today.
-6. Translator and TOC Python-delta path stay unchanged.
+5. Fail / budget / invalid tool use → RED / unreviewed like today, with the
+   sole TOC exception in §3.6 (Python-delta TOC → arbiter after two
+   target-only protection failures).
+6. Translator and TOC Python-delta path stay unchanged except critic wiring
+   and that TOC exception.
 
 ### Non-goals (this rollout)
 
@@ -42,18 +46,20 @@ the workspace bytes as reviewed. Arbiter remains a single judge pass.
 - Changing direction / translator / soft-publish draft semantics.
 - Replacing Diplodoc build gates with model verdicts.
 - Implementing the tool loop in the same commit as this plan.
+- Production dual-path / feature-flag fallback to whole-file JSON.
 
-## Current code facts (must verify in P0)
+## Current code facts (verified at tip `20dd21b`)
 
 | Fact | Evidence |
 |---|---|
-| OpenAI client sends `messages` + optional `response_format.json_schema` only | `src/ydbdoc_review_ng/models/clients.py` `YandexOpenAIClient._payload` |
+| OpenAI client sends `messages` + optional `response_format.json_schema` only | `clients.py` `YandexOpenAIClient._payload` |
 | Native client has no tools either | `NativeYandexClient._payload` |
 | Response parser expects `message.content` text only; ignores `tool_calls` | `_parse_openai` |
+| `finish_reason != "stop"` today → `NON_FINAL`; empty/null content → errors | `_semantic_error` — **landmine** for `finish_reason=tool_calls` |
 | `ModelRequest` has no tools / multi-turn fields | `models/types.py` |
 | Critic builder: one `ModelRequest`, schema `{"files":…}` | `quality/critic.py` |
 | Production roles use DeepSeek via OpenAI-compatible endpoint | `runtime.py` + `OPENAI_ENDPOINT` |
-| `reasoning_effort` today: critic `medium`, arbiter `none` (tip `28e2da1`) | `clients.py` (REQUIREMENTS must stay aligned) |
+| `reasoning_effort` today: critic `medium`, arbiter `none` | `clients.py` (keep REQUIREMENTS aligned) |
 
 **P0 gate:** prove DeepSeek V4 Flash on Yandex AI Studio OpenAI endpoint
 actually returns OpenAI-style `tool_calls` (or document the exact supported
@@ -66,55 +72,48 @@ tool protocol that the provider will not execute.
 ```
 draft bytes (soft-publish)
     → critic workspace (in-memory copy per chunk)
+         writable: draft target (missing required target → 0-byte seed)
+         read-only: source, relevant glossary, presentation-ref, TOC snapshots
     → multi-turn DeepSeek session with tools
-         read(path, start_line?, end_line?)
-         grep(path|workspace, pattern, …)
-         apply_patch(path, unified_diff|hunk)
-         (optional later: list_paths — not required for v1)
-    → after each apply_patch: runtime applies hunk; critic must call read
-      on touched lines before next patch or finish
-    → finish signal: assistant message with no tool calls + small JSON
-      `{"status":"done"}` OR explicit `finish` tool (pick one in P0; prefer
-      finish tool so schema stays strict)
-    → reviewed commit = workspace bytes
-    → arbiter once on reviewed bytes (unchanged contract)
+         read / grep / apply_patch / finish
+    → runtime FSM: pending_reread after each successful patch; covering read
+      required before next mutate/finish
+    → finish tool → reviewed commit = writable workspace bytes
+    → arbiter once on reviewed bytes (unchanged judge-only contract)
 ```
 
-### Hard reliability rules
+### Hard reliability rules (canon detail in §4.1)
 
-1. **Bounded tool turns** per chunk (proposed default: 12; env override
-   `YDBDOC_CRITIC_MAX_TOOL_TURNS` documented in P1). Exceed → unreviewed RED.
-2. **Patch-not-full-file:** `apply_patch` rejects hunks that replace ≥ N% of
-   file or exceed byte cap (proposed: reject if patched span > 8 KiB or >
-   40% of file unless file < 2 KiB). Force surgical edits.
-3. **Mandatory re-read:** after patch apply, next model action that is not
-   `read` covering every touched line range → protocol error → retry once →
-   RED.
-4. **No token-burn arbiter loop:** arbiter findings never feed critic in the
-   same job.
-5. **Same fail→RED:** transport / NON_FINAL / invalid tool args / patch
-   reject after retry → unreviewed paths RED; arbiter skipped for those paths.
-6. **Chunking stays** one source/target pair (TOC pair separate); tools do not
-   reopen whole-PR mega-context.
-7. **TOC:** structural ownership remains Python §3. Critic may patch TOC text
-   only through the same workspace rules; target-only entries protection from
-   tip `28e2da1` remains a runtime validator (invalid patch → retry/RED /
-   keep Python delta).
+1. **Bounded tool turns** per chunk (default 12; `YDBDOC_CRITIC_MAX_TOOL_TURNS`).
+2. **Patch-not-full-file** caps (plan P1 numbers: reject span > 8 KiB or > 40%
+   unless file < 2 KiB; empty-seed first write uses absolute byte cap, not % of 0).
+3. **Mandatory re-read** via runtime FSM (pending ranges, not prompt).
+4. **One mutating tool call per assistant turn**; `apply_patch` cannot share a
+   turn with other tools.
+5. **No token-burn arbiter loop.**
+6. **Fail→RED** after retry, except TOC §3.6 target-only protection → keep
+   Python-delta TOC and still call arbiter.
+7. **Chunking** stays one source/target pair; tools do not reopen whole-PR context.
+8. **Retry** = full session restart from original draft/seed + empty history.
+9. **`finish_reason=tool_calls`** is a normal intermediate; must not map to
+   `NON_FINAL` / `EMPTY_TEXT` solely because `content` is null.
+10. **Cutover:** after P0+P1, remove whole-file primary path. No production
+    `YDBDOC_CRITIC_TOOLS` dual-path. Rollback = revert tip / stop translate.
 
 ## Phases
 
 ### P0 — Provider + contract freeze (no production loop yet)
 
-1. Independent review of this plan + `REQUIREMENTS_RU.md` §4.1.
+1. Independent review of this plan + `REQUIREMENTS_RU.md` §4.1 (**this gate**).
 2. Live **capability probe** (paid, gated): one chat with tools against
    DeepSeek V4 Flash on `https://ai.api.cloud.yandex.net/v1/chat/completions`
-   using production-shaped auth (`YANDEX_API_KEY` + `YANDEX_FOLDER_ID` or
-   documented smoke aliases). Record: HTTP status, whether `tool_calls`
-   present, finish_reason, cost. Store result summary in
-   `knowledge/current-status.md` (no secrets).
-3. Freeze tool JSON schemas and finish signal in REQUIREMENTS (already
-   drafted below in canon; adjust only if probe forces it).
-4. Decide finish API: `finish` tool vs empty-tool final JSON. Prefer `finish`.
+   using production-shaped auth (`YANDEX_API_KEY` + `YANDEX_FOLDER_ID`).
+   Record: HTTP status, whether `tool_calls` present, `finish_reason`, whether
+   null `content` appears with tools, multi-turn tool result round-trip, cost.
+   Store summary in `knowledge/current-status.md` (no secrets).
+3. Freeze tool JSON schemas only if probe forces schema tweaks; finish tool
+   already canon in §4.1.
+4. Explicit go/no-go on provider tool support before P1c client work.
 
 Exit: written probe result + go/no-go.
 
@@ -125,16 +124,16 @@ focused suite → commit `main`.
 
 | Slice | Deliverable |
 |---|---|
-| P1a | Workspace + `apply_patch` / `read` / `grep` pure functions |
-| P1b | Tool-loop driver with turn budget + mandatory re-read FSM |
-| P1c | OpenAI client: send `tools`, parse `tool_calls`, multi-turn invoke API |
+| P1a | Workspace + `apply_patch` / `read` / `grep` pure functions + RO mounts |
+| P1b | Tool-loop driver: turn budget + pending_reread FSM + full-session retry |
+| P1c | OpenAI client: `tools`, parse `tool_calls`, accept `finish_reason=tool_calls`, multi-turn `role=tool` |
 | P1d | Wire critic role to loop; drop whole-file JSON as primary path |
-| P1e | Runtime: reviewed bytes from workspace; fail→RED unchanged |
+| P1e | Runtime: reviewed bytes from workspace; fail→RED + TOC §3.6 exception |
 | P1f | Prompts: critic as editor-with-tools; arbiter untouched |
 | P1g | Knowledge + REQUIREMENTS sync if probe tweaked schemas |
 
 Translator, direction, TOC Python delta: **no behavior change** except critic
-input/output wiring.
+wiring and TOC exception path.
 
 ### P2 — Integration + optional live + delivery
 
@@ -152,6 +151,10 @@ input/output wiring.
 7. Independent content review of resulting PR (human/agent): GREEN/YELLOW
    target; residual RED must be real product issues, not leftover `--wait wait`.
 
+**Not ready for step 6 until** P0 green, P1/P2 offline green, tag pushed, and
+Actions still have working `YANDEX_API_KEY` + `YANDEX_FOLDER_ID` (smoke `YC_*`
+aliases are not enough for production `doc_translate`).
+
 ## TDD test list
 
 ### Unit (always on, no network)
@@ -159,35 +162,49 @@ input/output wiring.
 1. `apply_patch` applies unified hunk; rejects overlapping/invalid/oversized.
 2. `read` returns exact line window with stable 1-based numbers.
 3. `grep` returns path+line+snippet; respects workspace bytes not disk.
-4. FSM: patch without subsequent covering `read` → protocol error.
-5. FSM: turn counter hits max → stop with unreviewed failure.
-6. FSM: `finish` with pending unre-read patches → error.
-7. Client payload includes `tools` for critic role only; translator payload
-   unchanged (no tools).
-8. Client parses `tool_calls` + round-trips tool results as `role=tool`.
-9. Critic success publishes workspace bytes, not assistant prose.
-10. Critic fail/503/protocol → RED; arbiter not invoked on those paths
+4. RO mount: `apply_patch` on source/glossary/presentation → invalid.
+5. Path escape / unknown path → invalid.
+6. Missing required target seeds 0-byte writable file; patch can create content.
+7. FSM: patch without subsequent covering `read` → protocol error.
+8. FSM: `grep` or second `apply_patch` while `pending_reread` → protocol error.
+9. FSM: `apply_patch` bundled with any other tool_call in one turn → protocol error.
+10. FSM: parallel `read`/`grep` OK when pending empty.
+11. FSM: turn counter hits max → stop with unreviewed failure.
+12. FSM: `finish` with pending unre-read patches → error.
+13. FSM: retry restarts from original draft bytes (discard partial patches).
+14. Client payload includes `tools` for critic role only; translator unchanged.
+15. Client parses `tool_calls`; `finish_reason=tool_calls` + `content=null` is
+    success intermediate, **not** `NON_FINAL` / `EMPTY_TEXT`.
+16. Client round-trips tool results as `role=tool`.
+17. Critic success publishes workspace bytes, not assistant prose.
+18. Critic fail/503/protocol → RED; arbiter not invoked on those paths
     (extend `test_draft_reviewed_gate`).
-11. TOC target-only protection still rejects bad patches (adapt tip tests).
-12. Patch that would delete target-only TOC entries invalid.
+19. TOC target-only protection rejects bad patches; after two session failures
+    on that class, Python-delta TOC is published and **arbiter is invoked**.
+20. Empty-seed / no-op `finish` publishes draft/seed unchanged.
 
 ### Integration offline (stub model)
 
-13. End-to-end chunk: stub issues grep → read → apply_patch → read → finish;
+21. End-to-end chunk: stub issues grep → read → apply_patch → read → finish;
     translation branch gets patched file.
-14. Stub skips re-read → RED + checkpoint semantics unchanged.
-15. Stub exceeds turn budget → RED.
-16. Stub tries full-file patch → rejected → retry → RED if persists.
-17. Translator still whole-file JSON; TOC Python delta still applied before
+22. Stub skips re-read → RED + checkpoint semantics unchanged.
+23. Stub exceeds turn budget → RED.
+24. Stub tries full-file patch → rejected → retry → RED if persists.
+25. Stub creates file from 0-byte seed via patches + covering reads → reviewed.
+26. Translator still whole-file JSON; TOC Python delta still applied before
     critic workspace seed.
-18. Arbiter still judge-only; no second critic call from findings.
+27. Arbiter still judge-only; no second critic call from findings.
+28. History/growth smoke (stub): tool-loop does not re-embed full source/target
+    blobs on every turn beyond initial user message + tool payloads.
 
 ### Optional live (deselected by default)
 
-19. `@pytest.mark.live` tool-call smoke: real DeepSeek, tiny fixture file,
+29. `@pytest.mark.live` tool-call smoke: real DeepSeek, tiny fixture file,
     assert at least one `tool_calls` round and a successful patch+reread.
-    Gate: `YDBDOC_LIVE=1` **and** production-shaped model creds (see below).
-20. Do **not** auto-run live in CI; cost against grant/budget is manual.
+    Gate: `YDBDOC_LIVE=1` **and** production-shaped `YANDEX_API_KEY` +
+    `YANDEX_FOLDER_ID` (not smoke-only `YC_*` unless the probe script is
+    explicitly smoke-scoped and documented as non-runtime).
+30. Do **not** auto-run live in CI; cost against grant/budget is manual.
 
 ## Yandex Cloud / live env vars (findings)
 
@@ -216,26 +233,33 @@ input/output wiring.
 | No env name for **grant id / billing account / promo grant** | Cannot document or assert “use the grant” in tests |
 | No env for **grant remaining quota / hard stop besides** `YDBDOC_DAILY_BUDGET_RUB` | Budget gate is RUB/day in YDB audit, not YC grant balance |
 | No unified live-test credential story | Production code wants `YANDEX_*`; smoke wants `YC_*` |
-| No env for tool-calling feature flag | Needed for staged rollout (`YDBDOC_CRITIC_TOOLS=1` proposed in P1) |
 | No checked-in proof DeepSeek tools work on YC | P0 probe must create it |
 | Personal-shell names (`SINTJURI_*`) appear only in vault daily notes, **not** in this repo | Out of band; do not encode as project contract |
 
+**Not a gap:** production tools feature flag. Dual-path env is **rejected**;
+see §4.1 cutover/rollback.
+
 **Ready for live paid critic tests only after:** P0 probe green + operator
-exports `YDBDOC_LIVE=1` with either production `YANDEX_API_KEY`+
-`YANDEX_FOLDER_ID` (preferred for runtime path) or smoke aliases if the probe
-script uses smoke clients + a numeric `YDBDOC_DAILY_BUDGET_RUB` / operator
-spend discipline. Grant-limit automation is **not** available from repo docs.
+exports `YDBDOC_LIVE=1` with production `YANDEX_API_KEY`+`YANDEX_FOLDER_ID`
++ numeric `YDBDOC_DAILY_BUDGET_RUB` / operator spend discipline. Grant-limit
+automation is **not** available from repo docs.
+
+**Ready for live BlobDepot re-run (#54888 successor) only after:** P2 delivery
+checklist + Actions secrets still valid for `doc_translate` (same `YANDEX_*`).
 
 ## Risks
 
 | Risk | Mitigation |
 |---|---|
-| DeepSeek on YC lacks tool_calls | P0 probe; fallback redesign before coding loop |
+| DeepSeek on YC lacks tool_calls | P0 probe; stop before P1c; renegotiate |
+| `finish_reason=tool_calls` misclassified as NON_FINAL / EMPTY_TEXT | Explicit parser tests in P1c; listed above |
 | Model loops patches without converging | Turn cap + patch size cap + RED |
-| Model “finishes” without re-read | FSM hard-require |
-| Token cost rises vs one-shot JSON | Smaller prompts (one pair) + patches; audit costs |
-| TOC structural damage | Keep Python validator; invalid → retry/RED |
-| Dual env names confuse live runs | Document matrix; prefer `YANDEX_*` for runtime tests |
+| Model “finishes” without re-read | Runtime pending_reread FSM |
+| Multi-turn × `reasoning_effort=medium` hits silent wall harder than one-shot | Per-turn max_output_tokens; no full-file re-embed each turn; turn cap; watch wall-clock in P0/P2 |
+| Conversation history token growth | Tool results only + compact initial context; audit costs |
+| TOC structural damage | Python validator; TOC §3.6 fallback to Python delta → arbiter |
+| Dual env names confuse live runs | Prefer `YANDEX_*` for runtime/live; document smoke as non-runtime |
+| Silent JSON fallback reintroduced “for safety” | Forbidden by §4.1; rollback = tip revert |
 | REQUIREMENTS/code drift on reasoning_effort | Sync in same docs commit; re-check in P1c |
 
 ## Acceptance
@@ -243,11 +267,11 @@ spend discipline. Grant-limit automation is **not** available from repo docs.
 1. Offline suite green with stub tool model; new witnesses in
    `knowledge/testing.md` checked off.
 2. Critic primary path is tools+patches; whole-file `{"files":…}` is not
-   production primary (legacy parse may exist only if explicitly kept as
-   emergency — default: **remove**).
+   production primary (default: **remove** after cutover; no env dual-path).
 3. Arbiter unchanged judge-only; no repair loop code paths.
-4. Translator + TOC Python path unchanged by behavioral tests.
-5. Fail→RED preserved.
+4. Translator + TOC Python path unchanged by behavioral tests except §3.6
+   exception wiring.
+5. Fail→RED preserved (plus TOC exception).
 6. Optional live tool smoke documented and skipped by default.
 7. After tag: BlobDepot re-translate from #50839 produces a new PR; residual
    defects are triageable findings, not “critic said fix but bytes untouched”.
@@ -255,10 +279,9 @@ spend discipline. Grant-limit automation is **not** available from repo docs.
 ## Delivery checklist (end of P2)
 
 1. `git pull --ff-only` `public/main`; work on `main`.
-2. Implement P1/P2 with atomic commits.
+2. Implement P1/P2 with atomic commits **only after** P0 go.
 3. Full non-live suite once.
-4. Push `public` with `YDB_GH_TOKEN` and cleared `credential.helper` (same
-   discipline as this docs commit).
+4. Push `public` with `YDB_GH_TOKEN` and cleared `credential.helper`.
 5. Tag release tip (move or mint per delivery.md practice).
 6. Close stale translation PR / delete `translation/pr-50839` if required.
 7. Label `doc_translate` on source [#50839](https://github.com/ydb-platform/ydb/pull/50839).
@@ -268,6 +291,6 @@ spend discipline. Grant-limit automation is **not** available from repo docs.
 
 ## Ready for independent review?
 
-**Yes — for the plan and §4.1 contract.** Not ready for implementation review
-until P0 DeepSeek tool probe is recorded. Not ready for live BlobDepot
-acceptance until P2 delivery checklist completes.
+**Plan/contract review: addressed in this revision.** Not ready for
+implementation until P0 DeepSeek tool probe is recorded **go**. Not ready for
+live BlobDepot acceptance until P2 delivery checklist completes.
