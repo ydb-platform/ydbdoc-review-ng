@@ -25,7 +25,11 @@ from ydbdoc_review_ng.quality.tool_critic import (
 from ydbdoc_review_ng.quality.tool_loop import LoopFailureReason
 from ydbdoc_review_ng.quality.types import CriticResult, Finding, Verdict
 from ydbdoc_review_ng.terminology import bilingual_glossary_context
-from ydbdoc_review_ng.toc_delta import TocDeltaError, target_only_toc_references
+from ydbdoc_review_ng.toc_delta import (
+    TocDeltaError,
+    source_only_toc_references,
+    target_only_toc_references,
+)
 from ydbdoc_review_ng.translation import (
     ProtectedMismatch,
     TranslationRequest,
@@ -238,6 +242,52 @@ def _worst_verdict(results: Sequence[CriticResult]) -> Verdict:
         if _VERDICT_RANK[result.verdict] > _VERDICT_RANK[worst]:
             worst = result.verdict
     return worst
+
+
+def _filter_source_only_toc_arbiter_findings(
+    result: CriticResult,
+    *,
+    chunk_pairs: Sequence[tuple[str, str]],
+    toc_snapshots: Mapping[str, Mapping[str, str | None]] | None,
+    target_files: Mapping[str, bytes | None],
+) -> CriticResult:
+    """Drop arbiter noise that demands mirroring source-only TOC entries into EN."""
+
+    if toc_snapshots is None or not result.findings:
+        return result
+    omitted_tokens: set[str] = set()
+    for source_path, target_path in chunk_pairs:
+        snapshot = toc_snapshots.get(source_path)
+        target = target_files.get(target_path)
+        source_after = None if snapshot is None else snapshot.get("after")
+        if target is None or source_after is None:
+            continue
+        try:
+            omitted = source_only_toc_references(source_after.encode("utf-8"), target)
+        except (TocDeltaError, UnicodeEncodeError):
+            continue
+        for identity in omitted:
+            # href:selfheal.md → selfheal.md / selfheal
+            value = identity.split(":", 1)[-1]
+            omitted_tokens.add(value)
+            omitted_tokens.add(value.rsplit("/", 1)[-1])
+            if value.endswith(".md"):
+                omitted_tokens.add(value[: -len(".md")])
+    if not omitted_tokens:
+        return result
+
+    kept: list[Finding] = []
+    for item in result.findings:
+        blob = f"{item.reason}\n{item.expected_correction}"
+        if any(token and token in blob for token in omitted_tokens):
+            continue
+        kept.append(item)
+    if len(kept) == len(result.findings):
+        return result
+    verdict = Verdict.GREEN if not kept else result.verdict
+    if verdict is Verdict.GREEN and kept:
+        verdict = Verdict.YELLOW
+    return CriticResult(verdict, tuple(kept), result.corrected_markdown)
 
 
 def _unreviewed_finding(target_path: str, reason: _UnreviewedReason) -> Finding:
@@ -511,7 +561,15 @@ def review_pr(
                 resource_review_reason = "provider"
             continue
         try:
-            results.append(parse_pr_arbiter_response(response.text, target_files=chunk_files))
+            parsed = parse_pr_arbiter_response(response.text, target_files=chunk_files)
+            results.append(
+                _filter_source_only_toc_arbiter_findings(
+                    parsed,
+                    chunk_pairs=chunk_pairs,
+                    toc_snapshots=toc_snapshots,
+                    target_files=arbiter_targets,
+                )
+            )
         except Exception:
             mark_unreviewed(tuple(target for _source, target in chunk_pairs), "contract")
             if not chunk_pairs:

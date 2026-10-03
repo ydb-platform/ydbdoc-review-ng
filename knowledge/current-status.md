@@ -29,14 +29,13 @@ Semantic flow в `REQUIREMENTS_RU.md`:
 | Offline stub-tool integration tests | **PASS** (`pytest -m 'not live'`, 2026-10-03) |
 | P2 live tool-critic smoke (`--wait wait`) | **PASS** (2026-10-03) — `tests/live/test_tool_critic_live.py` |
 
-> [!success] Local BlobDepot critic+arbiter → YELLOW (mergeable); CI RED explained
-> Run [37100488317](https://github.com/ydb-platform/ydb/actions/runs/37100488317) /
-> [#54924](https://github.com/ydb-platform/ydb/pull/54924): «сбой модели» = our
-> `TURN_BUDGET` (12) mislabeled as provider. Local grant iteration
-> (`scripts/probe_blobdepot_critic_live.py`): turns=32 → critic finishes →
-> arbiter YELLOW → no-op findings filtered to GREEN. Research:
-> `knowledge/blobdepot-critic-research.md`. Residual prose (`Blob depot`,
-> BS_CONTROLLER word order) still editorial, not budget.
+> [!success] Local BlobDepot critic+arbiter → GREEN (YC grant)
+> Arbiter noise from [#54927](https://github.com/ydb-platform/ydb/pull/54927) fixed:
+> default-GREEN prompt, drop bad snippets / «не требуется», drop source-only TOC
+> demands (`selfheal.md`). Live harness PASS GREEN
+> (`scripts/probe_blobdepot_critic_live.py`, research
+> `knowledge/blobdepot-critic-research.md`). Residual prose (`Blob depot`) may
+> remain editorial but no longer blocks the gate.
 
 ## Critic TRANSPORT (runs 37009373894 → 37027975808) — real root cause
 

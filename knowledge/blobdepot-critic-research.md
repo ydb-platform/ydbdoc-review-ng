@@ -19,6 +19,7 @@ was never passed into `run_tool_critic_chunk`.
 | 1 | turns=32, budget label, critic strategy prompt | **RED** | Critic finished all files. Arbiter false positives: TOC `replacing_nodes`, EN selfheal path, RU typo «кана», `--group-ids` |
 | 2 | arbiter rules + TOC protection in arbiter context + presentation refs + TOC snapshot keyed by **source** path | **YELLOW** | Only no-op duplicate finding «replace `--snapshot-channel-sp` with `--snapshot-channel-sp`» |
 | 3 (parse filter) | drop self-replace / duplicate arbiter findings → GREEN when empty | unit-covered | Makes round-2 payload **GREEN** without another paid call |
+| 4 | arbiter default-GREEN prompt; drop bad snippets / «не требуется»; drop source-only TOC demands | **GREEN** live | `artifacts/blobdepot_critic_live_r3.json`; 0 findings |
 
 ## What still differs from editorial ideal (even on YELLOW/GREEN)
 

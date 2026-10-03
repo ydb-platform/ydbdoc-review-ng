@@ -225,24 +225,19 @@ def test_arbiter_rejects_nonnull_snippet_for_missing_target() -> None:
 
 
 @pytest.mark.parametrize("content", [b"", b"items:\n  - name: Corrected\n"])
-def test_arbiter_checks_current_final_bytes_and_does_not_treat_empty_as_missing(
+def test_arbiter_drops_uncitable_findings_instead_of_forcing_red(
     content: bytes,
 ) -> None:
     result = quality.parse_pr_arbiter_response(
         json.dumps({"verdict": "RED", "findings": [FINDING]}),
         target_files={"docs/en/toc.yaml": content},
     )
-    assert result.verdict is quality.Verdict.RED
-    assert result.findings[0].target_line is None
-    assert result.findings[0].searchable_snippet is None
-    assert result.findings[0].reason == (
-        "Арбитр не привязал замечание к единственному фрагменту итогового файла."
-    )
-    assert result.findings[0].expected_correction == "Повторите проверку файла."
+    assert result.verdict is quality.Verdict.GREEN
+    assert result.findings == ()
 
 
 @pytest.mark.parametrize("snippet", ["", None])
-def test_arbiter_turns_missing_existing_target_snippet_into_unreviewed_red(
+def test_arbiter_drops_missing_existing_target_snippet_to_green(
     snippet: str | None,
 ) -> None:
     finding = {**FINDING, "searchable_snippet": snippet}
@@ -251,10 +246,8 @@ def test_arbiter_turns_missing_existing_target_snippet_into_unreviewed_red(
         target_files=FINAL_FILES,
     )
 
-    assert result.verdict is quality.Verdict.RED
-    assert result.findings[0].target_path == "docs/en/toc.yaml"
-    assert result.findings[0].target_line is None
-    assert result.findings[0].searchable_snippet is None
+    assert result.verdict is quality.Verdict.GREEN
+    assert result.findings == ()
 
 
 def test_arbiter_checks_unicode_snippet_on_crlf_line_without_normalization() -> None:
@@ -267,7 +260,7 @@ def test_arbiter_checks_unicode_snippet_on_crlf_line_without_normalization() -> 
     assert result.findings[0].target_line == 2
 
 
-def test_arbiter_keeps_valid_sibling_when_another_snippet_is_ambiguous() -> None:
+def test_arbiter_keeps_valid_sibling_and_drops_ambiguous_snippet() -> None:
     valid = {
         **FINDING,
         "target_path": "docs/en/article.md",
@@ -282,13 +275,25 @@ def test_arbiter_keeps_valid_sibling_when_another_snippet_is_ambiguous() -> None
         },
     )
 
-    assert result.verdict is quality.Verdict.RED
+    assert result.verdict is quality.Verdict.YELLOW
+    assert len(result.findings) == 1
     assert result.findings[0].target_path == "docs/en/article.md"
     assert result.findings[0].target_line == 3
     assert result.findings[0].searchable_snippet == "complete corrected text"
-    assert result.findings[1].target_path == "docs/en/toc.yaml"
-    assert result.findings[1].target_line is None
-    assert result.findings[1].searchable_snippet is None
+
+
+def test_arbiter_drops_ne_trebuetsya_noise_to_green() -> None:
+    finding = {
+        **FINDING,
+        "reason": "В переводе формулировка отличается, но это допустимо.",
+        "expected_correction": "Не требуется, так как это не ошибка.",
+    }
+    result = quality.parse_pr_arbiter_response(
+        json.dumps({"verdict": "RED", "findings": [finding]}),
+        target_files=FINAL_FILES,
+    )
+    assert result.verdict is quality.Verdict.GREEN
+    assert result.findings == ()
 
 
 @pytest.mark.parametrize(

@@ -266,17 +266,20 @@ def parse_pr_arbiter_response(
     if type(raw_verdict) is not str or raw_verdict not in {"GREEN", "YELLOW", "RED"}:
         raise CriticResponseError(CriticResponseErrorReason.INVALID_VERDICT)
     raw_findings = document["findings"]
-    findings, has_unresolved_location = _parse_findings(raw_findings, target_texts)
+    findings, _dropped_bad_locations = _parse_findings(raw_findings, target_texts)
     if (raw_verdict == "GREEN") != (type(raw_findings) is list and not raw_findings):
         raise CriticResponseError(CriticResponseErrorReason.INCONSISTENT_RESULT)
     findings = _drop_noop_arbiter_findings(findings)
-    if has_unresolved_location:
-        verdict = Verdict.RED
-    elif not findings:
-        # Model may emit YELLOW/RED with only no-op or duplicate noise.
+    if not findings:
+        # Bad snippets / no-op / “не требуется” noise must not force RED.
+        # Empty actionable set → GREEN even if the model said YELLOW/RED.
         verdict = Verdict.GREEN
     else:
         verdict = Verdict(raw_verdict)
+        if verdict is Verdict.GREEN:
+            # Model claimed GREEN but left findings after filter — inconsistent
+            # raw was already checked; remaining findings keep worst usable gate.
+            verdict = Verdict.YELLOW
     return CriticResult(verdict, findings)
 
 
@@ -284,20 +287,37 @@ _NOOP_REPLACE = re.compile(
     r"(?:Заменить|Replace)\s+`([^`]+)`\s+(?:на|with|to)\s+`([^`]+)`",
     re.IGNORECASE,
 )
+_NO_ACTION = re.compile(
+    r"(не\s+требуется|ошибк[иа]\s+нет|это\s+не\s+ошибка|уже\s+корректно|"
+    r"перевод\s+верен|no\s+change\s+required|not\s+an\s+error|"
+    r"already\s+correct|no\s+action\s+needed)",
+    re.IGNORECASE,
+)
+_UNRESOLVED_LOCATION_REASON = (
+    "Арбитр не привязал замечание к единственному фрагменту итогового файла."
+)
 
 
 def _drop_noop_arbiter_findings(findings: tuple[Finding, ...]) -> tuple[Finding, ...]:
-    """Drop duplicate / self-replacing arbiter noise that is not a real defect."""
+    """Drop duplicate / non-actionable / self-replacing arbiter noise."""
 
     kept: list[Finding] = []
     seen: set[tuple[str | None, str | None, str]] = set()
     for item in findings:
+        if item.reason == _UNRESOLVED_LOCATION_REASON:
+            continue
+        if _NO_ACTION.search(item.expected_correction) or _NO_ACTION.search(item.reason):
+            continue
         key = (item.target_path, item.searchable_snippet, item.reason)
         if key in seen:
             continue
         seen.add(key)
         match = _NOOP_REPLACE.search(item.expected_correction)
         if match is not None and match.group(1) == match.group(2):
+            continue
+        # “replace A with A” without backticks, or “channel 0” → “channel 0”.
+        quoted = re.findall(r"[«\"']([^«\"']+)[»\"']", item.expected_correction)
+        if len(quoted) >= 2 and quoted[0].strip() == quoted[-1].strip():
             continue
         kept.append(item)
     return tuple(kept)
@@ -352,14 +372,13 @@ def _parse_findings(
                 raise CriticResponseError(CriticResponseErrorReason.INVALID_FINDING)
             target_line = None
         elif type(snippet) is not str or not snippet:
+            # Invalid citation: drop (do not convert into a product RED).
             has_unresolved_location = True
-            findings.append(_unresolved_arbiter_location(finding_path))
             continue
         else:
             first = target_text.find(snippet)
             if first < 0 or target_text.find(snippet, first + 1) >= 0:
                 has_unresolved_location = True
-                findings.append(_unresolved_arbiter_location(finding_path))
                 continue
             target_line = target_text.count("\n", 0, first) + 1
         findings.append(
@@ -375,10 +394,11 @@ def _parse_findings(
     return tuple(findings), has_unresolved_location
 
 
+# Kept for import stability / older call sites; bad citations are dropped now.
 def _unresolved_arbiter_location(target_path: str) -> Finding:
     return Finding(
         False,
-        "Арбитр не привязал замечание к единственному фрагменту итогового файла.",
+        _UNRESOLVED_LOCATION_REASON,
         "Повторите проверку файла.",
         None,
         target_path,

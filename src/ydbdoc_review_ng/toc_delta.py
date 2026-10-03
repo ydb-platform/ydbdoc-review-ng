@@ -102,31 +102,38 @@ def _include_path(entry: Mapping[str, Any]) -> str | None:
     return None
 
 
+def _toc_navigation_references(content: bytes) -> frozenset[str]:
+    found: set[str] = set()
+
+    def visit(entry: Mapping[str, Any]) -> None:
+        href = entry.get("href")
+        if type(href) is str and href.strip():
+            found.add(f"href:{href}")
+        include = _include_path(entry)
+        if include is not None:
+            found.add(f"include:{include}")
+        children = entry.get("items")
+        if children is None:
+            return
+        if type(children) is not list:
+            raise TocDeltaError()
+        for child in children:
+            visit(_mapping(child))
+
+    visit(_load_root(content))
+    return frozenset(found)
+
+
 def target_only_toc_references(source_after: bytes, target: bytes) -> frozenset[str]:
     """Return target navigation identities absent from the current source TOC."""
 
-    def references(content: bytes) -> frozenset[str]:
-        found: set[str] = set()
+    return _toc_navigation_references(target) - _toc_navigation_references(source_after)
 
-        def visit(entry: Mapping[str, Any]) -> None:
-            href = entry.get("href")
-            if type(href) is str and href.strip():
-                found.add(f"href:{href}")
-            include = _include_path(entry)
-            if include is not None:
-                found.add(f"include:{include}")
-            children = entry.get("items")
-            if children is None:
-                return
-            if type(children) is not list:
-                raise TocDeltaError()
-            for child in children:
-                visit(_mapping(child))
 
-        visit(_load_root(content))
-        return frozenset(found)
+def source_only_toc_references(source_after: bytes, target: bytes) -> frozenset[str]:
+    """Return source navigation identities absent from the current target TOC."""
 
-    return references(target) - references(source_after)
+    return _toc_navigation_references(source_after) - _toc_navigation_references(target)
 
 
 def validate_target_only_toc_references(
