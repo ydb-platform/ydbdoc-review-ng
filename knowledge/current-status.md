@@ -59,15 +59,16 @@ apply fixes. Tool-using critic is the agreed remedy (not arbiter↔repair loops)
 ## BlobDepot translation lineage (2026-10-03 P2)
 
 - Source: [#50839](https://github.com/ydb-platform/ydb/pull/50839) (merged)
-- Stale open translation [#54888](https://github.com/ydb-platform/ydb/pull/54888)
-  (`translation/pr-50839`) closed/deleted for clean re-run after P2 PASS.
-- Consumer trigger: label `doc_translate` on #50839 → workflow
-  `ydbdoc-review (doc_translate label)` uses action `@v1.0.1`.
+- Stale [#54888](https://github.com/ydb-platform/ydb/pull/54888) closed; branch
+  `translation/pr-50839` deleted.
+- New open translation: [#54924](https://github.com/ydb-platform/ydb/pull/54924)
+- Workflow: [37100488317](https://github.com/ydb-platform/ydb/actions/runs/37100488317)
+  (`doc_translate` label on #50839, action `@v1.0.1` = tip `164f3e6`)
 
 ## Live clean re-run history
 
 - 2026-10-02: tip then produced #54877 → … → **#54888** (one-shot critic era).
-- 2026-10-03: P2 tool-critic live PASS; clean re-run from #50839 after closing #54888.
+- 2026-10-03: P2 tool-critic live PASS; clean re-run → **#54924** (workflow in progress).
 
 ## YC / live model env (names found vs missing)
 
