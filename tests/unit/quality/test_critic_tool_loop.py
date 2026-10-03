@@ -159,6 +159,32 @@ def test_parallel_read_grep_ok_when_pending_empty() -> None:
     assert "beta" in results[1].content
 
 
+def test_recoverable_tool_error_is_returned_not_session_abort() -> None:
+    """Live DeepSeek often overshoots end_line; soft error must not RED the chunk."""
+    loop = CriticToolLoop(_workspace(b"only\n"), max_tool_turns=12)
+    bad = loop.handle_turn(
+        [_call("read", {"path": "docs/en/article.md", "start_line": 1, "end_line": 40})]
+    )
+    payload = json.loads(bad[0].content)
+    assert payload["ok"] is False
+    assert payload["error"] == "invalid_args"
+    assert "EOF" in payload["detail"]
+    # Session stays open; a valid follow-up still works.
+    ok = loop.handle_turn(
+        [
+            _call(
+                "read",
+                {"path": "docs/en/article.md", "start_line": 1, "end_line": 1},
+                call_id="c2",
+            )
+        ]
+    )
+    assert "1|only" in ok[0].content
+    finish = loop.handle_turn([_call("finish", {}, call_id="c3")])
+    assert finish[-1].name == "finish"
+    assert loop.finished
+
+
 def test_finish_with_pending_reread_is_protocol_error() -> None:
     loop = CriticToolLoop(_workspace(), max_tool_turns=12)
     loop.handle_turn(

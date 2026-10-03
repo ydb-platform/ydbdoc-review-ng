@@ -272,6 +272,12 @@ Runtime, не prompt, enforced:
 Нарушение protocol → один retry сессии → иначе unreviewed RED (кроме
 TOC-исключения §3.6 после двух ошибок защиты target-only записей).
 
+Ошибки выполнения tools (`ToolError`: bounds/`end past EOF`, bad hunk,
+read-only/unknown path, oversized patch) **не** protocol abort: runtime
+возвращает JSON `{"ok": false, "error", "detail"}` в `role=tool`, сессия
+продолжается в пределах turn budget. Только FSM-нарушения (§ выше) и
+исчерпание бюджета → retry/RED.
+
 #### Финальные bytes
 
 Reviewed bytes чанка = workspace writable paths после runtime-applied

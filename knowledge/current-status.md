@@ -24,17 +24,17 @@ Semantic flow в `REQUIREMENTS_RU.md`:
 | P2 BlobDepot golden harness (one-shot critic era) | **DONE** (prior) |
 | REQUIREMENTS §4.1 tool-using critic | **DONE (docs)** + adversarial fixups |
 | Plan `knowledge/tool-using-critic-plan.md` | **DONE (docs)** + adversarial fixups |
-| Runtime tool loop / client `tool_calls` | **DONE (offline)** P1a–g; P2 live next |
+| Runtime tool loop / client `tool_calls` | **DONE** P1a–g offline + P2 live smoke |
 | P0 live DeepSeek tools capability probe | **PASS / GO** — `knowledge/p0-deepseek-tools-probe.md` |
 | Offline stub-tool integration tests | **PASS** (`pytest -m 'not live'`, 2026-10-03) |
+| P2 live tool-critic smoke (`--wait wait`) | **PASS** (2026-10-03) — `tests/live/test_tool_critic_live.py` |
 
-> [!important] P0+P1 offline green; P2 live still required for #54888
-> Live probe (2026-10-03): DeepSeek `deepseek-v4-flash` on
-> `ai.api.cloud.yandex.net` returns `finish_reason=tool_calls` with
-> `content=null` and accepts `role=tool` multi-turn. Shell used
-> `YANDEX_CLOUD_*_DOC_REVIEW` (production `YANDEX_*` absent locally).
-> Tip now uses tool-using critic offline. #54888 re-run only after P2
-> + Actions `YANDEX_*`.
+> [!success] P2 live PASS; BlobDepot clean re-run in progress
+> Live smoke (2026-10-03): production-shaped `YANDEX_*` mapped from shell
+> `YANDEX_CLOUD_*_DOC_REVIEW`; real DeepSeek tool loop patched tiny
+> `--wait wait` fixture (~17s). Soft `ToolError` (e.g. `end past EOF`) now
+> returns to the model instead of aborting the session. Tag `v1.0.1` moved
+> with the fix; consumer `ydbdoc-review.yml` pins `@v1.0.1`.
 
 ## Critic TRANSPORT (runs 37009373894 → 37027975808) — real root cause
 
@@ -56,18 +56,18 @@ structure/links/images largely OK; residual prose/literals (`--wait wait`,
 awkward phrasing, inconsistent inline-code). Whole-file critic did not reliably
 apply fixes. Tool-using critic is the agreed remedy (not arbiter↔repair loops).
 
-## Latest open BlobDepot translation PR (confirmed 2026-10-03)
+## BlobDepot translation lineage (2026-10-03 P2)
 
-- Source: [#50839](https://github.com/ydb-platform/ydb/pull/50839)
-- Open translation: [#54888](https://github.com/ydb-platform/ydb/pull/54888)
-  (`translation/pr-50839`)
-- Closed predecessors include #54886, #54877, #54868, …
+- Source: [#50839](https://github.com/ydb-platform/ydb/pull/50839) (merged)
+- Stale open translation [#54888](https://github.com/ydb-platform/ydb/pull/54888)
+  (`translation/pr-50839`) closed/deleted for clean re-run after P2 PASS.
+- Consumer trigger: label `doc_translate` on #50839 → workflow
+  `ydbdoc-review (doc_translate label)` uses action `@v1.0.1`.
 
-## Live clean re-run (2026-10-02, user «гони»)
+## Live clean re-run history
 
-- Tip then: `v1.0.1` = `a229b39` lineage; later tips `45712c3` / `28e2da1`.
-- Workflows produced #54877 → … → **#54888** (open).
-- Next live `doc_translate` only after tool-critic implementation + tag (P2).
+- 2026-10-02: tip then produced #54877 → … → **#54888** (one-shot critic era).
+- 2026-10-03: P2 tool-critic live PASS; clean re-run from #50839 after closing #54888.
 
 ## YC / live model env (names found vs missing)
 

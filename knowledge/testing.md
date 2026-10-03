@@ -20,6 +20,10 @@
 - Continue: operator context; pending раньше review; потом полный re-review.
 - BlobDepot golden (`tests/golden/test_blobdepot_golden.py`): atoms, presentation
   map, critic-unavailable → RED; без сети и без живой модели.
-- Optional live tool smoke: `YDBDOC_LIVE=1` + model creds; default deselected.
+- Optional live tool smoke: `YDBDOC_LIVE=1` + `YANDEX_API_KEY` +
+  `YANDEX_FOLDER_ID`; `tests/live/test_tool_critic_live.py` /
+  `scripts/probe_tool_critic_live.py` (`--wait wait`); default deselected.
+- Soft workspace `ToolError` (bad read bounds / bad patch) returns JSON tool
+  payload; FSM protocol violations still abort → retry → RED.
 
 `doc_model_probe` не production translate.

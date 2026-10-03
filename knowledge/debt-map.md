@@ -24,7 +24,7 @@
 | 14 | Live PR after redesign | critic fell on 180s timeout; quality hotfix next |
 | 15 | Critic HTTP timeout 180→600 + presentation/CLI/CamelCase | **done** (2026-10-02) |
 | 16 | Critic mega-request TRANSPORT @ ~270s (provider idle wall) | **done** (2026-10-02): 1 pair/chunk, relevant glossary, max_output_tokens cap |
-| 17 | Tool-using critic (workspace + patch + re-read); no arbiter repair loop | **offline done** (2026-10-03); P0 probe PASS; P1 cutover green; P2 live BlobDepot / #54888 pending — see `tool-using-critic-plan.md` |
+| 17 | Tool-using critic (workspace + patch + re-read); no arbiter repair loop | **P2 live PASS** (2026-10-03); soft ToolError recovery; BlobDepot clean re-run after #54888 — see `tool-using-critic-plan.md` |
 
 ## CI translation redesign (2026-10-02)
 
@@ -171,8 +171,8 @@ Adversary against public/main tip `56d6bff` found three production lifecycle hol
 - TOC scope hash ignores volatile `expected_sha256` wording; review-stage continue skips TOC string retranslate.
 - Offline contract surface **READY** for prior redesign including P2 BlobDepot
   golden; **tool-using critic is docs-only** until P0 probe + P1 code.
-- Live BlobDepot open PR: [#54888](https://github.com/ydb-platform/ydb/pull/54888)
-  (source #50839). Re-run only after tool-critic P2 tag.
+- Live BlobDepot: closed stale [#54888](https://github.com/ydb-platform/ydb/pull/54888)
+  after P2; re-run via `doc_translate` on source #50839 with `@v1.0.1`.
 - Continue tests that still expected per-file `complete_pair` exclusion or translation-PR
   continue after branch-delete/`target_sha=null` were updated to §1.1/§1.2/§5.1 contracts
   (stale expectations, not production bugs).

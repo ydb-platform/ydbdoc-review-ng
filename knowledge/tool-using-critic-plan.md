@@ -1,8 +1,10 @@
 # Plan: tool-using critic (reliable rollout)
 
-Status: **P1 OFFLINE GREEN** (2026-10-03). Provider tool_calls proven
-(`knowledge/p0-deepseek-tools-probe.md`); tool-using critic runtime cut over
-offline (`pytest -m 'not live'`). P2 live BlobDepot / #54888 still pending.
+Status: **P2 LIVE PASS** (2026-10-03). Provider tool_calls proven
+(`knowledge/p0-deepseek-tools-probe.md`); offline suite green; live
+`--wait wait` smoke green (`tests/live/test_tool_critic_live.py` +
+`scripts/probe_tool_critic_live.py`). Soft workspace `ToolError` returns to
+the model (no session abort). BlobDepot clean re-run after close of #54888.
 Independent adversarial review applied; contract holes below
 are frozen in `REQUIREMENTS_RU.md` §0 / §3.6 / §4.1 before any code.
 
@@ -301,6 +303,6 @@ checklist + Actions secrets still valid for `doc_translate` (same `YANDEX_*`).
 ## Ready for independent review?
 
 **Plan/contract review: addressed.** P0 DeepSeek tool probe recorded **GO**.
-P1 offline implementation green (workspace, tool-loop FSM, OpenAI tool_calls,
-critic cutover, stub/integration suite). Not ready for live BlobDepot acceptance until
-P2 delivery checklist completes.
+P1 offline + P2 live smoke green. Soft tool-error recovery landed from live
+failure (`end past EOF`). BlobDepot delivery checklist: tag + close #54888 +
+label `doc_translate` on #50839.

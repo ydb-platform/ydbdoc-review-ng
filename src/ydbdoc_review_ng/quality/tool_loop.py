@@ -143,6 +143,23 @@ def _ranges_covered(pending: list[LineRange], reads: list[LineRange]) -> list[Li
     return remaining
 
 
+def _tool_error_result(call: ToolCall, error: ToolError) -> ToolResult:
+    """Return recoverable workspace failures to the model; do not abort the session.
+
+    FSM protocol violations stay as ProtocolError. ToolError from read/grep/patch
+    (bad bounds, bad hunk, RO mount, etc.) is a normal tool payload so the model
+    can correct itself within the turn budget.
+    """
+    return ToolResult(
+        call.id,
+        call.name,
+        json.dumps(
+            {"ok": False, "error": error.reason.value, "detail": error.detail},
+            ensure_ascii=False,
+        ),
+    )
+
+
 @dataclass
 class CriticToolLoop:
     workspace: CriticWorkspace
@@ -195,7 +212,7 @@ class CriticToolLoop:
             try:
                 content = self.workspace.read(path, start_line=start, end_line=end)
             except ToolError as error:
-                raise ProtocolError(LoopFailureReason.TOOL_ERROR, str(error)) from error
+                return _tool_error_result(call, error)
             read_windows.append(LineRange(start, end))
             return ToolResult(call.id, "read", content)
 
@@ -210,7 +227,7 @@ class CriticToolLoop:
             try:
                 hits = self.workspace.grep(pattern, path=path if type(path) is str else None)
             except ToolError as error:
-                raise ProtocolError(LoopFailureReason.TOOL_ERROR, str(error)) from error
+                return _tool_error_result(call, error)
             payload = [{"path": p, "line": n, "snippet": s} for p, n, s in hits]
             return ToolResult(call.id, "grep", json.dumps(payload, ensure_ascii=False))
 
@@ -227,7 +244,7 @@ class CriticToolLoop:
             try:
                 touched = self.workspace.apply_patch(path, patch)
             except ToolError as error:
-                raise ProtocolError(LoopFailureReason.TOOL_ERROR, str(error)) from error
+                return _tool_error_result(call, error)
             self._pending.extend(touched)
             self.had_successful_patch = True
             return ToolResult(
