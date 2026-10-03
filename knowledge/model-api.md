@@ -30,5 +30,7 @@ secrets.
 ## Clients today vs tools
 
 `YandexOpenAIClient` / `NativeYandexClient` ещё **не** шлют `tools` и не
-парсят `tool_calls` (`clients.py`). P0 плана: live probe DeepSeek tool-calling
-на `OPENAI_ENDPOINT` до реализации loop.
+парсят `tool_calls` (`clients.py`). P0 live probe **PASS**: DeepSeek returns
+`finish_reason=tool_calls` with `content=null` and accepts `role=tool`
+round-trip (`knowledge/p0-deepseek-tools-probe.md`). P1c must not map that
+shape to `NON_FINAL` / `EMPTY_TEXT`.

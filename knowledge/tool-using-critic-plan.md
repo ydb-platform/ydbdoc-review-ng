@@ -1,7 +1,8 @@
 # Plan: tool-using critic (reliable rollout)
 
-Status: **plan + requirements only** (2026-10-03). Runtime tool loop **not**
-implemented yet. Independent adversarial review applied; contract holes below
+Status: **P0 PASS** (2026-10-03). Provider tool_calls proven; see
+`knowledge/p0-deepseek-tools-probe.md`. Runtime tool loop **not** implemented
+yet (P1 next). Independent adversarial review applied; contract holes below
 are frozen in `REQUIREMENTS_RU.md` §0 / §3.6 / §4.1 before any code.
 
 Canon: `REQUIREMENTS_RU.md` §4.1 (tool workspace + patches + enforceable FSM).
@@ -67,6 +68,11 @@ shape). If unsupported, stop and renegotiate (native tools? different model?
 stay on JSON files with smaller patches-only schema). Do not invent a fake
 tool protocol that the provider will not execute.
 
+**P0 result (2026-10-03): PASS / GO.** Live probe
+`scripts/probe_deepseek_tools.py`: `finish_reason=tool_calls`, `content=null`,
+`tool_calls[]` present; `role=tool` round-trip → `finish_reason=stop`. Details:
+`knowledge/p0-deepseek-tools-probe.md`.
+
 ## Target architecture
 
 ```
@@ -116,6 +122,8 @@ draft bytes (soft-publish)
 4. Explicit go/no-go on provider tool support before P1c client work.
 
 Exit: written probe result + go/no-go.
+
+**Exit recorded:** PASS / GO in `knowledge/p0-deepseek-tools-probe.md`.
 
 ### P1 — TDD offline implementation (main)
 
@@ -291,6 +299,6 @@ checklist + Actions secrets still valid for `doc_translate` (same `YANDEX_*`).
 
 ## Ready for independent review?
 
-**Plan/contract review: addressed in this revision.** Not ready for
-implementation until P0 DeepSeek tool probe is recorded **go**. Not ready for
-live BlobDepot acceptance until P2 delivery checklist completes.
+**Plan/contract review: addressed.** P0 DeepSeek tool probe recorded **GO**.
+P1 implementation unblocked. Not ready for live BlobDepot acceptance until
+P2 delivery checklist completes.
