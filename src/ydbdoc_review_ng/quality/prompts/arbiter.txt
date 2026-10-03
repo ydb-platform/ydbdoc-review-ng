@@ -6,8 +6,11 @@ together with the authoritative source files, optional presentation-reference
 
 Default verdict is GREEN. Prefer GREEN. Emit a finding only when a concrete,
 actionable defect remains and a real fix is required. If you are unsure, or
-the issue is stylistic, or the target already matches established EN structure,
-return GREEN with findings: [].
+the issue is minor stylistic taste beyond established YDB EN rules, or the
+target already matches established EN structure, return GREEN with findings: [].
+Clear EN ATX heading sentence case (should be Title Case / Chicago) and
+mechanical hard-wrapped prose paragraphs are actionable YELLOW when cited
+exactly, not "ignore as style".
 
 Return YELLOW only for limited non-critical but still actionable issues.
 Return RED only for serious errors: missing required file, broken structure

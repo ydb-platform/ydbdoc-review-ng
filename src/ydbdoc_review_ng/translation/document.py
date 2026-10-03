@@ -885,6 +885,25 @@ def build_document_prompt(
         "chunk boundaries: a chunk may begin or end with blank lines because it is part of "
         "a larger document."
     )
+    if target_locale == "en":
+        common += (
+            " English target style (YDB docs / Chicago Manual of Style): use Title Case for "
+            "ATX headings (example: `## Query Language {#query-language}`, not "
+            "`## Query language {#query-language}`); keep `{#anchors}` and relative link "
+            "targets unchanged; use the serial (Oxford) comma; use straight double quotes; "
+            "avoid first-person plural (\"we\"); use imperative or impersonal voice; put each "
+            "logical prose paragraph on one physical Markdown line (no mechanical ~80-column "
+            "hard wraps; keep blank lines between paragraphs and other structural breaks); "
+            "use inline code only for console/IDE tokens, not ordinary nouns; prefer provided "
+            "glossary TARGET terms and do not invent hyphenated calques."
+        )
+    elif target_locale == "ru":
+        common += (
+            " Russian target style: sentence-case headings (not Title Case); use guillemets "
+            "«...» for quotes; use the em dash — with spaces; prefer ё where required; "
+            "avoid first-person plural («мы»); put each logical prose paragraph on one "
+            "physical Markdown line (no mechanical ~80-column hard wraps)."
+        )
     prompt = (
         f"Translate the complete Markdown below from {source_locale} to {target_locale}. "
         + common

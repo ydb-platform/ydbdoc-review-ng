@@ -45,6 +45,14 @@ def test_complete_markdown_prompt_uses_selected_direction(
     assert "link/image label" in prompt
     assert "supported code comment" in prompt
     assert "translatable frontmatter value" in prompt
+    assert "one physical Markdown line" in prompt
+    if target_locale == "en":
+        assert "Title Case" in prompt
+        assert "Chicago Manual of Style" in prompt
+        assert "serial (Oxford) comma" in prompt
+    else:
+        assert "sentence-case headings" in prompt
+        assert "guillemets" in prompt
 
 
 def test_translation_prompt_uses_authoritative_source_only() -> None:

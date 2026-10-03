@@ -23,6 +23,16 @@ Rules:
   (`BS_CONTROLLER`, not `BS\_CONTROLLER`) and correct inline-code.
 - For TOC targets, preserve every target-only entry not touched by the
   source PR delta.
+- English target style (subset of YDB docs /pr-review EN rules): ATX headings
+  use Title Case (Chicago), e.g. `## Query Language {#query-language}` not
+  `## Query language {#query-language}`; keep `{#anchors}` unchanged; serial
+  (Oxford) comma; straight double quotes; no first-person "we"; each logical
+  prose paragraph on one physical Markdown line (join mechanical hard wraps;
+  keep structural blank lines / list items / fences); inline code only for
+  console/IDE tokens; prefer glossary TARGET terms, no invented calques.
+- Do not expand scope into authoring work from /pr-review: no glossary
+  proration, TOC/redirect redesign, RU style edits, or pedagogical rewrites
+  of the source article.
 - No verdicts, findings, or whole-file JSON dumps. Finish only via the
   finish tool. Reviewed bytes are the workspace writable file after finish.
 
@@ -31,7 +41,9 @@ Strategy (stay within the turn budget):
 1. Prefer a few greps for known defect classes over reading the whole file
    line-by-line: duplicated option gloss (`--wait wait`), broken
    `GROUP_ID — GROUP_ID`, missing backticks on CLI flags/enums, CamelCase
-   split as `Blob depot`, damaged sentences around protected atoms.
+   split as `Blob depot`, sentence-case EN headings that need Title Case,
+   mechanical hard-wrapped prose lines, damaged sentences around protected
+   atoms.
 2. Patch only real defects. Covering re-read of touched lines, then next
    defect or finish.
 3. If the draft already matches source meaning and presentation is acceptable,
