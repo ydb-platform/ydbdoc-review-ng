@@ -326,6 +326,51 @@ def _find_target_entry(
     return best[0], best[1]
 
 
+def _neighbor_insert_index(
+    working: list[dict[str, Any] | None],
+    after_items: list[Any],
+    position: int,
+    reverse_rename: Mapping[str, str],
+) -> int:
+    """Index after the nearest earlier source neighbor that already exists in working."""
+    insert_at = len(working)
+    for prior in range(position - 1, -1, -1):
+        prior_key = _identity(_mapping(after_items[prior]))
+        prior_before = reverse_rename.get(prior_key, prior_key)
+        for index, entry in enumerate(working):
+            if entry is None:
+                continue
+            identity = _identity(entry)
+            if identity == prior_key or identity == prior_before:
+                return index + 1
+    return insert_at
+
+
+def _remap_index_after_move(index: int, from_index: int, to_index: int) -> int:
+    if index == from_index:
+        return to_index
+    shifted = index - 1 if index > from_index else index
+    return shifted + 1 if shifted >= to_index else shifted
+
+
+def _move_working_entry(
+    working: list[dict[str, Any] | None],
+    consumed: set[int],
+    match_index: int,
+    insert_at: int,
+) -> tuple[int, set[int]]:
+    """Move one working slot and remap consumed indexes."""
+    if insert_at == match_index or insert_at == match_index + 1:
+        return match_index, consumed
+    entry = working.pop(match_index)
+    if insert_at > match_index:
+        insert_at -= 1
+    working.insert(insert_at, entry)
+    remapped = {_remap_index_after_move(index, match_index, insert_at) for index in consumed}
+    remapped.add(insert_at)
+    return insert_at, remapped
+
+
 def _apply_items(
     before_items: list[Any],
     after_items: list[Any],
@@ -476,21 +521,9 @@ def _apply_items(
                     translations=translations,
                     strings=strings,
                 )
-            # Insert relative to previous after-neighbor that exists in working.
-            insert_at = len(working)
-            for prior in range(position - 1, -1, -1):
-                prior_key = _identity(_mapping(after_items[prior]))
-                prior_before = reverse_rename.get(prior_key, prior_key)
-                for index, entry in enumerate(working):
-                    if entry is None:
-                        continue
-                    identity = _target_identity(entry)
-                    if identity == prior_key or identity == prior_before:
-                        insert_at = index + 1
-                        break
-                else:
-                    continue
-                break
+            insert_at = _neighbor_insert_index(
+                working, after_items, position, reverse_rename
+            )
             working.insert(insert_at, node)
             consumed_target_indexes.add(insert_at)
             # Shift consumed indexes after insertion point.
@@ -500,6 +533,14 @@ def _apply_items(
             }
             consumed_target_indexes.add(insert_at)
             continue
+
+        if before_entry is None:
+            insert_at = _neighbor_insert_index(
+                working, after_items, position, reverse_rename
+            )
+            match_index, consumed_target_indexes = _move_working_entry(
+                working, consumed_target_indexes, match_index, insert_at
+            )
 
         consumed_target_indexes.add(match_index)
         target_entry = working[match_index]

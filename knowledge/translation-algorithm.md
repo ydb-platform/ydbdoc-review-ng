@@ -23,7 +23,9 @@ Unique string replacements без модели, если возможно. Ин�
 
 Python: source TOC before/after → дельта → apply к target TOC. DeepSeek:
 только новые/изменённые видимые строки. Нет target TOC → только entries этого
-PR. Покрыть тестами.
+PR. Если новая source-запись уже сидит в target (обычно хвост после
+metadata-append), delta переставляет её к предыдущему after-соседу, а не
+оставляет in-place. Покрыть тестами.
 
 ## Quality / arbiter
 

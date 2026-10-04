@@ -25,8 +25,18 @@ Semantic flow в `REQUIREMENTS_RU.md`:
 - Local PoC: same scope via thin DeepSeek → 8/8 OK, 0 Cyrillic, 0 mangling
   (`SINTJURI_SECRET_KEY` + `YANDEX_CLOUD_FOLDER`).
 
+## TOC insert order (2026-10-04)
+
+`apply_toc_delta` repositions a source-new identity that is already in the
+target (metadata `_append_toc` parks it at the YAML `items` tail). Example:
+[#55007](https://github.com/ydb-platform/ydb/pull/55007) `toc_i.yaml` Logging
+must sit after Ya Make, not after Changelog.
+
+`doc_verify` on an already-GREEN PR does not rewrite TOC; restart
+`doc_translate` on the source PR after moving `v1.0.1`.
+
 ## Tip pin
 
 Workflow `ydbdoc-review.yml` uses
 `ydb-platform/ydbdoc-review-ng/.github/actions/doc-review@v1.0.1`.
-Move `v1.0.1` with thin-pipeline tip after push.
+Move `v1.0.1` with the current tip after push.

@@ -1248,6 +1248,8 @@ class RuntimeContent:
                 # REQUIREMENTS §3: apply source structural delta to the full current
                 # target TOC. Prefer in-flight metadata drafts over the Git base so
                 # dependency navigation inserts are not discarded (§1.3 / #5).
+                # Source-new hrefs that metadata already appended at the tail are
+                # moved to the source neighbor, not updated in place.
                 current = (
                     files[target_path.value]
                     if target_path.value in files

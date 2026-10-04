@@ -25,6 +25,39 @@ def _items(content: bytes | None) -> list[object]:
     return items
 
 
+def test_section3_repositions_source_add_already_appended_at_target_tail() -> None:
+    """Metadata append parks a new href at the end; source delta must restore order."""
+    before = (
+        b"items:\n"
+        b"- name: Ya\n  href: build-ya.md\n"
+        b"- name: Releases\n  href: manage-releases.md\n"
+    )
+    after = (
+        b"items:\n"
+        b"- name: Ya\n  href: build-ya.md\n"
+        b"- name: Logging\n  href: logging.md\n"
+        b"- name: Releases\n  href: manage-releases.md\n"
+    )
+    target = (
+        b"items:\n"
+        b"- name: Ya Make build system\n  href: build-ya.md\n"
+        b"- name: Releases\n  href: manage-releases.md\n"
+        b"- name: Logging\n  href: logging.md\n"
+    )
+    result = apply_toc_delta(
+        before,
+        after,
+        target,
+        toc_path=TOC,
+        translations={"items/1/name": "Logging"},
+    )
+    assert _items(result.content) == [
+        {"name": "Ya Make build system", "href": "build-ya.md"},
+        {"name": "Logging", "href": "logging.md"},
+        {"name": "Releases", "href": "manage-releases.md"},
+    ]
+
+
 def test_section3_append_of_simple_markdown_entries_is_supported() -> None:
     before = b"items:\n- name: Existing\n  href: existing.md\n"
     after = before + b"- name: Page\n  href: page.md\n"
