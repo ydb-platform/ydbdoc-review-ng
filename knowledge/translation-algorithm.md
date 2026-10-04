@@ -11,16 +11,13 @@
 6. Лимиты: `YDBDOC_MAX_DEPENDENCY_FILES_PER_ARTICLE` (группа статьи),
    `YDBDOC_MAX_SOURCE_CHARACTERS` (один файл).
 
-## Prep + Translator
+## Thin translator
 
-Placeholders + identifier atoms (не рвать `BS\_CONTROLLER` на ESCAPE).
-Если есть old target и source before/after PR (merged: parent/merge, не
-текущий `main`): surgical update (уникальные URL/строки без модели, иначе
-модель только на hunks, Markdown с placeholders). Иначе целый файл одним
-Markdown request. Hunk: old target = semantic baseline. Whole-file fallback:
-presentation reference. Restore placeholders из source. Без глобального
-presentation map на unique dest. Собранный UTF-8 → **draft** soft-publish
-(diagnostics ≠ product).
+Unique string replacements без модели, если возможно. Иначе **thin whole-file**:
+полный source Markdown → DeepSeek → полный target Markdown. Placeholders нет.
+После ответа: normalize split-backtick, затем publication gates
+(`source_locale_echo`, `split_backtick_identifiers`, `missing_include_target`).
+Один retry; провал → файл null, не soft-publish полу-EN.
 
 ## TOC
 
@@ -28,10 +25,8 @@ Python: source TOC before/after → дельта → apply к target TOC. DeepSe
 только новые/изменённые видимые строки. Нет target TOC → только entries этого
 PR. Покрыть тестами.
 
-## Critic / arbiter
+## Quality / arbiter
 
-Critic: tool-using DeepSeek всегда, включая unique dest. Задание — source
-delta + previous EN, не весь файл. Патч вне touched lines отклоняется.
-Fail/503/protocol/unreviewed → RED; arbiter на сырой dump не вызывается.
-Arbiter: тот же scope; Python drop out-of-delta findings → GREEN если дельта
-верна. YELLOW не открывает checkpoint.
+Tool-using critic снят. Reviewed = gated publish. Arbiter: scope = PR delta +
+previous EN; Python drop out-of-delta findings. YELLOW не открывает checkpoint.
+RED на дырах / unreviewed / arbiter findings.

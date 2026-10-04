@@ -136,11 +136,17 @@ from ydbdoc_review_ng.translation.document import (
     verify_document_candidate_with_links,
 )
 from ydbdoc_review_ng.translation.language import validate_translated_prose
+from ydbdoc_review_ng.translation.gates import check_publication_gates
 from ydbdoc_review_ng.translation.split_backtick import (
     count_split_backtick_identifiers,
     normalize_split_backtick_identifiers,
 )
 from ydbdoc_review_ng.translation.surgical import SurgicalMode, plan_surgical_update
+from ydbdoc_review_ng.translation.thin import (
+    build_thin_translate_prompt,
+    thin_developer_prompt,
+    unwrap_thin_response,
+)
 from ydbdoc_review_ng.translation_plan import (
     PathKind,
     PlanAction,
@@ -2069,29 +2075,6 @@ class RuntimeContent:
                         patched = patched[: span[0]] + restored + patched[span[1] :]
                     surgical_candidate = patched
 
-        response: str | None = None
-        if surgical_candidate is None:
-            if not any(block.fields for block in document.plan.blocks):
-                response = chunk.text
-            else:
-                with traced(
-                    "translation",
-                    "chunk",
-                    article=entry.pair.target_path.value,
-                    chunk_index=1,
-                    chunks_total=1,
-                ):
-                    accepted_response, failure, invalid_response = invoke_chunk(
-                        chunk,
-                        1,
-                        presentation_bytes=target_reference_bytes,
-                    )
-                if accepted_response is None:
-                    if invalid_response and failure is None:
-                        raise InvalidTranslationResponse("translation_response_invalid")
-                    raise RuntimeBoundaryError("translation_model_failed")
-                response = accepted_response
-
         def assembly_failure(stage: str, error: Exception) -> None:
             write_trace(
                 "translation",
@@ -2104,63 +2087,119 @@ class RuntimeContent:
             )
             raise InvalidTranslationResponse("translation_response_invalid") from None
 
-        if surgical_candidate is not None:
-            candidate = surgical_candidate
-        else:
-            assert response is not None
-            try:
-                candidate = restore_document(
-                    document.source,
-                    document.plan,
-                    prepared,
-                    (response,),
-                    allow_structure_diagnostics=True,
+        def thin_translate_document() -> bytes:
+            """Whole-file Markdown in/out without placeholders (thin algorithm)."""
+            source_text = document.source.decode("utf-8")
+            existing = (
+                None
+                if target_reference_bytes is None
+                else target_reference_bytes.decode("utf-8")
+            )
+            note: str | None = None
+            previous: str | None = None
+            for attempt in (1, 2):
+                prompt = build_thin_translate_prompt(
+                    source_text,
+                    source_path=entry.pair.source_path.value,
+                    source_locale=entry.pair.source_locale.value,
+                    target_locale=entry.pair.target_locale.value,
+                    existing_target=existing,
                 )
-            except (DocumentTranslationError, ValueError, TypeError, UnicodeError) as error:
-                assembly_failure("restore_document", error)
-            except Exception as error:  # noqa: BLE001 - YAML/parser diagnostics must not block UTF-8.
+                if note is not None and previous is not None:
+                    prompt += (
+                        "\n\nPrevious response failed publication gates "
+                        f"({note}). Return a complete corrected Markdown file.\n"
+                        "Previous response:\n"
+                        f"{previous}"
+                    )
+                with traced(
+                    "translation",
+                    "chunk",
+                    article=entry.pair.target_path.value,
+                    chunk_index=attempt,
+                    chunks_total=2,
+                ):
+                    request = ModelRequest(
+                        ModelRole.TRANSLATE,
+                        self.model,
+                        prompt,
+                        None,
+                        target_path=entry.pair.target_path,
+                        developer_prompt=thin_developer_prompt(),
+                    )
+                    result = self.models.invoke(request)
+                if not result.success or result.text is None:
+                    if attempt == 2:
+                        raise RuntimeBoundaryError("translation_model_failed")
+                    note = "provider_failure"
+                    previous = ""
+                    continue
+                body = unwrap_thin_response(_normalize_provider_wrapping(result.text))
+                draft = normalize_split_backtick_identifiers(body.encode("utf-8"))
+                failures = check_publication_gates(
+                    draft,
+                    source_locale=entry.pair.source_locale.value,
+                    target_path=entry.pair.target_path.value,
+                )
+                if not failures:
+                    write_trace(
+                        "translation",
+                        "document_assembly",
+                        "ok",
+                        article=entry.pair.target_path.value,
+                        stage="thin_translate",
+                        code="publication_gates_ok",
+                        attempt=attempt,
+                    )
+                    return draft
+                note = ",".join(item.code for item in failures)
+                previous = body
                 write_trace(
                     "translation",
                     "document_assembly",
-                    "ok",
+                    "retry" if attempt == 1 else "fail",
                     article=entry.pair.target_path.value,
-                    stage="restore_document",
-                    code="structure_diagnostic",
-                    error_type=type(error).__name__,
+                    stage="thin_translate",
+                    code=note.split(",", 1)[0],
+                    attempt=attempt,
                 )
-                # Last-resort publish of assembled chunk text with placeholders restored.
-                by_token = {
-                    item.token: item.source_bytes for item in prepared.placeholders
-                }
-                rendered = response
-                for token, source_bytes in by_token.items():
-                    rendered = rendered.replace(token, source_bytes.decode("utf-8"))
-                candidate = rendered.encode("utf-8")
-        # Existing EN is already the presentation baseline for unique rewrites.
-        if surgical_mode is not SurgicalMode.UNIQUE_REPLACEMENTS:
-            presentation = build_presentation_map(
-                target_reference_bytes,
-                source_snapshot=document.plan.source_snapshot,
-                source_path=entry.pair.target_path,
-            )
-            candidate = apply_presentation_map(
+            raise InvalidTranslationResponse("translation_publication_gates_failed")
+
+        if surgical_candidate is not None:
+            candidate = surgical_candidate
+            if surgical_mode is not SurgicalMode.UNIQUE_REPLACEMENTS:
+                presentation = build_presentation_map(
+                    target_reference_bytes,
+                    source_snapshot=document.plan.source_snapshot,
+                    source_path=entry.pair.target_path,
+                )
+                candidate = apply_presentation_map(
+                    candidate,
+                    presentation,
+                    source_snapshot=document.plan.source_snapshot,
+                    source_path=entry.pair.target_path,
+                )
+            mangled = count_split_backtick_identifiers(candidate)
+            if mangled:
+                candidate = normalize_split_backtick_identifiers(candidate)
+            gate_failures = check_publication_gates(
                 candidate,
-                presentation,
-                source_snapshot=document.plan.source_snapshot,
-                source_path=entry.pair.target_path,
+                source_locale=entry.pair.source_locale.value,
+                target_path=entry.pair.target_path.value,
             )
-        mangled = count_split_backtick_identifiers(candidate)
-        if mangled:
-            write_trace(
-                "translation",
-                "document_assembly",
-                "ok",
-                article=entry.pair.target_path.value,
-                stage="normalize_split_backtick_identifiers",
-                code="split_backtick_repair",
-                entries_total=mangled,
-            )
-            candidate = normalize_split_backtick_identifiers(candidate)
+            if gate_failures:
+                write_trace(
+                    "translation",
+                    "document_assembly",
+                    "fail",
+                    article=entry.pair.target_path.value,
+                    stage="publication_gates",
+                    code=gate_failures[0].code,
+                )
+                raise InvalidTranslationResponse("translation_publication_gates_failed")
+        else:
+            # Thin whole-file path: no placeholders, no soft-publish of gate failures.
+            candidate = thin_translate_document()
         try:
             candidate_plan = build_markdown_plan(
                 document.plan.source_snapshot, entry.pair.target_path, candidate
@@ -2347,6 +2386,36 @@ class RuntimeContent:
         for path, accepted in documents.items():
             if path not in required_maps:
                 files[path.value] = accepted.translated_markdown.encode("utf-8")
+        # Group publication gate: relative includes must resolve among published files.
+        available = {path for path, value in files.items() if value is not None}
+        for path, value in list(files.items()):
+            if value is None:
+                continue
+            locale = "ru"
+            for document in plans.documents:
+                if document.entry.pair.target_path.value == path:
+                    locale = document.entry.pair.source_locale.value
+                    break
+            failures = check_publication_gates(
+                value,
+                source_locale=locale,
+                target_path=path,
+                available_paths=available,
+            )
+            include_failures = tuple(
+                item for item in failures if item.code == "missing_include_target"
+            )
+            if include_failures:
+                write_trace(
+                    "translation",
+                    "document_assembly",
+                    "fail",
+                    article=path,
+                    stage="publication_gates",
+                    code="missing_include_target",
+                )
+                files[path] = None
+                available.discard(path)
         self.documents = plans.documents
         self.entries = () if plans.manifest is None else plans.manifest.entries
         return WorkflowCandidate(pack(files), plans.documents)

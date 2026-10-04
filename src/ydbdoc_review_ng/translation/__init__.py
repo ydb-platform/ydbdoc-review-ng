@@ -37,9 +37,18 @@ from ydbdoc_review_ng.translation.presentation import (
     apply_presentation_map,
     build_presentation_map,
 )
+from ydbdoc_review_ng.translation.gates import (
+    PublicationGateFailure,
+    check_publication_gates,
+)
 from ydbdoc_review_ng.translation.split_backtick import (
     count_split_backtick_identifiers,
     normalize_split_backtick_identifiers,
+)
+from ydbdoc_review_ng.translation.thin import (
+    build_thin_translate_prompt,
+    thin_developer_prompt,
+    unwrap_thin_response,
 )
 from ydbdoc_review_ng.translation.surgical import (
     SurgicalHunk,
@@ -72,8 +81,11 @@ __all__ = [
     "build_document_correction_note",
     "build_document_critic_prompt",
     "build_document_prompt",
+    "PublicationGateFailure",
     "build_presentation_map",
+    "build_thin_translate_prompt",
     "build_translation_request",
+    "check_publication_gates",
     "count_split_backtick_identifiers",
     "document_operator_guidance",
     "document_placeholder_context",
@@ -82,6 +94,8 @@ __all__ = [
     "plan_surgical_update",
     "prepare_document",
     "restore_document",
+    "thin_developer_prompt",
+    "unwrap_thin_response",
     "validate_chunk_response",
     "validate_translation_values",
     "verify_document_candidate",

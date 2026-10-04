@@ -47,7 +47,7 @@ def test_semantic_modes_publish_without_build_or_ci(monkeypatch, mode, verdict, 
     finding = {
         "reason": "Residual meaning issue.",
         "expected_correction": "Restore the intended meaning.",
-        "searchable_snippet": "Corrected",
+        "searchable_snippet": "Translated",
         "target_path": "ydb/docs/en/core/page.md",
     }
 
@@ -68,9 +68,10 @@ def test_semantic_modes_publish_without_build_or_ci(monkeypatch, mode, verdict, 
     if mode != "translate":
         services.branch_head = services.translated
         services.pr_exists = True
+        # Verify/continue load existing EN; seed it as thin-translator output.
+        services.files["ydb/docs/en/core/page.md"] = b"# Translated\n"
     if mode == "continue":
         services.semantic_responses = [
-            {"files": {"ydb/docs/en/core/page.md": "# Corrected\n"}},
             {"verdict": "RED", "findings": [finding]},
         ]
         seed = runtime().doc_verify(
@@ -79,7 +80,6 @@ def test_semantic_modes_publish_without_build_or_ci(monkeypatch, mode, verdict, 
         assert seed.verdict.value == "RED"
         assert any(row["status"] == "open" for row in services.checkpoints.values())
         services.continuing = True
-
     def forbidden_build(*args, **kwargs):
         raise AssertionError("semantic workflow accessed the Diplodoc builder")
 
@@ -88,7 +88,6 @@ def test_semantic_modes_publish_without_build_or_ci(monkeypatch, mode, verdict, 
     environment["YDBDOC_DOCS_ROOT"] = docs_root
     services.events.clear()
     services.semantic_responses = [
-        {"files": {"ydb/docs/en/core/page.md": "# Corrected final\n"}},
         {"verdict": verdict, "findings": [] if verdict == "GREEN" else [finding]},
     ]
     dispatcher = runtime()
@@ -104,7 +103,8 @@ def test_semantic_modes_publish_without_build_or_ci(monkeypatch, mode, verdict, 
         result = dispatcher.doc_continue(ContinueWorkflowInput(43))
 
     assert result.verdict.value == verdict
-    assert services.files["ydb/docs/en/core/page.md"] == b"# Corrected final\n"
+    # Thin pipeline: no critic rewrite; translator emits rewritten source heading.
+    assert services.files["ydb/docs/en/core/page.md"] == b"# Translated\n"
     assert any(
         method in {"POST", "PATCH"} and "/git/refs" in path
         for method, path in services.events

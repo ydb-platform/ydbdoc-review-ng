@@ -4,27 +4,27 @@
 
 ## Поток
 
-`label → snapshot → (budget) → direction → Python scope → translate/TOC/ops →
-draft commit → critic tool-workspace (patch+re-read → reviewed push) →
-arbiter judge-only (GREEN/YELLOW/RED) → QA comment`.
+`label → snapshot → (budget) → direction → Python scope → thin translate/TOC/ops
+→ publication gates → publish reviewed → arbiter (GREEN/YELLOW/RED) → QA comment`.
 
 | Режим | Translator | Budget gate | Ветка |
 |---|---|---|---|
-| `doc_translate` | да | да | удалить старую, создать чистую |
-| `doc_verify` | нет | нет | та же; critic пушит правки |
+| `doc_translate` | да (thin) | да | удалить старую, создать чистую |
+| `doc_verify` | нет | нет | та же; gates + arbiter |
 | `doc_continue` | только pending / direction | нет | та же; + operator context |
 
 ## Владение
 
-- **Python:** inventory, Git-операции, dependency closure, protected fragments,
-  TOC structural delta, publication, checkpoints.
-- **DeepSeek:** нужен ли перевод + направление; whole-file prose; TOC strings;
-  critic tool edits (patches); arbiter verdict/findings only.
+- **Python:** inventory, Git-операции, dependency closure, TOC structural delta,
+  publication gates, publication, checkpoints.
+- **DeepSeek:** нужен ли перевод + направление; thin whole-file prose; TOC
+  strings; arbiter verdict/findings only.
 - Модель **не** назначает per-file semantic actions.
+- Tool-using critic **не** в production path.
 
 ## Публикация и verdict
 
-- Любой собранный UTF-8 файл публикуется. Diagnostics ≠ gate.
+- В ветку только файлы, прошедшие publication gates. Полу-EN запрещён.
 - GREEN / YELLOW = успех, checkpoint закрыт.
 - RED = неуспех, checkpoint открыт (`/ydbdoc continue` или ручная правка +
   `doc_verify`).

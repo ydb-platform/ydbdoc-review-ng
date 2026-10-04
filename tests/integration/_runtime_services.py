@@ -12,6 +12,10 @@ def raw_translation_source(prompt):
     if "\nSegments: " in prompt:
         encoded = prompt.split("\nSegments: ", 1)[1].split("\n\n", 1)[0]
         return "".join(json.loads(encoded).values())
+    if "=== SOURCE ===\n" in prompt:
+        start = prompt.index("=== SOURCE ===\n") + len("=== SOURCE ===\n")
+        end = prompt.index("\n=== END SOURCE ===", start)
+        return prompt[start:end]
     marker = "<AUTHORITATIVE_SOURCE_"
     if marker in prompt:
         start = prompt.index("\n", prompt.index(marker)) + 1
@@ -172,8 +176,9 @@ class RuntimeServices:
         self.blob = None
         self.blobs: dict[str, bytes] = {}
         self.tree: list[dict] = []
+        # Thin pipeline: no tool-critic. Queue is arbiter-only (legacy tests may
+        # still prepend {"files": ...}; model() skips those for verdict calls).
         self.semantic_responses = [
-            {"files": {"ydb/docs/en/core/page.md": "# Translated\n"}},
             {"verdict": "GREEN", "findings": []},
         ]
         self._tool_queue: list = []
@@ -399,6 +404,12 @@ class RuntimeServices:
             elif properties and all(key.startswith("segment_") for key in properties):
                 values = translation_segments(prompt)
             elif set(properties) in ({"files"}, {"verdict", "findings"}):
+                assert self.semantic_responses, "unexpected extra semantic model call"
+                # Thin cutover: discard queued critic {"files": ...} payloads.
+                while self.semantic_responses and set(
+                    self.semantic_responses[0]
+                ) == {"files"}:
+                    self.semantic_responses.pop(0)
                 assert self.semantic_responses, "unexpected extra semantic model call"
                 values = self.semantic_responses.pop(0)
             else:

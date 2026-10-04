@@ -8,15 +8,17 @@
 1. Техпис ставит label на PR.
 2. Runtime берёт immutable snapshot source PR, при необходимости дотягивает
    зависимости без target-перевода, переводит файлы и публикует translation branch.
-3. Critic — обязательный quality gate (§4.1). DeepSeek вызывается всегда
-   (unique dest тоже). Задание как в чате: судить **дельту source PR** и
-   регрессии относительно previous EN, не исторический changelog. Python
-   отбрасывает findings вне touched EN lines. Tool-using DeepSeek (`read` /
-   `grep` / `apply_patch` / `finish`, mandatory re-read). Whole-file JSON
-   `{"files": …}` не primary path.
-4. Arbiter независимо смотрит окончательный результат и публикует
-   `GREEN` / `YELLOW` / `RED`.
-5. Build и CI не участвуют в semantic verdict.
+3. Перевод — **тонкий цикл как в чате**: целый source Markdown → один DeepSeek
+   вызов → целый target Markdown. Без opaque placeholders и без soft-publish
+   полуготового мусора. Python **publication gates** (§2.3) — жёсткий quality
+   gate до публикации файла (source-locale echo, split-backtick identifiers,
+   missing include targets). Один retry при провале gate, затем файл не
+   публикуется.
+4. Tool-using critic (`read`/`grep`/`apply_patch`/`finish`) **снят** с
+   production path. Reviewed bytes = draft, прошедший gates.
+5. Arbiter независимо смотрит опубликованный результат (дельта source PR) и
+   публикует `GREEN` / `YELLOW` / `RED`.
+6. Build и CI не участвуют в semantic verdict.
 
 Режимы:
 
@@ -102,28 +104,26 @@ source PR с именем лимита. Для старого слитого PR 
 
 Единица перевода — Markdown/YFM файл.
 
-- **Surgical (предпочтительно):** существующий target + source before/after.
-  Неизменённые блоки копируются из target. Модель вызывается только на
-  выровненные hunks (или не вызывается, если delta — уникальные строковые
-  замены, например URL).
-- **Whole-file (fallback):** один translator request на весь файл, если
-  surgical выровнять нельзя, target нет, или это новая статья.
-  Внутридокументного chunking в fallback нет. Лимит размера — только
+- **Unique string replacements (без модели):** если source before/after и
+  existing target позволяют перенести дельту уникальными заменами
+  (URL/строки) — Python делает это сам. Presentation-map запрещён.
+- **Thin whole-file (основной model path):** один DeepSeek request на весь
+  файл. Вход = полный source Markdown (+ optional old target как reference).
+  Выход = полный target Markdown. Opaque placeholders **не** используются.
+  Внутридокументного chunking нет. Лимит размера — только
   `YDBDOC_MAX_SOURCE_CHARACTERS`.
+- Surgical hunks с placeholders — legacy path; новые правки идут в thin
+  whole-file или unique replacements.
 
 Переводимы: проза, заголовки, списки, таблицы, подписи ссылок, `alt`,
 front matter `title`/`description`, заголовки YFM note/cut/tab, комментарии
 в поддерживаемых fenced code (§2.1).
 
-Перед вызовом непрозрачные фрагменты → placeholders. URL в link/image:
-подпись видна, destination = URL-token. Markdown-синтаксис модели виден.
-Защищены: URL path/query, **identifier atoms** (целый `BS_CONTROLLER` /
-`CREATE_FAILED` / `POOL_NAME`; CamelCase product names вроде `BlobDepot` /
-`LogoBlob`; не рвать на bare ESCAPE `\_` внутри),
-templates, inline code, код вне комментариев, Mermaid, include, прочий
-front matter, technical HTML. Если old target есть, Python не накладывает глобальный presentation map
-после restore. Unique dest: presentation-map запрещён. Hunks/whole-file:
-оформление литералов решает translator/critic на видимой прозе.
+Модель обязана сохранить YFM/Diplodoc markup, `{% include %}`, code fences,
+paths, identifiers, flags, templates (`{{ ydb-short-name }}` и т.п.).
+Запрещён split-backtick underscore mangling (`log`_`config`, `word`_`word`,
+`` `_`path ``). После ответа Python нормализует известные mangling-паттерны,
+затем гоняет publication gates (§2.3).
 
 Внутренние YDB URL: только `/docs/ru/` ↔ `/docs/en/`. Для `glossary.md`
 fragment ищется в реальном target glossary; иначе fail-open diagnostic.
@@ -131,21 +131,9 @@ fragment ищется в реальном target glossary; иначе fail-open 
 без query/fragment → MediaWiki `langlinks`; нет соответствия → source URL,
 arbiter может поставить YELLOW.
 
-Модель возвращает **Markdown** с теми же placeholders внутри предложений, не
-JSON-карту segment IDs. Runtime подставляет protected fragments из source
-(плюс locale/Wikipedia/glossary rules). Одна техническая коррекция при ответе,
-из которого нельзя собрать UTF-8 файл. JSON segment map → retry, затем fail.
-Собранный UTF-8 файл публикуется как **draft** (технический soft-publish /
-diagnostics). Markdown/YFM/links/anchors/protected diagnostics не блокируют
-draft-публикацию, но draft **не** является reader-facing product success.
-
-Глоссарий в translator: все релевантные парные секции текущего файла, без
-лимита числа/размера; при равенстве — порядок по anchor. Это контекст, не
-текст для вставки.
-
-Для surgical hunks existing target fragment — semantic baseline этого hunk.
-Для whole-file fallback existing target — formatting/presentation reference,
-не semantic baseline всего файла.
+JSON segment map от модели → reject + retry, затем fail.
+Файл, не прошедший gates после retry, **не** публикуется (null / дыра → RED).
+Soft-publish полупереведённого UTF-8 с кириллицей в EN **запрещён**.
 
 ### 2.1 Комментарии в code fence
 
@@ -163,9 +151,22 @@ draft-публикацию, но draft **не** является reader-facing p
 
 ### 2.2 Source echo (RU→EN)
 
-Непрерывный фрагмент ≥32 русских букв после нормализации пробелов в тексте,
-видимом модели → одна коррекция translator. Если осталось — публикуем,
-diagnostic для critic/arbiter.
+Непрерывный фрагмент ≥3 русских букв в target EN — publication gate failure
+(§2.3). Один retry translator с указанием gate; повторный провал → файл не
+публикуется.
+
+### 2.3 Publication gates (Python, fail-closed)
+
+После thin translate (и после unique/surgical assemble) Python проверяет:
+
+| Gate | Условие провала |
+|---|---|
+| `source_locale_echo` | в EN остались кириллические runs (≥3 букв); симметрично для EN→RU по мере поддержки |
+| `split_backtick_identifiers` | после normalize остались `` `a`_`b` `` / `a`_`b` / `` `_`x `` |
+| `missing_include_target` | relative `{% include %}` destination нет среди опубликованных файлов группы |
+
+Провал → один retry → иначе файл = null, публичный RED finding. Успех →
+файл публикуется как reviewed (tool-critic не вызывается).
 
 ## 3. TOC (особый путь, владеет Python)
 
@@ -183,190 +184,42 @@ diagnostic для critic/arbiter.
    добавленными/изменёнными в этом PR записями, не копией всего source TOC.
    Только delete и target TOC нет → новый файл не создаём.
 5. Ссылка на отсутствующий target-файл в TOC — diagnostic, не gate.
-6. Critic/arbiter получают полный target TOC (или `null`) и source TOC
-   before/after. Critic правит TOC только через tool-workspace §4.1
-   (`apply_patch` по seeded target TOC), не целым JSON-файлом как primary
-   path. Перед принятием patch Python проверяет, что critic не удалил
-   target-записи, которых не касалась source-дельта PR. Нарушение делает
-   **этот patch** невалидным (как oversized/invalid hunk): одна повторная
-   попытка всей critic-сессии §4.1. После второй такой ошибки по TOC —
-   исключение из fail→RED: сохраняется TOC, уже построенный Python по
-   дельте, и **именно он** идёт в reviewed bytes и дальше в arbiter.
-   Transport/protocol/turn-budget ошибки critic по TOC-чанку по-прежнему
-   дают unreviewed RED без arbiter на сыром draft.
+6. Arbiter получает полный target TOC (или `null`) и source TOC before/after.
+   Target TOC после §3 Python-delta считается reviewed (tool-critic нет).
 
 Покрывается unit/integration tests на дельту, идемпотентность, новый TOC,
 diagnostics.
 
-## 4. Critic и arbiter
+## 4. Quality gate и arbiter
 
 Модель production: только DeepSeek V4 Flash. Исключение —
 `doc_model_probe` (не переводит и не публикует).
 
-`reasoning_effort`: critic `medium`, arbiter `none`, остальные production-роли
-`none` (live probes / tip; silent-connection wall на длинном reasoning).
-Critic/arbiter получают постоянные инструкции отдельным `developer` message,
-а входные файлы, glossary, TOC snapshots, binary manifest и operator context —
-`user` message. В конце `user` message повторяется короткий обязательный
-checklist: completeness, terminology, technical literals и inline-code,
-damaged sentences, TOC и состав файлов чанка.
+`reasoning_effort`: arbiter `none`, translator/direction `none`.
+Контекст: 1 048 576. `max_tokens` = остаток после UTF-8 byte-размера wire
+request (1 byte ≈ 1 token). Закрытый цикл arbiter findings → repair
+**запрещён** (token burn).
 
-Контекст: 1 048 576. Для translator/direction `max_tokens` = остаток после
-UTF-8 byte-размера полного wire request (1 byte ≈ 1 token). Для critic/arbiter
-generation budget дополнительно ограничен (`max_output_tokens` потолки в
-коде; иначе silent-connection wall ~270 с → TRANSPORT, http_status=null;
-runs 37009373894 / 37027975808). `NON_FINAL` → чанк непроверен, остальные
-идут, итог RED.
+### 4.1 Quality gate (вместо tool-using critic)
 
-План rollout tool-using critic: `knowledge/tool-using-critic-plan.md`.
-Закрытый цикл arbiter findings → repair **запрещён** (token burn).
+Production quality gate = Python publication gates §2.3 на выходе translator.
 
-### 4.1 Critic
+- Tool-using DeepSeek critic (`read` / `grep` / `apply_patch` / `finish`) **не
+  вызывается** в `doc_translate` / `doc_verify` / `doc_continue`.
+- Файл, прошедший gates, считается **reviewed** и публикуется.
+- Обязательный target = null после translate → unreviewed RED (`missing`),
+  arbiter по этому path не зовётся.
+- `doc_verify` заново гоняет gates на текущих bytes + arbiter; model-editor
+  правок в том же job нет (правки — руками или новый `doc_translate`).
 
-Обязательный quality gate. DeepSeek вызывается всегда, в том числе на unique
-dest surgical. Python задаёт scope как в чате: source-delta + previous EN,
-touched EN lines. Critic патчит только этот scope (патч вне дельты
-отклоняется). Если dest mapping уже в draft — `finish` без правок. Reviewed
-bytes = workspace после finish.
-
-Это тот же объём проверки, что у редактора на changelog из четырёх URL:
-исторические релизы вне дельты не аудиторятся.
-
-Иначе — **единственный** model-editor после draft.
-Вход чанка: полные source + **draft** target одной пары frozen group
-(статья или TOC), optional presentation-reference (old target по path),
-relevant paired glossary без лимита, manifest binary при необходимости,
-для TOC — before/after source.
-
-#### Роль и границы
-
-- Critic = tool-using editor: читает, ищет, патчит, **обязательно**
-  перечитывает затронутые строки, завершает сессию через tool `finish`.
-- Arbiter = judge-only (§4.2). Findings арбитра **не** запускают critic и не
-  чинятся автоматически в том же job.
-- Translator и Python TOC-delta (§2–§3) не меняются этим контрактом, кроме
-  wiring входа/выхода critic и TOC-исключения §3.6.
-
-#### Workspace и tools
-
-Runtime готовит in-memory workspace на чанк:
-
-| Path class | Содержимое | Доступ |
-|---|---|---|
-| Writable draft target | draft bytes; если обязательный target отсутствует — **seed пустого файла** (0 bytes), не JSON-`null` как единственный способ создания | `read` / `grep` / `apply_patch` |
-| Read-only source | полные source bytes пары | только `read` / `grep` |
-| Read-only glossary | relevant paired sections | только `read` / `grep` |
-| Read-only presentation-reference | old target по path, если был | только `read` / `grep` |
-| Read-only TOC snapshots | source TOC before/after (для TOC-чанка) | только `read` / `grep` |
-
-`apply_patch` на read-only path → invalid tool args. Path traversal / escape
-из workspace → invalid tool args. Модель ходит в OpenAI-compatible tool loop
-(DeepSeek). Primary path — tools, **не** whole-file JSON `{"files": …}`.
-
-Обязательные tools:
-
-| Tool | Назначение |
-|---|---|
-| `read` | Байты/строки path из workspace (1-based window). |
-| `grep` | Поиск pattern в workspace path(s). |
-| `apply_patch` | Unified diff / hunks к **одному** writable path; runtime применяет. |
-| `finish` | Явное завершение сессии после всех обязательных re-read. |
-
-Другие tools в v1 запрещены. Verdict/findings в ответе critic запрещены.
-Finish signal = только tool `finish` (не «финальный JSON без tools»).
-
-#### Протокол хода (enforceable FSM)
-
-Runtime, не prompt, enforced:
-
-1. **Один mutating tool за assistant-turn:** в сообщении с `apply_patch` не
-   может быть других tool_calls. Иначе protocol error.
-2. Parallel `read`/`grep` в одном turn допустимы только когда нет pending
-   re-read и нет `apply_patch` в этом же turn.
-3. После **успешного** `apply_patch` runtime вычисляет touched line ranges
-   **после** применения hunk и ставит `pending_reread`. Пока
-   `pending_reread` не пуст, единственные допустимые tools — `read`, и
-   объединение окон `read` должно покрыть каждый pending range. Любой
-   `apply_patch` / `grep` / `finish` при непустом pending → protocol error.
-4. `finish` при непустом `pending_reread` → protocol error.
-5. `finish` на пустом seed без единого успешного patch допустим (no-op
-   review): reviewed bytes = seed/draft без изменений.
-6. `finish_reason=tool_calls` (или эквивалент provider) при валидных
-   `tool_calls` — **нормальный промежуточный** ответ, не `NON_FINAL` и не
-   `EMPTY_TEXT` из-за `content=null`.
-7. Retry = **полный рестарт** critic-сессии с исходного draft/seed workspace
-   и чистой history; не продолжение сломанного multi-turn.
-
-Нарушение protocol → один retry сессии → иначе unreviewed RED (кроме
-TOC-исключения §3.6 после двух ошибок защиты target-only записей).
-
-Ошибки выполнения tools (`ToolError`: bounds/`end past EOF`, bad hunk,
-read-only/unknown path, oversized patch) **не** protocol abort: runtime
-возвращает JSON `{"ok": false, "error", "detail"}` в `role=tool`, сессия
-продолжается в пределах turn budget. Только FSM-нарушения (§ выше) и
-исчерпание бюджета → retry/RED.
-
-#### Финальные bytes
-
-Reviewed bytes чанка = workspace writable paths после runtime-applied
-patches. Текст ассистента и tool args сами по себе не публикуются. Нет
-успешного `finish` с валидным workspace → чанк непроверен.
-
-#### Лимиты надёжности
-
-- Max tool turns на чанк (дефолт 32; override env
-  `YDBDOC_CRITIC_MAX_TOOL_TURNS`). Превышение / нет `finish` → RED с
-  публичным reason **budget** (не «сбой провайдера»).
-- Per-turn `max_output_tokens` для critic-turn ограничен (как сейчас против
-  silent-connection wall); history tool-loop не должна заново класть полные
-  файлы в каждый user-turn — только начальный context + tool results.
-- Patch-not-full-file: runtime отвергает огромные hunks (пороги в плане
-  P1; цель — хирургические правки, не пересылка целого файла). Для seed
-  0-byte файла создание содержимого через один или несколько patch
-  допустимо, пока каждый hunk проходит byte/span cap относительно
-  **результата** применения (порог «% файла» для пустого seed не блокирует
-  первую осмысленную запись; абсолютный byte cap всё равно действует).
-- Чанки строго по **одной** source/target паре (TOC отдельно). Пара не
-  делится. Не влезла → unreviewed, остальные идут.
-- Полный bilingual glossary.md не кладётся: только relevant paired sections.
-- Один retry на transport/503/invalid contract/protocol (см. FSM).
-  `NON_FINAL` на промежуточном tool-turn не применяется к `tool_calls`;
-  `NON_FINAL`/`length` без валидных tool_calls или на `finish`-turn → как
-  сегодня: retry → unreviewed RED.
-
-#### Cutover и rollback
-
-До P0 probe green + P1 suite tip может ещё исполнять one-shot JSON critic
-(факт кода). Это не второй канон и не production dual-path.
-После cutover silent fallback на whole-file `{"files": …}` **запрещён**.
-Env-flag «tools on/off» в production **не** вводим. Rollback = revert
-release tip / остановить `doc_translate`, не параллельный JSON-path.
-
-#### Качество правок
-
-Source-разметка не эталон target-разметки. Presentation-reference — только
-оформление. Critic нормализует технические литералы: inline-code и снятие
-ненужного экранирования (`BS\_CONTROLLER` → `BS_CONTROLLER`). Литерал нельзя
-переименовать, перевести, удалить или продублировать. Мягкие Markdown/YFM
-diagnostics §2 по-прежнему не gate.
-
-#### Публикация
-
-Успешный чанк → **reviewed** commit/push workspace bytes. Первый успех может
-создать branch/PR, если translator опубликовал только draft. Ошибка после
-retry → unreviewed RED; arbiter по этим путям **не** вызывается на сыром
-draft (TOC-исключение §3.6 — единственное: Python-delta TOC всё же идёт в
-arbiter). Critic unavailable ≠ GREEN/YELLOW на raw translator dump.
-
-При нуле текстовых пар → пустой tool-сеанс / no-op `finish`, вызов gate
-всё равно есть (как раньше пустой `{"files": {}}`).
+Исторический план tool-critic (`knowledge/tool-using-critic-plan.md`) —
+архив, не канон.
 
 ### 4.2 Arbiter
 
-Вход: окончательные source/target **только после успешного critic**
-(reviewed bytes), тот же glossary/manifest подход, чанки заново по
-финальным размерам. Unreviewed пути уже RED и в arbiter не идут.
-Unique dest surgical: DeepSeek всё равно вызывается. Scope = PR delta +
+Вход: окончательные source/target **после publication gates** (reviewed
+bytes), тот же glossary/manifest подход, чанки заново по финальным размерам.
+Unreviewed / null пути уже RED и в arbiter не идут. Scope = PR delta +
 previous EN. Findings вне touched EN lines Python отбрасывает; пустой набор
 → GREEN. Не судить исторический changelog, который PR не менял.
 
@@ -419,8 +272,8 @@ YELLOW findings публикуются в QA comment. Автопочинки arb
 
 Если после Python-mirror целевая локаль уже отражает дельту source PR
 (нет дыр translator, publication plan без изменений) → комментарий
-«перевод не требуется» + GREEN; critic/arbiter и translation PR не
-запускаются. Это не failure.
+«перевод не требуется» + GREEN; arbiter и translation PR не запускаются.
+Это не failure.
 
 Если перевод требовался, но собрать/закоммитить не удалось (дыры,
 ошибка модели) → пустой PR не создаём; RED-отчёт в source PR;
@@ -436,13 +289,10 @@ checkpoint с `target_sha=null`.
 4. Перевести все страницы; TOC по §3; deterministic ops.
 4a. Если publication plan пуст и нет translator-дыр → «перевод не требуется»
     + GREEN (target уже зеркалит дельту); дальше не идём.
-5. Один первоначальный **draft** commit собранных файлов + deterministic ops →
-   translation PR (технический soft-publish; diagnostics ≠ product). Частичные
-   model-fail → остальные всё равно в draft; failed paths = `null` для critic.
-   Нет ни файлов, ни ops → commit пока нет, процесс идёт к critic.
-6. Critic по §4.1 (обязательный gate → reviewed commits). Затем arbiter по
-   §4.2 только на reviewed bytes. Нет успешного critic → RED/checkpoint,
-   не GREEN/YELLOW на сыром dump.
+5. Commit файлов, прошедших publication gates (§2.3), + deterministic ops →
+   translation PR. Failed gate / model → path = `null` (дыра), не полу-EN.
+   Нет ни файлов, ни ops → commit пока нет.
+6. Arbiter по §4.2 на опубликованных (reviewed) bytes. Дыры → RED.
 7. QA comment + terminal status (честный цвет).
 
 Новый `doc_translate` всегда удаляет прежнюю remote translation branch этого
@@ -452,8 +302,8 @@ source PR и открытые checkpoints старого translation PR, соз�
 ### 5.2 `doc_verify`
 
 Без budget gate и без translator. Текущий translation head + authoritative
-source snapshot → полный critic + arbiter по всей группе. Исправления critic
-пушатся в ту же ветку. Costs учитываются в дневной сумме следующего
+source snapshot → publication gates + arbiter по всей группе. Model-editor
+правок в verify нет. Costs учитываются в дневной сумме следующего
 `doc_translate`.
 
 ### 5.3 `doc_continue`
@@ -468,7 +318,7 @@ Operator context — отдельный блок инструкций, не ча
 не должен попасть в candidate.
 
 - Direction success в том же run → сразу scope + translation.
-- Сначала `pending_paths`, потом полный critic/arbiter всей группы.
+- Сначала `pending_paths`, потом gates + arbiter всей группы.
 - Candidate только из `target_sha` ветки; содержимое файлов в YDB не хранится.
 - Только GREEN/YELLOW закрывают checkpoint. RED → новый checkpoint с тем же
   первоначальным expiry (TTL не продлевается).
@@ -497,9 +347,9 @@ calls. Иначе job идёт целиком, даже если сама пер
 ## 7. Публикация и отчёт
 
 - Репозиторий `ydb-platform/ydb`, base = base source PR.
-- Технически собранный UTF-8 может уйти в ветку как **draft** (soft-publish
-  diagnostics). Reader-facing product / success job — после **успешного
-  critic** (reviewed) и arbiter GREEN/YELLOW. Soft-publish ≠ «перевод готов».
+- В ветку уходят только файлы, прошедшие publication gates (§2.3). Полу-EN
+  с кириллицей / split-backtick / битыми include **не** публикуется.
+  Success job — arbiter GREEN/YELLOW на этих bytes.
 - Один актуальный QA comment в translation PR (или RED в source PR, если PR
   перевода нет): цвет, краткое резюме, cost job (unknown ≠ 0).
 - В source PR — один обновляемый комментарий со ссылкой на translation PR.
@@ -511,17 +361,16 @@ calls. Иначе job идёт целиком, даже если сама пер
   mypy / `git diff --check` один раз перед release.
 - Fakes для model/YDB/GitHub. Mutation testing и quota-матрицы без отдельной
   просьбы не делать.
-- TOC delta, soft-publish diagnostics, identifier atoms, draft/reviewed gate —
-  обязательные witnesses.
+- TOC delta, thin translate, publication gates (echo / split-backtick /
+  missing include) — обязательные witnesses.
 - Работа в `main` без feature branches: частые commits + push.
 - Два параллельных потока только без пересечения production-файлов.
 - При смене требований — переписать на месте, не дублировать старое рядом.
 - `scripts/probe_critic_fallback.py` / label `doc_model_probe` — исторический
   probe, не production translate.
 
-Acceptance (минимум): auth; budget; dependency pull A→A1; whole-file translate;
-identifier atoms; optional presentation map; TOC delta tests; critic
-tool-workspace + patches + mandatory re-read → reviewed push; critic fail →
-RED; arbiter GREEN/YELLOW/RED только на reviewed, без repair-loop; YELLOW не
-открывает checkpoint; continue с operator context; empty PR не создаётся при
-нуле commits. Rollout plan: `knowledge/tool-using-critic-plan.md`.
+Acceptance (минимум): auth; budget; dependency pull A→A1; thin whole-file
+translate; publication gates fail-closed; TOC delta tests; arbiter
+GREEN/YELLOW/RED на gated bytes без repair-loop; YELLOW не открывает
+checkpoint; continue с operator context; empty PR не создаётся при нуле
+commits.

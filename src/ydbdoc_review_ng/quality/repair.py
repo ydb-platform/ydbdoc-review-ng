@@ -413,15 +413,15 @@ def review_pr(
     def fits(request: ModelRequest) -> bool:
         return _request_fits(executor, request, request_fits)
 
-    critic_chunks = _pack_pair_chunks(pairs, build_request=build_critic, fits=fits)
-    packed_targets = {target for chunk in critic_chunks for _source, target in chunk}
-    for _source, target in pairs:
-        if target not in packed_targets:
-            mark_unreviewed((target,), "context")
-    if not inventory_pairs:
-        critic_chunks = ((),)
-    elif not pairs:
-        critic_chunks = ()
+    # Thin pipeline (§4.1 cutover): tool-using critic removed. Translate-time
+    # publication gates are the quality gate; successful draft bytes are reviewed.
+    # Missing required targets stay unreviewed RED. Arbiter still judges below.
+    for _source, target in inventory_pairs:
+        if translated_files.get(target) is None:
+            mark_unreviewed((target,), "missing")
+    critic_chunks: tuple[tuple[tuple[str, str], ...], ...] = ()
+    _unused_tool_critic = (build_critic, on_successful_critic_chunk)
+    del _unused_tool_critic
 
     for chunk_pairs in critic_chunks:
         target_paths = tuple(target for _source, target in chunk_pairs)
