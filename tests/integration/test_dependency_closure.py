@@ -240,15 +240,12 @@ def test_pr50858_fixture_expands_only_missing_files_and_exact_glossary_anchors()
         dependencies.RedirectCatalog(_snapshot(), _roots(), ()),
     )
 
-    assert potential.scopes[0].measurement.dependency_file_count == 2
+    assert potential.scopes[0].measurement.dependency_file_count == 1
     assert tuple(
         entry.pair.source_path.value
         for entry in potential.scopes[0].entries
         if entry.origin is ScopeOrigin.DEPENDENCY
-    ) == (
-        "ydb/docs/ru/core/concepts/glossary.md",
-        "ydb/docs/ru/core/dev/optimization/hints.md",
-    )
+    ) == ("ydb/docs/ru/core/dev/optimization/hints.md",)
 
 
 def _inventory(key_value: str, ru: bytes | None, en: bytes | None) -> LocalePairInventory:

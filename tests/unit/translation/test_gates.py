@@ -53,3 +53,24 @@ def test_missing_relative_include_is_reported() -> None:
         available_paths={"ydb/docs/en/core/recipes/backup/recovery.md"},
     )
     assert any(item.code == "missing_include_target" for item in failures)
+
+
+def test_existing_target_include_is_not_missing() -> None:
+    text = "{% include [note](_includes/tpch-dataset-note.md) %}\n"
+    target = "ydb/docs/en/core/dev/optimization/structure.md"
+    note = "ydb/docs/en/core/dev/optimization/_includes/tpch-dataset-note.md"
+    missing = missing_relative_includes(
+        text,
+        target_path=target,
+        available_paths={target},
+        exists=lambda path: path == note,
+    )
+    assert missing == ()
+    failures = check_publication_gates(
+        text.encode(),
+        source_locale="ru",
+        target_path=target,
+        available_paths={target},
+        exists=lambda path: path == note,
+    )
+    assert failures == ()

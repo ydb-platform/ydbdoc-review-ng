@@ -800,7 +800,7 @@ def test_historical_changelog_linked_article_is_added_to_scope() -> None:
     assert dependency.pair.target_path == dependency_target
 
 
-def test_existing_target_missing_linked_anchor_adds_article_to_scope() -> None:
+def test_existing_target_missing_linked_anchor_does_not_add_glossary_to_scope() -> None:
     key = PairKey(RepoPath("article.md"))
     parent = _inventory(
         "article.md",
@@ -844,10 +844,9 @@ def test_existing_target_missing_linked_anchor_adds_article_to_scope() -> None:
     )
 
     assert selected.manifest is not None
-    dependency = selected.manifest.entries[1]
-    assert dependency.pair.target_path == dependency_target
-    assert dependency.target_content == b"## Database {#database}\n"
-    assert selected.manifest.dependency_file_count == 1
+    assert selected.manifest.dependency_file_count == 0
+    assert len(selected.manifest.entries) == 1
+    assert selected.manifest.entries[0].pair.source_path == parent.ru.path
 
 
 def test_glossary_requires_the_exact_linked_anchor() -> None:
@@ -882,10 +881,8 @@ def test_glossary_requires_the_exact_linked_anchor() -> None:
         dependencies.RedirectCatalog(_snapshot(), _roots(), ()),
     )
 
-    assert potential.scopes[0].measurement.dependency_file_count == 1
-    dependency = potential.scopes[0].entries[1]
-    assert dependency.pair.source_path == source_path
-    assert dependency.pair.target_path == target_path
+    assert potential.scopes[0].measurement.dependency_file_count == 0
+    assert len(potential.scopes[0].entries) == 1
 
 
 def test_unique_plural_target_anchor_does_not_expand_dependency_scope() -> None:

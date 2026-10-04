@@ -376,3 +376,7 @@
 - Тест:** RU `build-ya` → add `logging.md` → `releases`; EN без Logging; metadata уже дописала Logging в конец → после delta `Logging` сразу после `Ya Make build system`. Плюс кейс без metadata: сразу правильное место.
 - Сделано в `toc_delta._apply_items`: `before_entry is None` + уже есть match → move к after-соседу. Metadata append для dependency TOC без delta не трогали: существующий test_runtime ждёт append, когда TOC сам в PR.
 - `doc_verify` на GREEN #55007 TOC не перепишет. Нужен `doc_translate` source #46837 после tip/`v1.0.1`.
+
+## 2026-10-04 12:28 UTC
+<!-- d4a7516a3e3c4eba -->
+- Шип: `ce69751` на `public/main`, тег `v1.0.1` сдвинут туда же. Metadata-append для dependency TOC не трогал: существующие тесты его ждут, а порядок теперь чинит аппликатор. `doc_verify` TOC не переписывает.

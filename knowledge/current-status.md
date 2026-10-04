@@ -35,6 +35,16 @@ must sit after Ya Make, not after Changelog.
 `doc_verify` on an already-GREEN PR does not rewrite TOC; restart
 `doc_translate` on the source PR after moving `v1.0.1`.
 
+## Glossary and include gates (2026-10-04)
+
+[#55024](https://github.com/ydb-platform/ydb/pull/55024) RED: thin whole-file of
+existing EN glossary (missing-anchor exception) died on provider `transport`;
+`structure.md` nulled because include-gate saw only in-flight files, not
+`_includes/tpch-dataset-note.md` already on main.
+
+Now: existing glossary file stops scope; missing anchors are diagnostics.
+Include gate accepts target-snapshot files that this PR did not touch.
+
 ## Tip pin
 
 Workflow `ydbdoc-review.yml` uses

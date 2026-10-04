@@ -898,14 +898,11 @@ def _build_direction(
                         and link.fragment not in markdown_anchors(target_content)
                     )
                     if missing_anchor:
+                        # Existing EN glossary stays the stop condition. Missing
+                        # exact anchors are diagnostics, not a whole-file retranslate.
                         dependency_state = (
                             DependencyResolutionState.TARGET_MISSING_ANCHOR_SOURCE_EXISTS
                         )
-                        missing_edges.add((current, terminal_source))
-                        source_bytes[terminal_source] = dep_source_content
-                        queue.add(terminal_source)
-                        if terminal_source not in initial_by_source:
-                            dependency_paths.add(terminal_source)
                     else:
                         dependency_state = (
                             DependencyResolutionState.TARGET_REDIRECT_EXISTS

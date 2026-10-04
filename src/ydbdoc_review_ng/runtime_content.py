@@ -2388,8 +2388,19 @@ class RuntimeContent:
         for path, accepted in documents.items():
             if path not in required_maps:
                 files[path.value] = accepted.translated_markdown.encode("utf-8")
-        # Group publication gate: relative includes must resolve among published files.
+        # Group publication gate: relative includes must resolve in the resulting
+        # target tree (in-flight overlay plus already-present target snapshot files).
         available = {path for path, value in files.items() if value is not None}
+        base_snapshot = SnapshotRef(
+            plans.preparation.snapshots.source_snapshot.repository,
+            plans.preparation.metadata_snapshot.commit_sha,
+        )
+
+        def include_exists_on_target(path: str) -> bool:
+            if path in files:
+                return files[path] is not None
+            return self.source.github.read_bytes(base_snapshot, RepoPath(path)) is not None
+
         for path, value in list(files.items()):
             if value is None:
                 continue
@@ -2403,6 +2414,7 @@ class RuntimeContent:
                 source_locale=locale,
                 target_path=path,
                 available_paths=available,
+                exists=include_exists_on_target,
             )
             include_failures = tuple(
                 item for item in failures if item.code == "missing_include_target"

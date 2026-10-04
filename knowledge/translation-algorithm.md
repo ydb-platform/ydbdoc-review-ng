@@ -6,8 +6,9 @@
 2. Один direction call: `translation_required`, `direction`, `reason`.
 3. Python зеркалит Git: translate / delete / rename / resource / TOC.
 4. Рекурсия по внутренним ссылкам: нет target у A1 → A1 в группу, даже если
-   A1 не менялся в PR. Есть target → стоп, в review не входит.
-5. Glossary без target-anchor → целиком в scope.
+   A1 не менялся в PR. Есть target-файл → стоп, в review не входит.
+5. Glossary: нет EN-файла → как missing-target. EN-файл есть, точного anchor
+   нет → diagnostic, целиком не переводим.
 6. Лимиты: `YDBDOC_MAX_DEPENDENCY_FILES_PER_ARTICLE` (группа статьи),
    `YDBDOC_MAX_SOURCE_CHARACTERS` (один файл).
 

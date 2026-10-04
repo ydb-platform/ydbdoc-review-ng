@@ -85,8 +85,9 @@ presentation в critic.
 
 - Source B есть, симметричного target нет → B в frozen group, переводится целиком.
 - Target B уже есть → рекурсия на B останавливается, B не в review scope.
-- Ссылка на `glossary.md` без точного target-anchor → source glossary в scope,
-  целиком переводится. Если anchor всё равно нет — diagnostic, не publication gate.
+- Ссылка на `glossary.md`: нет target-файла → glossary в scope как обычная
+  missing-target страница. Target-файл есть, а точного anchor нет → diagnostic,
+  целый glossary не переводим (thin whole-file на 90KB+ сжигает transport).
 - Для обычных anchors имена RU/EN могут отличаться; scope из-за этого не растёт.
 - Новая target-статья → зеркальная достижимая запись в target TOC.
 - Changelog и обычные статьи — одни правила.
@@ -163,7 +164,7 @@ Soft-publish полупереведённого UTF-8 с кириллицей в
 |---|---|
 | `source_locale_echo` | в EN остались кириллические runs (≥3 букв); симметрично для EN→RU по мере поддержки |
 | `split_backtick_identifiers` | после normalize остались `` `a`_`b` `` / `a`_`b` / `` `_`x `` |
-| `missing_include_target` | relative `{% include %}` destination нет среди опубликованных файлов группы |
+| `missing_include_target` | relative `{% include %}` destination нет в результирующем target tree: overlay этого PR **или** уже существующий файл на translation base |
 
 Провал → один retry → иначе файл = null, публичный RED finding. Успех →
 файл публикуется как reviewed (tool-critic не вызывается).
