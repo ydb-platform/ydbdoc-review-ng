@@ -8,7 +8,6 @@ from ydbdoc_review_ng.domain import (
     RepositoryId,
     SnapshotRef,
 )
-from ydbdoc_review_ng.models.types import ModelCallResult
 from ydbdoc_review_ng.locales import PairKey
 from ydbdoc_review_ng.models.types import ModelCallResult
 from ydbdoc_review_ng.parser.markdown import build_markdown_plan
@@ -18,6 +17,7 @@ from ydbdoc_review_ng.translation import build_translation_request
 from ydbdoc_review_ng.translation.surgical import (
     SurgicalMode,
     apply_unique_replacements,
+    join_insert_hunk,
     plan_surgical_update,
 )
 
@@ -78,6 +78,20 @@ def test_structural_insert_appends_hunk_on_existing_target() -> None:
     assert hunk.source_after == b"* Two\n"
     assert hunk.existing_target_fragment == b""
     assert hunk.target_span == (len(b"* One\n"), len(b"* One\n"))
+
+
+def test_join_insert_hunk_adds_blank_line_before_heading() -> None:
+    existing = b"**KiKiMR** is the old name.\n"
+    insert = b"### Tablet recovery mode {#tablet-recovery-mode}\n\nBody.\n"
+    assert join_insert_hunk(existing, insert) == (
+        b"\n### Tablet recovery mode {#tablet-recovery-mode}\n\nBody.\n"
+    )
+
+
+def test_join_insert_hunk_keeps_leading_blank_already_in_insert() -> None:
+    existing = b"**KiKiMR** is the old name.\n"
+    insert = b"\n### Tablet recovery mode {#tablet-recovery-mode}\n"
+    assert join_insert_hunk(existing, insert) == insert
 
 
 def test_glossary_tail_insert_does_not_whole_file_existing_english() -> None:
@@ -283,7 +297,7 @@ def test_runtime_translates_only_inserted_glossary_tail() -> None:
     _accepted, translated = content._translate_document(_document(source_after, existing_en))
     assert translated.translated_markdown == (
         existing_en.decode()
-        + "### Tablet recovery mode {#tablet-recovery-mode}\n\n"
+        + "\n### Tablet recovery mode {#tablet-recovery-mode}\n\n"
         + "**Recovery mode** is the restore mode.\n"
     )
     assert len(models.prompts) == 1

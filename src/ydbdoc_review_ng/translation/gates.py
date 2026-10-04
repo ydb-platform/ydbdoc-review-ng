@@ -19,6 +19,7 @@ _INCLUDE = re.compile(
     r"\{%\s*include\s+\[[^\]]*\]\(([^)]+)\)\s*%\}",
     re.IGNORECASE,
 )
+_ATX_HEADING = re.compile(r"^#{1,6}(?:\s|$)")
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +82,41 @@ def missing_relative_includes(
     return tuple(missing)
 
 
+def _heading_blank_line_problems(text: str) -> tuple[str, ...]:
+    lines = text.splitlines()
+    problems: list[str] = []
+    in_fence = False
+    for index, line in enumerate(lines):
+        stripped = line.lstrip()
+        if stripped.startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence or not _ATX_HEADING.match(line):
+            continue
+        missing_above = index > 0 and lines[index - 1] != ""
+        missing_below = index + 1 < len(lines) and lines[index + 1] != ""
+        if missing_above or missing_below:
+            problems.append(line.strip()[:80])
+    return tuple(problems)
+
+
+def _unlabeled_fence_openers(text: str) -> int:
+    in_fence = False
+    unlabeled = 0
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        if not stripped.startswith("```"):
+            continue
+        if in_fence:
+            in_fence = False
+            continue
+        info = stripped[3:].strip()
+        if not info:
+            unlabeled += 1
+        in_fence = True
+    return unlabeled
+
+
 def check_publication_gates(
     target: bytes,
     /,
@@ -130,4 +166,20 @@ def check_publication_gates(
                     "relative include targets missing: " + ", ".join(missing[:8]),
                 )
             )
+    headings = _heading_blank_line_problems(text)
+    if headings:
+        failures.append(
+            PublicationGateFailure(
+                "heading_blank_lines",
+                "ATX headings must be surrounded by blank lines: " + headings[0],
+            )
+        )
+    unlabeled = _unlabeled_fence_openers(text)
+    if unlabeled:
+        failures.append(
+            PublicationGateFailure(
+                "unlabeled_fence_opener",
+                f"target has {unlabeled} opening code fences without a language",
+            )
+        )
     return tuple(failures)

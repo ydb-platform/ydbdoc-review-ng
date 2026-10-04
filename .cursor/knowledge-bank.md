@@ -380,3 +380,42 @@
 ## 2026-10-04 12:28 UTC
 <!-- d4a7516a3e3c4eba -->
 - Шип: `ce69751` на `public/main`, тег `v1.0.1` сдвинут туда же. Metadata-append для dependency TOC не трогал: существующие тесты его ждут, а порядок теперь чинит аппликатор. `doc_verify` TOC не переписывает.
+
+## 2026-10-04 15:41 UTC
+<!-- f482a78989247134 -->
+- Фикс в `scope.py`: missing-anchor больше не ставит glossary в очередь и не добавляет его в dependency group. Состояние `TARGET_MISSING_ANCHOR_SOURCE_EXISTS` остаётся для диагностики. В группу glossary попадает только если EN-файла нет вообще, как любая missing-target страница. REQUIREMENTS §1.3 переписаны так же: дырявый якорь при живом файле не повод переводить весь глоссарий.
+- `structure.md`.** Модель страницу перевела. Второй проход publication gates в `assemble_documents` проверял `{% include %}` только по overlay этого PR (`files`, где value не `None`). Include `_includes/tpch-dataset-note.md` на EN `main` уже есть, в PR его не трогали, gate решил «нет файла» и обнулил страницу.
+- Фикс: `missing_relative_includes` / `check_publication_gates` принимают `exists`. В runtime `exists` сначала смотрит overlay (явный `None` = удалили в этом PR), иначе читает translation base через GitHub. Include, который уже лежит на целевом снимке, не валит страницу. Нет ни на overlay, ни на base: по-прежнему `missing_include_target` → null.
+- Оба поведения закрыты focused-тестами: glossary с существующим EN и чужим якорем не расширяет scope; include, который «есть на диске» через `exists`, gates не валит.
+
+## 2026-10-04 17:55 UTC
+<!-- 5f9aad37d32defd6 -->
+- Тесты были. Они зелёные. CI не противоречит им: я подтвердил не ту ветку, которая в этом PR делает RED.
+- `structure.md`.** Гипотеза «gate смотрит только overlay PR, include уже есть на EN main» совпала с CI. Тест: `test_existing_target_include_is_not_missing`. На `2ce19f3` страница реально уехала в [#55031](https://github.com/ydb-platform/ydb/pull/55031). Этот фикс сработал.
+- Glossary.** Локально я подтвердил факты: EN-файл есть, 9 якорей нет, в логе `glossary.md` document 1/12, `transport`. Отсюда вывод: missing-anchor тащит его как dependency. Тесты закрыли **только это**: `test_existing_target_missing_linked_anchor_does_not_add_glossary_to_scope` и правка `test_pr50858_fixture…`. В фикстуре parent это `article.md` / changelog, glossary в inventory **нет**.
+- В #42314 glossary в inventory **есть**: в PR меняется `ydb/docs/ru/core/concepts/glossary.md`. Python зеркалит его как обычную source-страницу (§1.2), dependency-scope тут ни при чём. Поэтому CI на новом SHA снова переводил 473 поля whole-file и снова ловил `transport`. Теста вида «RU glossary изменён в PR, EN уже есть → не whole-file / не null при fail» не было.
+- Коротко: локально подтвердился механизм missing-anchor. Он на этом PR не единственный и не решающий. Решающий путь я не проверил по списку файлов source PR до рестарта.
+
+## 2026-10-04 18:02 UTC
+<!-- f04aed3fdee30949 -->
+- Тесты (14 passed): `test_structural_insert_appends_hunk_on_existing_target`, `test_glossary_tail_insert_does_not_whole_file_existing_english`, `test_runtime_translates_only_inserted_glossary_tail` (в промпте модели нет `KiKiMR`, есть только новый якорь). Старый тест, который **фиксировал** insert → whole-file, переписан.
+
+## 2026-10-04 18:43 UTC
+<!-- ddc2788cfa04b1a1 -->
+- Арбитр ещё пишет possible duplicate `structure.md` vs `async-replication.md` / `cdc.md`. Сборочные `release-asan` и `relwithdebinfo` упали; это не semantic verdict.
+
+## 2026-10-04 18:52 UTC
+<!-- 253babbb032f5b5c -->
+- Три ошибки в переведённых файлах:
+
+## 2026-10-04 19:16 UTC
+<!-- 28bb56af88a854cf -->
+- Это bounded-изменение поверх уже существующих publication gates. Ниже причина и что добавить. Код не трогаю, пока не скажешь делать.
+- Пайплайн считает файл готовым после трёх дешёвых проверок: кириллица, split-backtick, include на диске. Markdownlint, которым валится `ya make ydb/docs`, туда не входит. Модель имеет право сломать разметку, Python это не ловит, арбитр ставит GREEN.
+- Что добавить**
+- Тесты: склейка glossary-хвоста из #55042; `check-backup.md`, который потерял стартовый ` ```bash `, не проходит gate.
+
+## 2026-10-04 19:20 UTC
+<!-- yfm-md-gates -->
+- YFM RED на #55042: MD022 glossary (insert-hunk без blank перед `###`), MD040 `check-backup.md` (модель съела ` ```bash `).
+- Добавлены `join_insert_hunk` и gates `heading_blank_lines` / `unlabeled_fence_opener`. Тесты: glossary splice, unlabeled opener, dropped bash fence. REQUIREMENTS §2.3.

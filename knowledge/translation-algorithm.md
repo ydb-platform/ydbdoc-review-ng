@@ -19,7 +19,10 @@ Unique string replacements без модели, если возможно. Inser
 дописывает его в конец EN. Иначе **thin whole-file**: полный source Markdown →
 DeepSeek → полный target Markdown. Placeholders нет.
 После ответа: normalize split-backtick, затем publication gates
-(`source_locale_echo`, `split_backtick_identifiers`, `missing_include_target`).
+(`source_locale_echo`, `split_backtick_identifiers`, `missing_include_target`,
+`heading_blank_lines`, `unlabeled_fence_opener`).
+Insert-only: Python добавляет пустую строку перед ATX-заголовком на стыке с
+существующим EN, если модель её съела.
 Один retry; провал → файл null, не soft-publish полу-EN.
 
 ## TOC

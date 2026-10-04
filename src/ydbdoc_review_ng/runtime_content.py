@@ -141,7 +141,11 @@ from ydbdoc_review_ng.translation.split_backtick import (
     count_split_backtick_identifiers,
     normalize_split_backtick_identifiers,
 )
-from ydbdoc_review_ng.translation.surgical import SurgicalMode, plan_surgical_update
+from ydbdoc_review_ng.translation.surgical import (
+    SurgicalMode,
+    join_insert_hunk,
+    plan_surgical_update,
+)
 from ydbdoc_review_ng.translation.thin import (
     build_thin_translate_prompt,
     thin_developer_prompt,
@@ -2174,7 +2178,10 @@ class RuntimeContent:
                     for span, restored in sorted(
                         translated_hunks, key=lambda item: item[0][0], reverse=True
                     ):
-                        patched = patched[: span[0]] + restored + patched[span[1] :]
+                        piece = restored
+                        if span[0] == span[1]:
+                            piece = join_insert_hunk(patched[: span[0]], restored)
+                        patched = patched[: span[0]] + piece + patched[span[1] :]
                     surgical_candidate = patched
 
         def assembly_failure(stage: str, error: Exception) -> None:

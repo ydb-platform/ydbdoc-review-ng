@@ -12,6 +12,26 @@ from dataclasses import dataclass
 from enum import Enum
 
 _LINK_DESTINATION = re.compile(rb"\]\(([^)\s]+)")
+_ATX_HEADING_LINE = re.compile(rb"^#{1,6}(?:\s|$)")
+
+
+def join_insert_hunk(existing: bytes, insert: bytes) -> bytes:
+    """Keep a blank line between existing target prose and an inserted ATX heading."""
+    if not insert or not existing:
+        return insert
+    lines = insert.split(b"\n")
+    first_content = 0
+    while first_content < len(lines) and lines[first_content] == b"":
+        first_content += 1
+    if first_content >= len(lines) or not _ATX_HEADING_LINE.match(lines[first_content]):
+        return insert
+    if first_content > 0:
+        return insert
+    if existing.endswith(b"\n\n"):
+        return insert
+    if existing.endswith(b"\n"):
+        return b"\n" + insert
+    return b"\n\n" + insert
 
 
 class SurgicalMode(str, Enum):

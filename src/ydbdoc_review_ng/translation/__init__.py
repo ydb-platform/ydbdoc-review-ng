@@ -55,6 +55,7 @@ from ydbdoc_review_ng.translation.surgical import (
     SurgicalMode,
     SurgicalPlan,
     apply_unique_replacements,
+    join_insert_hunk,
     plan_surgical_update,
 )
 
@@ -89,6 +90,7 @@ __all__ = [
     "count_split_backtick_identifiers",
     "document_operator_guidance",
     "document_placeholder_context",
+    "join_insert_hunk",
     "normalize_split_backtick_identifiers",
     "parse_translation_response",
     "plan_surgical_update",

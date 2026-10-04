@@ -66,7 +66,8 @@ provider error / невалидном JSON. Вторая неудача → job 
   (уникальные замены URL/строк без модели и без presentation-map; иначе модель
   переводит только выровненные hunks; **insert-only** дельта, которую нельзя
   выровнять по EN, переводится как один hunk и дописывается в конец
-  существующего target). Whole-file перевод — fallback, если
+  существующего target; на стыке Python гарантирует пустую строку перед
+  ATX-заголовком). Whole-file перевод — fallback, если
   выровнять нельзя, target/source-before нет, или дельта смешанная replace+insert;
 - delete → удалить парный target;
 - rename → зеркально переименовать target; если содержимое ещё изменилось → перевести;
@@ -168,6 +169,10 @@ Soft-publish полупереведённого UTF-8 с кириллицей в
 | `source_locale_echo` | в EN остались кириллические runs (≥3 букв); симметрично для EN→RU по мере поддержки |
 | `split_backtick_identifiers` | после normalize остались `` `a`_`b` `` / `a`_`b` / `` `_`x `` |
 | `missing_include_target` | relative `{% include %}` destination нет в результирующем target tree: overlay этого PR **или** уже существующий файл на translation base |
+| `heading_blank_lines` | ATX-заголовок без пустой строки сверху или снизу (кроме начала/конца файла); внутри code fence не считается |
+| `unlabeled_fence_opener` | открывающий ` ``` ` без языка (закрывающий unlabeled допустим) |
+
+Insert-only surgical: Python стыкует переведённый hunk с существующим EN. Если hunk начинается с ATX-заголовка, а EN перед стыком не заканчивается пустой строкой, Python вставляет `\n` без модели.
 
 Провал → один retry → иначе файл = null, публичный RED finding. Успех →
 файл публикуется как reviewed (tool-critic не вызывается).

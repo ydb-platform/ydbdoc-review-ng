@@ -8,7 +8,9 @@ Semantic flow в `REQUIREMENTS_RU.md`:
 2. Direction: только «нужен перевод?» + направление (Python владеет Git-ops).
 3. Thin whole-file DeepSeek (или unique string replacements без модели).
 4. Publication gates fail-closed: source-locale echo, split-backtick, missing
-   includes. Один retry; иначе null.
+   includes, ATX heading blank lines, unlabeled fence openers. Один retry;
+   иначе null.
+   Insert-only splice: blank line before a heading-starting hunk.
 5. Tool-using critic **снят**. Reviewed = gated publish.
 6. Arbiter на reviewed bytes: GREEN / YELLOW / RED (judge-only, no repair).
 7. YELLOW = успех; RED = continue / ручная правка + `doc_verify`.
