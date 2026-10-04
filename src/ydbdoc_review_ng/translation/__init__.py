@@ -37,6 +37,10 @@ from ydbdoc_review_ng.translation.presentation import (
     apply_presentation_map,
     build_presentation_map,
 )
+from ydbdoc_review_ng.translation.split_backtick import (
+    count_split_backtick_identifiers,
+    normalize_split_backtick_identifiers,
+)
 from ydbdoc_review_ng.translation.surgical import (
     SurgicalHunk,
     SurgicalMode,
@@ -70,8 +74,10 @@ __all__ = [
     "build_document_prompt",
     "build_presentation_map",
     "build_translation_request",
+    "count_split_backtick_identifiers",
     "document_operator_guidance",
     "document_placeholder_context",
+    "normalize_split_backtick_identifiers",
     "parse_translation_response",
     "plan_surgical_update",
     "prepare_document",

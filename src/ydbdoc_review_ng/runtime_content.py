@@ -136,6 +136,10 @@ from ydbdoc_review_ng.translation.document import (
     verify_document_candidate_with_links,
 )
 from ydbdoc_review_ng.translation.language import validate_translated_prose
+from ydbdoc_review_ng.translation.split_backtick import (
+    count_split_backtick_identifiers,
+    normalize_split_backtick_identifiers,
+)
 from ydbdoc_review_ng.translation.surgical import SurgicalMode, plan_surgical_update
 from ydbdoc_review_ng.translation_plan import (
     PathKind,
@@ -2145,6 +2149,18 @@ class RuntimeContent:
                 source_snapshot=document.plan.source_snapshot,
                 source_path=entry.pair.target_path,
             )
+        mangled = count_split_backtick_identifiers(candidate)
+        if mangled:
+            write_trace(
+                "translation",
+                "document_assembly",
+                "ok",
+                article=entry.pair.target_path.value,
+                stage="normalize_split_backtick_identifiers",
+                code="split_backtick_repair",
+                entries_total=mangled,
+            )
+            candidate = normalize_split_backtick_identifiers(candidate)
         try:
             candidate_plan = build_markdown_plan(
                 document.plan.source_snapshot, entry.pair.target_path, candidate
