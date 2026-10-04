@@ -126,6 +126,9 @@ front matter `title`/`description`, заголовки YFM note/cut/tab, ком�
 
 Модель обязана сохранить YFM/Diplodoc markup, `{% include %}`, code fences,
 paths, identifiers, flags, templates (`{{ ydb-short-name }}` и т.п.).
+Thin unwrap снимает только обёртку всего ответа (` ``` ` / ` ```markdown ` /
+` ```md `). Файл, который сам начинается с ` ```bash ` / ` ```text `, это
+документ, не обёртка: открывающий fence не трогать.
 Запрещён split-backtick underscore mangling (`log`_`config`, `word`_`word`,
 `` `_`path ``). После ответа Python нормализует известные mangling-паттерны,
 затем гоняет publication gates (§2.3).

@@ -59,18 +59,23 @@ def thin_developer_prompt() -> str:
     return _THIN_SYSTEM
 
 
+_WRAPPER_INFO = frozenset({"", "markdown", "md"})
+
+
 def unwrap_thin_response(text: str, /) -> str:
-    """Strip accidental whole-file fences from a model response."""
+    """Strip a provider whole-file wrapper, not a document that starts with a fence."""
     if type(text) is not str:
         raise TypeError("text must be str")
     body = text.strip("\n")
-    if body.startswith("```"):
-        lines = body.splitlines()
-        if lines and lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        body = "\n".join(lines)
+    lines = body.splitlines()
+    if len(lines) >= 2:
+        first = lines[0].lstrip()
+        last = lines[-1].strip()
+        if first.startswith("```") and last == "```":
+            info = first[3:].strip()
+            lang = info.split()[0].lower() if info else ""
+            if lang in _WRAPPER_INFO:
+                body = "\n".join(lines[1:-1])
     if body and not body.endswith("\n"):
         body += "\n"
     return body
