@@ -8,7 +8,9 @@ from ydbdoc_review_ng.domain import (
     RepositoryId,
     SnapshotRef,
 )
+from ydbdoc_review_ng.models.types import ModelCallResult
 from ydbdoc_review_ng.locales import PairKey
+from ydbdoc_review_ng.models.types import ModelCallResult
 from ydbdoc_review_ng.parser.markdown import build_markdown_plan
 from ydbdoc_review_ng.runtime_content import Document, RuntimeContent
 from ydbdoc_review_ng.scope import FileOperation, ScopeEntry, ScopeOrigin
@@ -64,14 +66,33 @@ def test_identical_source_versions_fall_back_to_whole_file() -> None:
     assert plan.patched_target is None
 
 
-def test_structural_insert_falls_back_to_whole_file() -> None:
+def test_structural_insert_appends_hunk_on_existing_target() -> None:
     plan = plan_surgical_update(
         b"* One\n",
         b"* One\n* Two\n",
         b"* One\n",
     )
-    assert plan.mode is SurgicalMode.WHOLE_FILE
-    assert plan.patched_target is None
+    assert plan.mode is SurgicalMode.HUNKS
+    assert len(plan.hunks) == 1
+    hunk = plan.hunks[0]
+    assert hunk.source_after == b"* Two\n"
+    assert hunk.existing_target_fragment == b""
+    assert hunk.target_span == (len(b"* One\n"), len(b"* One\n"))
+
+
+def test_glossary_tail_insert_does_not_whole_file_existing_english() -> None:
+    source_before = b"### KiKiMR {#kikimr}\n\n**KiKiMR** is the old name.\n"
+    source_after = source_before + (
+        "\n### Recovery-режим таблетки {#tablet-recovery-mode}\n\n"
+        "**Recovery-режим** — режим восстановления.\n"
+    ).encode()
+    existing_en = b"### KiKiMR {#kikimr}\n\n**KiKiMR** is the old name.\n"
+    plan = plan_surgical_update(source_before, source_after, existing_en)
+    assert plan.mode is SurgicalMode.HUNKS
+    assert len(plan.hunks) == 1
+    assert b"tablet-recovery-mode" in plan.hunks[0].source_after
+    assert b"**KiKiMR** is the old name." not in plan.hunks[0].source_after
+    assert plan.hunks[0].target_span == (len(existing_en), len(existing_en))
 
 
 def test_prose_change_with_shared_url_yields_located_hunk() -> None:
@@ -231,3 +252,38 @@ def test_runtime_surgical_uses_pr_change_snapshot_not_later_main_source() -> Non
     _accepted, translated = content._translate_document(_document(later_main, existing_en))
 
     assert translated.translated_markdown == "* Enable views in [cfg](" + NEW.decode() + ").\n"
+
+
+class _InsertOnlyModels:
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    def invoke(self, request) -> ModelCallResult:
+        self.prompts.append(request.prompt)
+        assert "KiKiMR" not in request.prompt
+        assert "tablet-recovery-mode" in request.prompt
+        return ModelCallResult(
+            "### Tablet recovery mode {#tablet-recovery-mode}\n\n"
+            "**Recovery mode** is the restore mode.\n",
+            None,
+            (),
+        )
+
+
+def test_runtime_translates_only_inserted_glossary_tail() -> None:
+    source_before = "### KiKiMR {#kikimr}\n\n**KiKiMR** — старое имя.\n".encode()
+    inserted = (
+        "\n### Recovery-режим таблетки {#tablet-recovery-mode}\n\n"
+        "**Recovery-режим** — режим восстановления.\n"
+    ).encode()
+    source_after = source_before + inserted
+    existing_en = b"### KiKiMR {#kikimr}\n\n**KiKiMR** is the old name.\n"
+    models = _InsertOnlyModels()
+    content = RuntimeContent(_SourceBefore(source_before, source_after), models, {})
+    _accepted, translated = content._translate_document(_document(source_after, existing_en))
+    assert translated.translated_markdown == (
+        existing_en.decode()
+        + "### Tablet recovery mode {#tablet-recovery-mode}\n\n"
+        + "**Recovery mode** is the restore mode.\n"
+    )
+    assert len(models.prompts) == 1

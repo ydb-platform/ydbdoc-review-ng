@@ -2001,102 +2001,25 @@ class RuntimeContent:
                 return response, None, False
             raise AssertionError("translation technical attempt bound exhausted")
 
-        surgical_candidate: bytes | None = None
-        surgical_mode: SurgicalMode | None = None
-        source_before = _read_source_before(self.source, entry.pair.source_path)
-        source_after = (
-            _read_source_snapshot(self.source, "source_change_snapshot", entry.pair.source_path)
-            or document.source
-        )
-        if target_reference_bytes is not None and source_before is not None:
-            surgical = plan_surgical_update(
-                source_before, source_after, target_reference_bytes
-            )
-            surgical_mode = surgical.mode
-            write_trace(
-                "translation",
-                "surgical",
-                "ok",
-                article=entry.pair.target_path.value,
-                code=surgical.mode.value,
-            )
-            if (
-                surgical.mode is SurgicalMode.UNIQUE_REPLACEMENTS
-                and surgical.patched_target is not None
-            ):
-                surgical_candidate = surgical.patched_target
-                self._unique_replacement_targets.add(entry.pair.target_path.value)
-            elif surgical.mode is SurgicalMode.HUNKS:
-                patched = target_reference_bytes
-                translated_hunks: list[tuple[tuple[int, int], bytes]] = []
-                for hunk_index, hunk in enumerate(surgical.hunks, start=1):
-                    hunk_plan = build_markdown_plan(
-                        document.plan.source_snapshot,
-                        entry.pair.source_path,
-                        hunk.source_after,
-                    )
-                    hunk_prepared = prepare_document(
-                        hunk.source_after,
-                        hunk_plan,
-                        link_resolver=link_resolver,
-                    )
-                    with traced(
-                        "translation",
-                        "chunk",
-                        article=entry.pair.target_path.value,
-                        chunk_index=hunk_index,
-                        chunks_total=len(surgical.hunks),
-                    ):
-                        accepted_response, _failure, _invalid = invoke_chunk(
-                            hunk_prepared.chunks[0],
-                            hunk_index,
-                            prepared_doc=hunk_prepared,
-                            presentation_bytes=hunk.existing_target_fragment,
-                            chunks_total=len(surgical.hunks),
-                            semantic_baseline=True,
-                        )
-                    if accepted_response is None:
-                        translated_hunks = []
-                        break
-                    try:
-                        restored = restore_document(
-                            hunk.source_after,
-                            hunk_plan,
-                            hunk_prepared,
-                            (accepted_response,),
-                            allow_structure_diagnostics=True,
-                        )
-                    except (DocumentTranslationError, ValueError, TypeError, UnicodeError):
-                        translated_hunks = []
-                        break
-                    translated_hunks.append((hunk.target_span, restored))
-                if translated_hunks:
-                    for span, restored in sorted(
-                        translated_hunks, key=lambda item: item[0][0], reverse=True
-                    ):
-                        patched = patched[: span[0]] + restored + patched[span[1] :]
-                    surgical_candidate = patched
-
-        def assembly_failure(stage: str, error: Exception) -> None:
-            write_trace(
-                "translation",
-                "document_assembly",
-                "fail",
-                article=entry.pair.target_path.value,
-                stage=stage,
-                code=str(error),
-                error_type=type(error).__name__,
-            )
-            raise InvalidTranslationResponse("translation_response_invalid") from None
-
-        def thin_translate_document() -> bytes:
+        def thin_translate_document(
+            *,
+            source_bytes: bytes | None = None,
+            existing_bytes: bytes | None | object = ...,
+        ) -> bytes:
             """Whole-file Markdown in/out without placeholders (thin algorithm)."""
-            source_text = document.source.decode("utf-8")
-            existing = (
-                None
-                if target_reference_bytes is None
-                else target_reference_bytes.decode("utf-8")
-            )
+            payload = document.source if source_bytes is None else source_bytes
+            source_text = payload.decode("utf-8")
+            if existing_bytes is ...:
+                existing = (
+                    None
+                    if target_reference_bytes is None
+                    else target_reference_bytes.decode("utf-8")
+                )
+            elif existing_bytes is None or existing_bytes == b"":
+                existing = None
+            else:
+                assert isinstance(existing_bytes, bytes)
+                existing = existing_bytes.decode("utf-8")
             note: str | None = None
             previous: str | None = None
             for attempt in (1, 2):
@@ -2167,9 +2090,116 @@ class RuntimeContent:
                 )
             raise InvalidTranslationResponse("translation_publication_gates_failed")
 
+        surgical_candidate: bytes | None = None
+        surgical_mode: SurgicalMode | None = None
+        source_before = _read_source_before(self.source, entry.pair.source_path)
+        source_after = (
+            _read_source_snapshot(self.source, "source_change_snapshot", entry.pair.source_path)
+            or document.source
+        )
+        if target_reference_bytes is not None and source_before is not None:
+            surgical = plan_surgical_update(
+                source_before, source_after, target_reference_bytes
+            )
+            surgical_mode = surgical.mode
+            write_trace(
+                "translation",
+                "surgical",
+                "ok",
+                article=entry.pair.target_path.value,
+                code=surgical.mode.value,
+            )
+            if (
+                surgical.mode is SurgicalMode.UNIQUE_REPLACEMENTS
+                and surgical.patched_target is not None
+            ):
+                surgical_candidate = surgical.patched_target
+                self._unique_replacement_targets.add(entry.pair.target_path.value)
+            elif surgical.mode is SurgicalMode.HUNKS:
+                patched = target_reference_bytes
+                translated_hunks: list[tuple[tuple[int, int], bytes]] = []
+                for hunk_index, hunk in enumerate(surgical.hunks, start=1):
+                    if hunk.target_span[0] == hunk.target_span[1] and not hunk.existing_target_fragment:
+                        try:
+                            restored = thin_translate_document(
+                                source_bytes=hunk.source_after,
+                                existing_bytes=b"",
+                            )
+                        except (InvalidTranslationResponse, RuntimeBoundaryError):
+                            translated_hunks = []
+                            break
+                        translated_hunks.append((hunk.target_span, restored))
+                        continue
+                    hunk_plan = build_markdown_plan(
+                        document.plan.source_snapshot,
+                        entry.pair.source_path,
+                        hunk.source_after,
+                    )
+                    hunk_prepared = prepare_document(
+                        hunk.source_after,
+                        hunk_plan,
+                        link_resolver=link_resolver,
+                    )
+                    with traced(
+                        "translation",
+                        "chunk",
+                        article=entry.pair.target_path.value,
+                        chunk_index=hunk_index,
+                        chunks_total=len(surgical.hunks),
+                    ):
+                        accepted_response, _failure, _invalid = invoke_chunk(
+                            hunk_prepared.chunks[0],
+                            hunk_index,
+                            prepared_doc=hunk_prepared,
+                            presentation_bytes=hunk.existing_target_fragment,
+                            chunks_total=len(surgical.hunks),
+                            semantic_baseline=True,
+                        )
+                    if accepted_response is None:
+                        translated_hunks = []
+                        break
+                    try:
+                        restored = restore_document(
+                            hunk.source_after,
+                            hunk_plan,
+                            hunk_prepared,
+                            (accepted_response,),
+                            allow_structure_diagnostics=True,
+                        )
+                    except (DocumentTranslationError, ValueError, TypeError, UnicodeError):
+                        translated_hunks = []
+                        break
+                    translated_hunks.append((hunk.target_span, restored))
+                if translated_hunks:
+                    for span, restored in sorted(
+                        translated_hunks, key=lambda item: item[0][0], reverse=True
+                    ):
+                        patched = patched[: span[0]] + restored + patched[span[1] :]
+                    surgical_candidate = patched
+
+        def assembly_failure(stage: str, error: Exception) -> None:
+            write_trace(
+                "translation",
+                "document_assembly",
+                "fail",
+                article=entry.pair.target_path.value,
+                stage=stage,
+                code=str(error),
+                error_type=type(error).__name__,
+            )
+            raise InvalidTranslationResponse("translation_response_invalid") from None
+
         if surgical_candidate is not None:
             candidate = surgical_candidate
-            if surgical_mode is not SurgicalMode.UNIQUE_REPLACEMENTS:
+            insert_only_append = (
+                surgical_mode is SurgicalMode.HUNKS
+                and target_reference_bytes is not None
+                and surgical_candidate.startswith(target_reference_bytes)
+            )
+            if (
+                surgical_mode is not SurgicalMode.UNIQUE_REPLACEMENTS
+                and not insert_only_append
+            ):
                 presentation = build_presentation_map(
                     target_reference_bytes,
                     source_snapshot=document.plan.source_snapshot,

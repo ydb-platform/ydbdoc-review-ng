@@ -190,6 +190,22 @@ def plan_surgical_update(
             patched = existing_target
         if patched is not None:
             return SurgicalPlan(SurgicalMode.UNIQUE_REPLACEMENTS, patched_target=patched)
+    line_hunks = _changed_line_hunks(source_before, source_after)
+    if line_hunks and all(not before for before, after in line_hunks) and all(
+        after for _before, after in line_hunks
+    ):
+        inserted = b"".join(after for _before, after in line_hunks)
+        end = len(existing_target)
+        return SurgicalPlan(
+            SurgicalMode.HUNKS,
+            hunks=(
+                SurgicalHunk(
+                    source_after=inserted,
+                    existing_target_fragment=b"",
+                    target_span=(end, end),
+                ),
+            ),
+        )
     hunks: list[SurgicalHunk] = []
     for before_hunk, after_hunk in _changed_line_hunks(source_before, source_after):
         if not after_hunk:

@@ -42,7 +42,10 @@ existing EN glossary (missing-anchor exception) died on provider `transport`;
 `structure.md` nulled because include-gate saw only in-flight files, not
 `_includes/tpch-dataset-note.md` already on main.
 
-Now: existing glossary file stops scope; missing anchors are diagnostics.
+Now: existing glossary file stops *dependency* scope; missing anchors are
+diagnostics. Insert-only inventory delta on an existing EN glossary is a
+surgical hunk (thin-translate the new section, append), not whole-file.
+
 Include gate accepts target-snapshot files that this PR did not touch.
 
 ## Tip pin

@@ -64,8 +64,10 @@ provider error / невалидном JSON. Вторая неудача → job 
   и не текущий tip `main`), runtime сначала пробует
   **surgical update**: перенести только source-delta на существующий target
   (уникальные замены URL/строк без модели и без presentation-map; иначе модель
-  переводит только выровненные hunks). Whole-file перевод — fallback, если
-  выровнять нельзя или target/source-before нет;
+  переводит только выровненные hunks; **insert-only** дельта, которую нельзя
+  выровнять по EN, переводится как один hunk и дописывается в конец
+  существующего target). Whole-file перевод — fallback, если
+  выровнять нельзя, target/source-before нет, или дельта смешанная replace+insert;
 - delete → удалить парный target;
 - rename → зеркально переименовать target; если содержимое ещё изменилось → перевести;
 - locale-relative resource/binary → copy/delete/rename без модели;
@@ -113,8 +115,9 @@ source PR с именем лимита. Для старого слитого PR 
   Выход = полный target Markdown. Opaque placeholders **не** используются.
   Внутридокументного chunking нет. Лимит размера — только
   `YDBDOC_MAX_SOURCE_CHARACTERS`.
-- Surgical hunks с placeholders — legacy path; новые правки идут в thin
-  whole-file или unique replacements.
+- Surgical hunks с placeholders — legacy path для выровненных правок. Insert-only
+  source-delta на существующий target: thin translate **только вставки**, append
+  в конец target. Whole-file — если выровнять нельзя.
 
 Переводимы: проза, заголовки, списки, таблицы, подписи ссылок, `alt`,
 front matter `title`/`description`, заголовки YFM note/cut/tab, комментарии
