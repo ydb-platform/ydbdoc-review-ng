@@ -100,6 +100,58 @@ def _heading_blank_line_problems(text: str) -> tuple[str, ...]:
     return tuple(problems)
 
 
+def _is_prose_line(line: str) -> bool:
+    stripped = line.lstrip()
+    if not stripped:
+        return False
+    if _ATX_HEADING.match(line):
+        return False
+    if stripped.startswith(("```", "{%", "|", ">")):
+        return False
+    if stripped.startswith(("- ", "* ", "+ ")):
+        return False
+    if len(stripped) >= 2 and stripped[0].isdigit() and stripped[1] in ".)":
+        return False
+    return (
+        stripped[0].isalpha()
+        or stripped.startswith(("**", "[", "`", "_", "*", '"', "'"))
+    )
+
+
+def join_soft_wrapped_prose(draft: bytes, /) -> bytes:
+    """Join adjacent prose lines into one paragraph (YFM soft-break repair)."""
+    if type(draft) is not bytes:
+        raise TypeError("draft must be exact bytes")
+    text = draft.decode("utf-8")
+    lines = text.splitlines()
+    in_fence = False
+    outside: list[bool] = []
+    for line in lines:
+        stripped = line.lstrip()
+        outside.append(not in_fence)
+        if stripped.startswith("```"):
+            in_fence = not in_fence
+    if not lines:
+        return draft if draft.endswith(b"\n") or not draft else draft + b"\n"
+    merged: list[str] = [lines[0]]
+    for index in range(1, len(lines)):
+        previous = merged[-1]
+        current = lines[index]
+        if (
+            outside[index - 1]
+            and outside[index]
+            and _is_prose_line(previous)
+            and _is_prose_line(current)
+        ):
+            merged[-1] = previous.rstrip() + " " + current.lstrip()
+        else:
+            merged.append(current)
+    body = "\n".join(merged)
+    if draft.endswith(b"\n") or body:
+        body += "\n"
+    return body.encode("utf-8")
+
+
 def _unlabeled_fence_openers(text: str) -> int:
     in_fence = False
     unlabeled = 0

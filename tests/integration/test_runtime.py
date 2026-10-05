@@ -1894,6 +1894,61 @@ def test_two_new_pages_accumulate_into_one_toc_candidate():
     assert pending["ydb/docs/en/core/toc.yaml"].count(b"href:") == 2
 
 
+def test_metadata_producer_inserts_nested_source_group_not_flat_basename_tail():
+    import yaml
+    from ydbdoc_review_ng.domain import GitSha, RepoPath, RepositoryId, SnapshotRef
+    from ydbdoc_review_ng.runtime_metadata import MetadataProducer
+
+    source = SnapshotRef(RepositoryId("ydb-platform/ydb"), GitSha("a" * 40))
+    target = SnapshotRef(source.repository, GitSha("b" * 40))
+    ru_toc = (
+        b"items:\n"
+        b"- name: Plans\n  href: plans.md\n"
+        b"- name: Graphical query plan\n  items:\n"
+        b"  - name: Layout RU\n    href: layout.md\n"
+        b"  - name: Structure RU\n    href: structure.md\n"
+        b"  - name: Metrics RU\n    href: metrics.md\n"
+        b"- name: Hints\n  href: hints.md\n"
+    )
+    en_toc = (
+        b"items:\n"
+        b"- name: Query execution plan\n  href: plans.md\n"
+        b"- name: Optimizer hints\n  href: hints.md\n"
+    )
+
+    class Reader:
+        def read_bytes(self, snapshot, path):
+            if path.value.endswith("toc_p.yaml"):
+                return ru_toc if snapshot == source else en_toc
+            return None
+
+    pending = {}
+    producer = MetadataProducer(
+        Reader(),
+        source,
+        target,
+        (RepoPath("ydb/docs/ru/core/dev/optimization/toc_p.yaml"),),
+        pending=pending,
+    )
+    for name in ("layout", "structure", "metrics"):
+        for change in producer.changes(
+            RepoPath(f"ydb/docs/ru/core/dev/optimization/{name}.md"),
+            RepoPath(f"ydb/docs/en/core/dev/optimization/{name}.md"),
+            new=True,
+        ):
+            pending[change.path.value] = change.after
+    items = yaml.safe_load(pending["ydb/docs/en/core/dev/optimization/toc_p.yaml"])["items"]
+    assert items[0] == {"name": "Query execution plan", "href": "plans.md"}
+    assert items[1]["name"] == "Graphical query plan"
+    assert [child["href"] for child in items[1]["items"]] == [
+        "layout.md",
+        "structure.md",
+        "metrics.md",
+    ]
+    assert items[2] == {"name": "Optimizer hints", "href": "hints.md"}
+    assert not any(item.get("name") in {"layout", "structure", "metrics"} for item in items)
+
+
 def test_pr50839_full_runtime_plan_publishes_exact_complete_toc() -> None:
     from ydbdoc_review_ng.application import TranslateWorkflowInput
     from ydbdoc_review_ng.domain import GitSha

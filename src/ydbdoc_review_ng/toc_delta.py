@@ -124,6 +124,37 @@ def _toc_navigation_references(content: bytes) -> frozenset[str]:
     return frozenset(found)
 
 
+def remove_toc_hrefs(content: bytes, hrefs: set[str] | frozenset[str]) -> bytes:
+    """Drop leaf entries by href and prune groups left without children."""
+
+    wanted = {item for item in hrefs if item}
+
+    def prune(items: list[Any]) -> list[dict[str, Any]]:
+        kept: list[dict[str, Any]] = []
+        for raw in items:
+            entry = _mapping(raw)
+            href = entry.get("href")
+            if type(href) is str and href in wanted:
+                continue
+            node = _copy_structure(entry)
+            assert type(node) is dict
+            children = node.get("items")
+            if type(children) is list:
+                pruned = prune(list(children))
+                if pruned:
+                    node["items"] = pruned
+                else:
+                    node.pop("items", None)
+                if "href" not in node and "include" not in node and "items" not in node:
+                    continue
+            kept.append(node)
+        return kept
+
+    root = _load_root(content)
+    root["items"] = prune(list(root.get("items") or []))
+    return _dump_root(root)
+
+
 def target_only_toc_references(source_after: bytes, target: bytes) -> frozenset[str]:
     """Return target navigation identities absent from the current source TOC."""
 

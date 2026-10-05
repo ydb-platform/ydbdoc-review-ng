@@ -217,6 +217,74 @@ def test_section3_comment_only_rewrite_preserves_target() -> None:
     assert result.string_changes == ()
 
 
+def test_remove_toc_hrefs_drops_leaf_and_empty_parent_group() -> None:
+    from ydbdoc_review_ng.toc_delta import remove_toc_hrefs
+
+    source = (
+        b"items:\n"
+        b"- name: Plans\n  href: plans.md\n"
+        b"- name: Graphical\n  items:\n"
+        b"  - name: Layout\n    href: layout.md\n"
+        b"  - name: Structure\n    href: structure.md\n"
+        b"- name: Hints\n  href: hints.md\n"
+    )
+    trimmed = remove_toc_hrefs(source, {"layout.md", "structure.md"})
+    assert _items(trimmed) == [
+        {"name": "Plans", "href": "plans.md"},
+        {"name": "Hints", "href": "hints.md"},
+    ]
+
+
+def test_section3_nested_group_add_inserts_section_after_neighbor() -> None:
+    before = (
+        b"items:\n"
+        b"- name: Plans\n  href: plans.md\n"
+        b"- name: Hints\n  href: hints.md\n"
+        b"- name: Params\n  href: parameterized-queries.md\n"
+    )
+    after = (
+        b"items:\n"
+        b"- name: Plans\n  href: plans.md\n"
+        b"- name: Graphical\n  items:\n"
+        b"  - name: Layout\n    href: layout.md\n"
+        b"  - name: Structure\n    href: structure.md\n"
+        b"  - name: Metrics\n    href: metrics.md\n"
+        b"- name: Hints\n  href: hints.md\n"
+        b"- name: Params\n  href: parameterized-queries.md\n"
+    )
+    target = (
+        b"items:\n"
+        b"- name: Query execution plan\n  href: plans.md\n"
+        b"- name: Optimizer hints\n  href: hints.md\n"
+        b"- name: Parameterized queries and recompilation\n  href: parameterized-queries.md\n"
+    )
+    result = apply_toc_delta(
+        before,
+        after,
+        target,
+        toc_path=RepoPath("ydb/docs/ru/core/dev/optimization/toc_p.yaml"),
+        translations={
+            "items/1/name": "Graphical query plan",
+            "items/1/0/name": "Information layout in a query plan",
+            "items/1/1/name": "Structure of the actual query plan",
+            "items/1/2/name": "Visualizing query metrics",
+        },
+    )
+    assert _items(result.content) == [
+        {"name": "Query execution plan", "href": "plans.md"},
+        {
+            "name": "Graphical query plan",
+            "items": [
+                {"name": "Information layout in a query plan", "href": "layout.md"},
+                {"name": "Structure of the actual query plan", "href": "structure.md"},
+                {"name": "Visualizing query metrics", "href": "metrics.md"},
+            ],
+        },
+        {"name": "Optimizer hints", "href": "hints.md"},
+        {"name": "Parameterized queries and recompilation", "href": "parameterized-queries.md"},
+    ]
+
+
 def test_apply_toc_delta_preserves_name_before_href_key_order() -> None:
     """Surgical delta must not rewrite untouched nodes by YAML key sort alone."""
     before = b"items:\n- name: Existing\n  href: existing.md\n"

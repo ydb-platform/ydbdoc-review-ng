@@ -16,6 +16,7 @@ from ydbdoc_review_ng.domain import RepoPath, SnapshotRef
 from ydbdoc_review_ng.ports import SnapshotReader
 from ydbdoc_review_ng.publication import FileChange
 from ydbdoc_review_ng.runtime_github import RuntimeBoundaryError
+from ydbdoc_review_ng.toc_delta import TocDeltaError, apply_toc_delta, remove_toc_hrefs
 
 _REDIRECT = re.compile(rb"(?m)^ *- from: *([^\r\n]+)\r?\n *to: *([^\r\n]+)\r?$")
 _TOC_NAME = re.compile(r"^toc(?:_[A-Za-z0-9-]+)?\.ya?ml$")
@@ -276,7 +277,44 @@ class MetadataProducer:
 
     def _toc_title(self, source_toc: _Toc, source_href: Any, target_path: RepoPath) -> str:
         source_name = _entry_name(source_toc, source_href, "unsupported_source_toc").value.strip()
-        return self._target_title(target_path) if _CYRILLIC.search(source_name) else source_name
+        if not _CYRILLIC.search(source_name):
+            return source_name
+        content = self._target_bytes(target_path)
+        basename = posixpath.basename(target_path.value).removesuffix(".md")
+        if content is not None:
+            match = _ATX_H1.search(content)
+            if match is not None:
+                try:
+                    title = match.group("title").decode("utf-8").strip()
+                except UnicodeError:
+                    title = ""
+                if title and title != basename:
+                    return title
+        # Keep source label for a later TOC-string translation pass.
+        return source_name
+
+    def _structural_add_from_source(
+        self,
+        *,
+        source_toc_path: str,
+        source_bytes: bytes,
+        source_href: str,
+        target_toc: RepoPath,
+        target_bytes: bytes | None,
+    ) -> bytes:
+        before = remove_toc_hrefs(source_bytes, {source_href})
+        try:
+            draft = apply_toc_delta(
+                before,
+                source_bytes,
+                target_bytes,
+                toc_path=RepoPath(source_toc_path),
+            )
+        except TocDeltaError as error:
+            raise RuntimeBoundaryError("unsupported_target_toc") from error
+        if draft.content is None:
+            raise RuntimeBoundaryError("unsupported_target_toc")
+        return draft.content
 
     def _nearest_target_toc(
         self, target_root: str, target_toc: RepoPath
@@ -482,10 +520,13 @@ class MetadataProducer:
                     changes.append(FileChange(target_toc, target_bytes, after))
                     continue
                 assert source_toc_view is not None
-                after = _append_toc(
-                    target_toc_view,
-                    relative,
-                    self._toc_title(source_toc_view, matches[0], target_path),
+                assert source_bytes is not None
+                after = self._structural_add_from_source(
+                    source_toc_path=source_toc,
+                    source_bytes=source_bytes,
+                    source_href=matches[0].value,
+                    target_toc=target_toc,
+                    target_bytes=target_bytes,
                 )
             changes.append(FileChange(target_toc, target_bytes, after))
         if old is not None:

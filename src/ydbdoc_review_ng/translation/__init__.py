@@ -40,6 +40,7 @@ from ydbdoc_review_ng.translation.presentation import (
 from ydbdoc_review_ng.translation.gates import (
     PublicationGateFailure,
     check_publication_gates,
+    join_soft_wrapped_prose,
 )
 from ydbdoc_review_ng.translation.split_backtick import (
     count_split_backtick_identifiers,
@@ -91,6 +92,7 @@ __all__ = [
     "document_operator_guidance",
     "document_placeholder_context",
     "join_insert_hunk",
+    "join_soft_wrapped_prose",
     "normalize_split_backtick_identifiers",
     "parse_translation_response",
     "plan_surgical_update",

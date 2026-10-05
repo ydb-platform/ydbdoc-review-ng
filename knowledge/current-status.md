@@ -18,6 +18,13 @@ Thin path has no placeholders. `unwrap_thin_response` used to drop the first
 and last fence of any file that starts with ` ``` `. That ate ` ```bash ` on
 `check-backup.md` (#55048 RED). Unwrap only ` ``` ` / ` ```markdown ` / ` ```md `
 wrappers around the whole response.
+
+## Nested TOC + soft wrap (2026-10-05)
+
+Metadata no longer flat-appends dependency pages as basename tails. It applies
+source TOC structure via `remove_toc_hrefs` + `apply_toc_delta`, then translates
+Cyrillic labels. Thin/hunk output runs `join_soft_wrapped_prose` so YFM soft
+breaks are repaired without rewriting untouched unique-replacement files.
 5. Tool-using critic **снят**. Reviewed = gated publish.
 6. Arbiter на reviewed bytes: GREEN / YELLOW / RED (judge-only, no repair).
 7. YELLOW = успех; RED = continue / ручная правка + `doc_verify`.

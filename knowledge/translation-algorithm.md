@@ -24,6 +24,9 @@ DeepSeek → полный target Markdown. Placeholders нет.
 `heading_blank_lines`, `unlabeled_fence_opener`).
 Insert-only: Python добавляет пустую строку перед ATX-заголовком на стыке с
 существующим EN, если модель её съела.
+Thin/hunk output: Python склеивает soft-wrapped prose в один абзац.
+Dependency/new page TOC: structural `apply_toc_delta` от source TOC (секции и
+соседи), не flat basename-append; затем TOC string translate.
 Один retry; провал → файл null, не soft-publish полу-EN.
 
 ## TOC

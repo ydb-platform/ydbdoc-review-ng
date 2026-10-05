@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from ydbdoc_review_ng.translation.gates import (
     check_publication_gates,
+    join_soft_wrapped_prose,
     missing_relative_includes,
 )
 
@@ -126,6 +127,34 @@ def test_dropped_opening_bash_fence_from_check_backup_fails() -> None:
         target_path="ydb/docs/en/core/recipes/backup/_includes/check-backup.md",
     )
     assert any(item.code == "unlabeled_fence_opener" for item in failures)
+
+
+def test_join_soft_wrapped_prose_merges_adjacent_paragraph_lines() -> None:
+    draft = (
+        b"**Hash shuffle** join is used to process data.\n"
+        b"Such columns are also called key columns.\n"
+    )
+    assert join_soft_wrapped_prose(draft) == (
+        b"**Hash shuffle** join is used to process data. "
+        b"Such columns are also called key columns.\n"
+    )
+    assert (
+        check_publication_gates(
+            join_soft_wrapped_prose(draft),
+            source_locale="ru",
+            target_path="ydb/docs/en/core/dev/optimization/structure.md",
+        )
+        == ()
+    )
+
+
+def test_blank_separated_paragraphs_are_not_joined() -> None:
+    draft = (
+        b"**Hash shuffle** join is used to process data.\n"
+        b"\n"
+        b"Such columns are also called key columns.\n"
+    )
+    assert join_soft_wrapped_prose(draft) == draft
 
 
 def test_existing_target_include_is_not_missing() -> None:

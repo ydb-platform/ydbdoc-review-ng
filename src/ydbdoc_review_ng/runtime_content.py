@@ -106,6 +106,8 @@ from ydbdoc_review_ng.toc_delta import (
     apply_toc_delta,
     build_toc_string_request,
     parse_toc_string_response,
+    remove_toc_hrefs,
+    target_only_toc_references,
     validate_target_only_toc_references,
 )
 from ydbdoc_review_ng.trace import traced, write_trace
@@ -136,7 +138,7 @@ from ydbdoc_review_ng.translation.document import (
     verify_document_candidate_with_links,
 )
 from ydbdoc_review_ng.translation.language import validate_translated_prose
-from ydbdoc_review_ng.translation.gates import check_publication_gates
+from ydbdoc_review_ng.translation.gates import check_publication_gates, join_soft_wrapped_prose
 from ydbdoc_review_ng.translation.split_backtick import (
     count_split_backtick_identifiers,
     normalize_split_backtick_identifiers,
@@ -1210,6 +1212,17 @@ class RuntimeContent:
         if translate:
             for entry in self.entries:
                 self._metadata(metadata_preparation, entry, files)
+            if selection.manifest is not None:
+                self._localize_metadata_tocs(
+                    files,
+                    preparation=metadata_preparation,
+                    source_locale=(
+                        "ru" if selection.manifest.direction is Direction.RU_TO_EN else "en"
+                    ),
+                    target_locale=(
+                        "en" if selection.manifest.direction is Direction.RU_TO_EN else "ru"
+                    ),
+                )
         else:
             noop_metadata: dict[str, bytes | None] = {}
             for entry in self.entries:
@@ -1741,6 +1754,71 @@ class RuntimeContent:
         accepted, _document = self._translate_document(document, operator_context=operator_context)
         return accepted
 
+    def _localize_metadata_tocs(
+        self,
+        files: dict[str, bytes | None],
+        /,
+        *,
+        preparation: FrozenPreparation,
+        source_locale: str,
+        target_locale: str,
+    ) -> None:
+        """Rebuild metadata TOC inserts from source structure and translate labels."""
+        source_root = self.roots.ru if source_locale == "ru" else self.roots.en
+        target_root = self.roots.en if source_locale == "ru" else self.roots.ru
+        base = preparation.metadata_snapshot
+        for path, content in list(files.items()):
+            if content is None:
+                continue
+            classified = classify_path(self.roots, RepoPath(path))
+            if classified.kind is not PathKind.TOC:
+                continue
+            source_toc_path = RepoPath(source_root.value + path[len(target_root.value) :])
+            source_bytes = self.source.github.read_bytes(
+                preparation.snapshots.source_snapshot, source_toc_path
+            )
+            if source_bytes is None:
+                continue
+            original = self.source.github.read_bytes(base, RepoPath(path))
+            added = {
+                ref.removeprefix("href:")
+                for ref in target_only_toc_references(original or b"items: []\n", content)
+                if ref.startswith("href:")
+            }
+            if not added and not re.search(r"[А-Яа-яЁё]", content.decode("utf-8", "ignore")):
+                continue
+            before = remove_toc_hrefs(source_bytes, added) if added else source_bytes
+            try:
+                draft = apply_toc_delta(
+                    before if added else None,
+                    source_bytes,
+                    original,
+                    toc_path=source_toc_path,
+                )
+            except TocDeltaError:
+                continue
+            if draft.content is None:
+                continue
+            if not draft.string_changes:
+                files[path] = draft.content
+                continue
+            try:
+                translations = self._translate_toc_strings(
+                    draft.string_changes,
+                    RepoPath(path),
+                    source_locale=source_locale,
+                    target_locale=target_locale,
+                )
+                files[path] = apply_toc_delta(
+                    before if added else None,
+                    source_bytes,
+                    original,
+                    toc_path=source_toc_path,
+                    translations=translations,
+                ).content
+            except TocStringTranslationError:
+                files[path] = None
+
     def _translate_toc_strings(
         self,
         changes: tuple[TocStringChange, ...],
@@ -2064,7 +2142,9 @@ class RuntimeContent:
                     previous = ""
                     continue
                 body = unwrap_thin_response(_normalize_provider_wrapping(result.text))
-                draft = normalize_split_backtick_identifiers(body.encode("utf-8"))
+                draft = join_soft_wrapped_prose(
+                    normalize_split_backtick_identifiers(body.encode("utf-8"))
+                )
                 failures = check_publication_gates(
                     draft,
                     source_locale=entry.pair.source_locale.value,
@@ -2178,9 +2258,9 @@ class RuntimeContent:
                     for span, restored in sorted(
                         translated_hunks, key=lambda item: item[0][0], reverse=True
                     ):
-                        piece = restored
+                        piece = join_soft_wrapped_prose(restored)
                         if span[0] == span[1]:
-                            piece = join_insert_hunk(patched[: span[0]], restored)
+                            piece = join_insert_hunk(patched[: span[0]], piece)
                         patched = patched[: span[0]] + piece + patched[span[1] :]
                     surgical_candidate = patched
 

@@ -177,6 +177,10 @@ Soft-publish полупереведённого UTF-8 с кириллицей в
 
 Insert-only surgical: Python стыкует переведённый hunk с существующим EN. Если hunk начинается с ATX-заголовка, а EN перед стыком не заканчивается пустой строкой, Python вставляет `\n` без модели.
 
+После thin translate Python склеивает soft-wrapped prose (две соседние prose-строки без blank) в один абзац. Не переписывает unique-replacement files целиком.
+
+Новая страница из source TOC (в т.ч. dependency): Python применяет structural TOC delta от source (parent section + соседи), а не плоский append basename в хвост. Кириллические `name` переводятся через TOC string map.
+
 Провал → один retry → иначе файл = null, публичный RED finding. Успех →
 файл публикуется как reviewed (tool-critic не вызывается).
 
