@@ -14,10 +14,12 @@
 
 ## Thin translator
 
-Unique string replacements без модели, если возможно. Insert-only дельта на
-существующий target: модель переводит только вставленный фрагмент, Python
-дописывает его в конец EN. Иначе **thin whole-file**: полный source Markdown →
-DeepSeek → полный target Markdown. Placeholders нет.
+Unique string replacements без модели, если возможно. Иначе выровненные hunks:
+привязка к EN по уникальному якорю из `before` (link destination → inline code
+→ `{#anchor}`); модель переводит только hunk. Insert-only без якоря: модель
+переводит вставленный фрагмент, Python дописывает в конец EN. Иначе
+**thin whole-file**: полный source Markdown → DeepSeek → полный target
+Markdown. Placeholders нет.
 После ответа: снять только обёртку ` ```markdown ` вокруг всего файла, не
 открывающий fence документа; normalize split-backtick, затем publication gates
 (`source_locale_echo`, `split_backtick_identifiers`, `missing_include_target`,

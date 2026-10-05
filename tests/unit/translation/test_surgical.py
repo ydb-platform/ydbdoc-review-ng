@@ -131,6 +131,50 @@ def test_prose_change_with_shared_url_yields_located_hunk() -> None:
     assert b"* Previous English" not in stitched
 
 
+def test_replace_plus_insert_locates_by_unique_inline_code_not_whole_file() -> None:
+    """#53033 authentication.md: mid-file replace+note without ](url) in before."""
+    source_before = (
+        b"Prefix stays.\n\n"
+        b"Client and IdP refresh the token. {{ ydb-short-name }} does not "
+        b"exchange `authorization code` for tokens.\n\n"
+        b"### How it works\n"
+    )
+    source_after = (
+        b"Prefix stays.\n\n"
+        b"Client and IdP refresh the token. The {{ ydb-short-name }} server "
+        b"does not exchange `authorization code` for tokens.\n\n"
+        b"{% note info %}\n\n"
+        b"SSO is in [Enterprise Manager](../devops/enterprise-manager/sso.md).\n\n"
+        b"{% endnote %}\n\n"
+        b"### How it works\n"
+    )
+    existing_en = (
+        b"Prefix English stays.\n\n"
+        b"Obtaining the JWT is on the client. {{ ydb-short-name }} does not "
+        b"exchange `authorization code` for tokens.\n\n"
+        b"Unrelated English drift that whole_file must not rewrite.\n\n"
+        b"### How it works\n"
+    )
+
+    plan = plan_surgical_update(source_before, source_after, existing_en)
+
+    assert plan.mode is SurgicalMode.HUNKS
+    assert len(plan.hunks) == 1
+    hunk = plan.hunks[0]
+    assert b"`authorization code`" in hunk.existing_target_fragment
+    assert b"Unrelated English drift" not in hunk.existing_target_fragment
+    assert b"{% note info %}" in hunk.source_after
+    assert b"server" in hunk.source_after
+    stitched = (
+        existing_en[: hunk.target_span[0]]
+        + b"Translated server line.\n\n{% note info %}\n\nSSO.\n\n{% endnote %}\n"
+        + existing_en[hunk.target_span[1] :]
+    )
+    assert b"Prefix English stays." in stitched
+    assert b"Unrelated English drift that whole_file must not rewrite." in stitched
+    assert b"{% note info %}" in stitched
+
+
 def test_unique_url_replacements_do_not_rewrite_sibling_manual_paths() -> None:
     sibling = b"./maintenance/manual/virtual_storage_groups_decommit.md"
     source_before = (

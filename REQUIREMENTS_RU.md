@@ -64,11 +64,12 @@ provider error / невалидном JSON. Вторая неудача → job 
   и не текущий tip `main`), runtime сначала пробует
   **surgical update**: перенести только source-delta на существующий target
   (уникальные замены URL/строк без модели и без presentation-map; иначе модель
-  переводит только выровненные hunks; **insert-only** дельта, которую нельзя
-  выровнять по EN, переводится как один hunk и дописывается в конец
-  существующего target; на стыке Python гарантирует пустую строку перед
-  ATX-заголовком). Whole-file перевод — fallback, если
-  выровнять нельзя, target/source-before нет, или дельта смешанная replace+insert;
+  переводит только выровненные hunks; привязка hunk к EN — по уникальному
+  language-agnostic якорю из `before`: link destination, затем inline code
+  `` `...` ``, затем `{#anchor}`; **insert-only** дельта без якоря переводится
+  как один hunk и дописывается в конец существующего target; на стыке Python
+  гарантирует пустую строку перед ATX-заголовком). Whole-file перевод —
+  fallback, если якоря нет / он не уникален в EN, или target/source-before нет;
 - delete → удалить парный target;
 - rename → зеркально переименовать target; если содержимое ещё изменилось → перевести;
 - locale-relative resource/binary → copy/delete/rename без модели;

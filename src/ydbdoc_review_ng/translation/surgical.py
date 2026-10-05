@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from enum import Enum
 
 _LINK_DESTINATION = re.compile(rb"\]\(([^)\s]+)")
+_INLINE_CODE = re.compile(rb"`[^`\n]+`")
+_HEADING_ANCHOR = re.compile(rb"\{#[^}\s]+\}")
 _ATX_HEADING_LINE = re.compile(rb"^#{1,6}(?:\s|$)")
 
 
@@ -172,11 +174,31 @@ def _enclosing_line(text: bytes, position: int) -> tuple[int, int]:
     return start, end + 1
 
 
+def _unique_anchor_span(
+    anchors: tuple[bytes, ...] | list[bytes], existing_target: bytes
+) -> tuple[int, int] | None:
+    for anchor in sorted(set(anchors), key=len, reverse=True):
+        if not anchor:
+            continue
+        if existing_target.count(anchor) == 1:
+            return _enclosing_line(existing_target, existing_target.find(anchor))
+    return None
+
+
 def _locate_target_span(source_before_hunk: bytes, existing_target: bytes) -> tuple[int, int] | None:
-    destinations = _LINK_DESTINATION.findall(source_before_hunk)
-    for destination in sorted(set(destinations), key=len, reverse=True):
-        if existing_target.count(destination) == 1:
-            return _enclosing_line(existing_target, existing_target.find(destination))
+    """Pin a source hunk to one EN line via a unique language-agnostic anchor.
+
+    Prefer link destinations, then inline code, then heading anchors. Without a
+    unique shared anchor the caller falls back to whole-file translation.
+    """
+    for candidates in (
+        _LINK_DESTINATION.findall(source_before_hunk),
+        _INLINE_CODE.findall(source_before_hunk),
+        _HEADING_ANCHOR.findall(source_before_hunk),
+    ):
+        span = _unique_anchor_span(candidates, existing_target)
+        if span is not None:
+            return span
     return None
 
 

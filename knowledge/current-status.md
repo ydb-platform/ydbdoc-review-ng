@@ -64,6 +64,14 @@ surgical hunk (thin-translate the new section, append), not whole-file.
 
 Include gate accepts target-snapshot files that this PR did not touch.
 
+## Surgical locate (2026-10-05)
+
+[#55170](https://github.com/ydb-platform/ydb/pull/55170) `authentication.md`
+went `whole_file` because `_locate_target_span` required a unique `](url)`.
+#53033 replace+insert had only `` `authorization code` ``. Locate now also
+uses unique inline code and `{#anchor}`. Keep #55170 as accepted scope drift;
+fix is for the next translate.
+
 ## Tip pin
 
 Workflow `ydbdoc-review.yml` uses
