@@ -478,6 +478,25 @@ def _code_ranges(data: bytes, base: int) -> list[tuple[int, int]]:
     return result
 
 
+def _html_comment_ranges(data: bytes, base: int) -> list[tuple[int, int]]:
+    result: list[tuple[int, int]] = []
+    cursor = 0
+    while True:
+        start = data.find(b"<!--", cursor)
+        if start < 0:
+            return result
+        end = data.find(b"-->", start + 4)
+        if end < 0:
+            return result
+        close = end + 3
+        chunk = data[start:close]
+        if b"\n" not in chunk and b"\r" not in chunk:
+            result.append((base + start, base + close))
+            cursor = close
+            continue
+        cursor = start + 4
+
+
 def _overlaps(start: int, end: int, regions: list[ProtectedRegion]) -> bool:
     return any(start < item.span.end and end > item.span.start for item in regions)
 
@@ -607,6 +626,11 @@ def _inline_regions(
         ProtectedRegion(ProtectedKind.INLINE_CODE, ByteSpan(start, end), None)
         for start, end in _code_ranges(data, span.start)
     ]
+    regions.extend(
+        ProtectedRegion(ProtectedKind.HTML_INLINE, ByteSpan(start, end), None)
+        for start, end in _html_comment_ranges(data, span.start)
+        if not _overlaps(start, end, regions)
+    )
     regions.extend(_container_regions(data, span.start, regions))
     occupied = bytearray(len(data))
 

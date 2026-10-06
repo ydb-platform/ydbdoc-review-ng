@@ -699,6 +699,10 @@ def test_email_autolink_enforces_total_domain_limit() -> None:
             ],
         ),
         (
+            b"See.<!-- [{#T}](other.md).-->\n",
+            [(ProtectedKind.HTML_INLINE, 4, 29, None)],
+        ),
+        (
             b"Use foo::bar, docs/a.md, and {{ product.name }}.\n",
             [
                 (ProtectedKind.IDENTIFIER, 4, 12, None),
@@ -712,6 +716,23 @@ def test_exact_inline_regions(
     source: bytes, expected: list[tuple[ProtectedKind, int, int, int | None]]
 ) -> None:
     assert region_shape(source) == expected
+
+
+def test_same_line_html_comment_swallows_contained_markdown_link() -> None:
+    source = (
+        b"These examples illustrate the syntax when working with vector indexes."
+        b"<!-- For a more realistic example with a larger data volume, see "
+        b"[{#T}](vector-index-with-prepared-dataset.md).-->\n"
+    )
+    plan = build(source)
+    kinds = [
+        region.kind
+        for field in fields_of(plan)
+        for region in field.protected_regions
+    ]
+    assert ProtectedKind.HTML_INLINE in kinds
+    assert ProtectedKind.LINK_OPEN not in kinds
+    assert ProtectedKind.LINK_CLOSE not in kinds
 
 
 @pytest.mark.parametrize("phrase", [b"blocking/unblocking", b"input/output", b"read/write"])
