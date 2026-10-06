@@ -81,6 +81,11 @@ present in both locales of the inventory. Surgical hunks no longer apply
 presentation_map. Fallback wrap requires real `\\_` escapes and identifier
 boundaries, not a bare-token `str.replace`.
 
+## Nested translation skip
+
+`doc_translate` on a PR whose body has `<!-- ydbdoc-source-pr: -->` is a no-op
+(«Этот PR уже является переводом.»). Stops #55244-style EN→RU of a translation PR.
+
 ## Tip pin
 
 Workflow `ydbdoc-review.yml` uses

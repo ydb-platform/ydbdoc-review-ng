@@ -22,6 +22,7 @@ class ClassifierServices(RuntimeServices):
     def __init__(self, rows, answers):
         super().__init__()
         self.rows, self.answers = rows, answers
+        self.source_pr_body = None
         self.requests = []
         self.before = {
             PAGE: b"# Before\n\nComplete old text.\n",
@@ -54,6 +55,8 @@ class ClassifierServices(RuntimeServices):
         result = super().github(method, path, payload)
         if relative == "/pulls/42":
             result["changed_files"] = len(self.rows)
+            if self.source_pr_body is not None:
+                result["body"] = self.source_pr_body
         return result
 
     def model(self, request):
@@ -166,6 +169,22 @@ def test_bilingual_inventory_skips_translate_even_when_classifier_says_required(
         "properties"
     ]
     assert "перевод не требуется" in services.source_comments[0]["body"].lower()
+    assert not services.pr_exists and services.branch_head is None
+
+
+def test_existing_translation_pr_skips_without_direction_call():
+    """#55244: doc_translate on an already-translated PR must not nest another PR."""
+    rows = [{"filename": PAGE, "status": "modified"}]
+    services = ClassifierServices(rows, [])
+    services.source_pr_body = (
+        "<!-- ydbdoc-source-pr:53033 -->\n<!-- ydbdoc-source-sha:" + "a" * 40 + " -->\n"
+    )
+    runtime(services).doc_translate(
+        TranslateWorkflowInput(42, GitSha(services.source), Decimal(10))
+    )
+    assert services.requests == []
+    assert "перевод не требуется" in services.source_comments[0]["body"].lower()
+    assert "уже является переводом" in services.source_comments[0]["body"].lower()
     assert not services.pr_exists and services.branch_head is None
 
 

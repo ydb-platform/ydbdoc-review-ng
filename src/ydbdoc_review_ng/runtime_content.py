@@ -1085,6 +1085,32 @@ class RuntimeContent:
                     _toc(content, "unsupported_source_toc")
         if direction is None:
             if translate and classification is None:
+                pull = self.source.github.request("GET", f"/pulls/{self.source.source_pr}")
+                body = "" if not isinstance(pull, dict) else str(pull.get("body") or "")
+                if re.search(r"<!-- ydbdoc-source-pr:[1-9][0-9]* -->", body):
+                    report_classification(
+                        self.source.github,
+                        self.source.source_pr,
+                        reason="Этот PR уже является переводом.",
+                    )
+                    self.entries, self.documents = (), ()
+                    self.plans = FrozenSourcePlans(
+                        preparation,
+                        None,
+                        (),
+                        (),
+                        build_translation_plan(
+                            preparation.inventory,
+                            self.roots,
+                            None,
+                            classification=InventoryClassification(
+                                False,
+                                None,
+                                "Этот PR уже является переводом.",
+                            ),
+                        ),
+                    )
+                    return self.plans
                 request = inventory_request(
                     self.source.classifier_files(self.roots),
                     self.source.source_base_snapshot,

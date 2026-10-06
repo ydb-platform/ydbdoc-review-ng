@@ -50,6 +50,9 @@ provider error / невалидном JSON. Вторая неудача → job 
 
 Если `translation_required=false` — translation PR не создаётся, в source PR
 один комментарий «перевод не требуется» и причина. Тихий no-op запрещён.
+Python сам ставит этот исход, без модели, если source PR уже содержит
+`<!-- ydbdoc-source-pr: -->` (это translation PR, вложенный перевод запрещён)
+или если RU и EN одной Markdown-пары оба изменены в inventory.
 
 Если направление надёжно не определено — checkpoint `direction_undetermined`,
 комментарий с просьбой `/ydbdoc continue`.
