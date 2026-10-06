@@ -165,13 +165,18 @@ def apply_presentation_map(
 
     # Fallback for drafts that still contain escaped identifier prose, CLI flags,
     # short ALLCAPS states, and colon-form tokens outside IDENTIFIER regions.
+    # Never treat the bare token as an "escaped" form: `CPU`.replace("_","\\_")
+    # is still CPU, and a global replace wraps already-backticked `CPU` / the
+    # GAUGE inside `IGAUGE`.
     for token, style in styles.items():
         escaped = token.replace("_", "\\_").encode("utf-8")
         bare = token.encode("utf-8")
-        if escaped in text:
+        if escaped != bare and escaped in text:
             replacement = b"`" + bare + b"`" if style.inline_code else bare
             text = text.replace(escaped, replacement)
         elif style.inline_code:
-            pattern = re.compile(rb"(?<!`)" + re.escape(bare) + rb"(?!`)")
+            pattern = re.compile(
+                rb"(?<![A-Za-z0-9_`.])" + re.escape(bare) + rb"(?![A-Za-z0-9_`.])"
+            )
             text = pattern.sub(b"`" + bare + b"`", text)
     return text

@@ -120,9 +120,7 @@ from ydbdoc_review_ng.translation import (
     Placeholder,
     TranslationField,
     TranslationRequest,
-    apply_presentation_map,
     assemble_candidate,
-    build_presentation_map,
     build_translation_request,
     document_operator_guidance,
     parse_translation_response,
@@ -160,6 +158,7 @@ from ydbdoc_review_ng.translation_plan import (
     TranslationPlanError,
     build_translation_plan,
     classify_path,
+    complete_markdown_relatives,
     mirror_classified_files,
     preflight_inventory,
     reconcile_candidate_outputs,
@@ -1154,20 +1153,58 @@ class RuntimeContent:
                     preparation.inventory, self.roots
                 ):
                     raise TranslationPlanError("translation_plan_direction_missing")
-                # §1.2 has no "both locales changed ⇒ skip" rule. Translate and
-                # verify both keep the selected direction for every Markdown pair;
-                # doc_verify additionally reviews the full frozen group (§5.2).
+                already_bilingual = complete_markdown_relatives(
+                    preparation.inventory, self.roots
+                )
 
                 def _pair_verdict(pair: LocalePairInventory) -> DirectionPairVerdict:
+                    if pair.key.relative_path.value in already_bilingual:
+                        return DirectionPairVerdict.COMPLETE_PAIR
                     return DirectionPairVerdict(selected_direction.value)
+
+                decisions = tuple(
+                    DirectionPairDecision(pair, _pair_verdict(pair))
+                    for pair in preparation.inventories
+                )
+                if (
+                    decisions
+                    and all(
+                        item.verdict is DirectionPairVerdict.COMPLETE_PAIR
+                        for item in decisions
+                    )
+                    and not _non_markdown_inventory_work(
+                        preparation.inventory, self.roots
+                    )
+                ):
+                    if translate:
+                        report_classification(
+                            self.source.github,
+                            self.source.source_pr,
+                            reason="Обе локали уже изменены в source PR.",
+                        )
+                    self.entries, self.documents = (), ()
+                    self.plans = FrozenSourcePlans(
+                        preparation,
+                        None,
+                        (),
+                        (),
+                        build_translation_plan(
+                            preparation.inventory,
+                            self.roots,
+                            None,
+                            classification=InventoryClassification(
+                                False,
+                                None,
+                                "Обе локали уже изменены в source PR.",
+                            ),
+                        ),
+                    )
+                    return self.plans
 
                 direction = DirectionSelectionResult(
                     DirectionSelectionState.SELECTED,
                     selected_direction,
-                    tuple(
-                        DirectionPairDecision(pair, _pair_verdict(pair))
-                        for pair in preparation.inventories
-                    ),
+                    decisions,
                     None,
                 )
         if direction is None or direction.state is DirectionSelectionState.DIRECTION_UNDETERMINED:
@@ -2278,26 +2315,6 @@ class RuntimeContent:
 
         if surgical_candidate is not None:
             candidate = surgical_candidate
-            insert_only_append = (
-                surgical_mode is SurgicalMode.HUNKS
-                and target_reference_bytes is not None
-                and surgical_candidate.startswith(target_reference_bytes)
-            )
-            if (
-                surgical_mode is not SurgicalMode.UNIQUE_REPLACEMENTS
-                and not insert_only_append
-            ):
-                presentation = build_presentation_map(
-                    target_reference_bytes,
-                    source_snapshot=document.plan.source_snapshot,
-                    source_path=entry.pair.target_path,
-                )
-                candidate = apply_presentation_map(
-                    candidate,
-                    presentation,
-                    source_snapshot=document.plan.source_snapshot,
-                    source_path=entry.pair.target_path,
-                )
             mangled = count_split_backtick_identifiers(candidate)
             if mangled:
                 candidate = normalize_split_backtick_identifiers(candidate)

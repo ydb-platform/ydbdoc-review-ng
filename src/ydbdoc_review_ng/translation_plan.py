@@ -307,6 +307,17 @@ def _complete_pairs(
     )
 
 
+def complete_markdown_relatives(
+    inventory: SourceChangeInventory, roots: LocaleRoots, /
+) -> frozenset[str]:
+    """Relative Markdown paths whose RU and EN copies both appear in the inventory."""
+    return frozenset(
+        relative
+        for kind, relative in _complete_pairs(inventory, roots)
+        if kind is PathKind.MARKDOWN
+    )
+
+
 def _validate_rename_shape(
     change: SourceChange,
     current: ClassifiedPath,

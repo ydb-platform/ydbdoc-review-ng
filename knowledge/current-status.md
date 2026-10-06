@@ -72,6 +72,15 @@ went `whole_file` because `_locate_target_span` required a unique `](url)`.
 uses unique inline code and `{#anchor}`. Keep #55170 as accepted scope drift;
 fix is for the next translate.
 
+## Bilingual skip + presentation_map (2026-10-06)
+
+[#55240](https://github.com/ydb-platform/ydb/pull/55240) / [#55243](https://github.com/ydb-platform/ydb/pull/55243)
+re-translated bilingual source PRs and then `presentation_map` globally replaced
+`CPU`/`RATE`/`GAUGE` inside already-correct EN. Python now skips Markdown pairs
+present in both locales of the inventory. Surgical hunks no longer apply
+presentation_map. Fallback wrap requires real `\\_` escapes and identifier
+boundaries, not a bare-token `str.replace`.
+
 ## Tip pin
 
 Workflow `ydbdoc-review.yml` uses

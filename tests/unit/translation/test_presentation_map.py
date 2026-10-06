@@ -47,6 +47,29 @@ def test_apply_does_not_double_wrap_existing_inline_code() -> None:
     assert _apply(draft, styles) == draft
 
 
+def test_apply_does_not_double_wrap_short_allcaps_already_in_backticks() -> None:
+    """#55240: CPU without '_' used to replace every CPU, turning `CPU` into ``CPU``."""
+    old_en = b"- `CPU` threads\n- `Memory` RAM\n"
+    styles = build_presentation_map(old_en, source_snapshot=SNAPSHOT, source_path=PATH)
+    assert styles["CPU"].inline_code is True
+    assert _apply(old_en, styles) == old_en
+
+
+def test_apply_does_not_wrap_allcaps_inside_longer_backticked_token() -> None:
+    """#55243: GAUGE/RATE substring replace turned `IGAUGE` into ``I`GAUGE```."""
+    old_en = (
+        b"| `resources.storage.used_bytes`<br/>`IGAUGE`, bytes | Size. |\n"
+        b"| `api.grpc.request.bytes`<br/>`RATE`, bytes | Size. |\n"
+        b"| `grpc.topic.stream_read.commits`<br/>`RATE`, units | Commits. |\n"
+    )
+    styles = build_presentation_map(old_en, source_snapshot=SNAPSHOT, source_path=PATH)
+    applied = _apply(old_en, styles)
+    assert applied == old_en
+    assert b"I`GAUGE" not in applied
+    assert b"``RATE``" not in applied
+    assert b"`stream_read`" not in applied
+
+
 def test_apply_prefers_unescaped_forms_from_old_en() -> None:
     old_en = b"Status CREATE_FAILED.\n"
     styles = build_presentation_map(old_en, source_snapshot=SNAPSHOT, source_path=PATH)

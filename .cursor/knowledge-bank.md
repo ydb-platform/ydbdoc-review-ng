@@ -470,3 +470,18 @@
 ## 2026-10-05 15:15 UTC
 <!-- surgical-locate-inline-code -->
 - Фикс: `_locate_target_span` ищет уникальный якорь в порядке link destination → inline code `` `...` `` → `{#anchor}`. Replace+insert как в #53033 (`authorization code` без `](url)`) даёт `HUNKS`, не `WHOLE_FILE`. #55170 вольют как есть; следующий `doc_translate` после retag `v1.0.1` не должен раздувать scope на таком кейсе.
+
+## 2026-10-05 15:14 UTC
+<!-- 4e076db47f34d40d -->
+- Готово. #55170 не трогал.
+- Следующий `doc_translate` подхватит это сам. Текущий #55170 можно спокойно вливать.
+
+## 2026-10-06 04:27 UTC
+<!-- 7a6e81ef55c12e9b -->
+- Баг wrap: для токена `CPU` (без `_`) «escaped» форма совпадает с самим `CPU`. Код делает глобальный `replace("CPU", "\`CPU\`")`. Уже правильное `- \`CPU\` — number of threads` превращается в `- \`\`CPU\`\` — number of threads`. Тем же проходом: `| CPU |` → `| \`CPU\` |`, в yaml `- name: queue_ttl` получает backticks. Это воспроизводится на неизменённом EN **без модели**.
+- Почему перевод вообще пошёл: ранний skip не смотрит, что пара уже bilingual. Direction больше не ставит `complete_pair` по файлам. Python прямо пишет, что правила «оба языка уже изменены → не переводить» нет. Поздний skip «целевая локаль уже отражает дельту» сработал бы, только если собранный EN байт-в-байт совпал с текущим. После `presentation_map` он уже не совпал, поэтому открылся #55240.
+
+## 2026-10-06 04:40 UTC
+<!-- bilingual-skip-presentation-map -->
+- #55243 тот же баг, сильнее: `IGAUGE`/`RATE`/`stream_read` внутри метрик. Фикс: bilingual inventory skip; hunks без presentation_map; wrap только с границами идентификатора и реальным `\_`.
+

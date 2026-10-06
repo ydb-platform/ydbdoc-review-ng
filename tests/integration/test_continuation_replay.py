@@ -497,7 +497,7 @@ def test_replay_rejects_tampered_state_before_model_or_mutation(corruption):
 
 
 def test_mixed_direction_fixture_translates_all_markdown_pairs_without_repeating_direction():
-    """§1.1/§1.2: fixture complete_pair labels do not shrink the selected Markdown scope."""
+    """Bilingual inventory pairs are skipped; remaining Markdown still translates once."""
     services = ReplayServices()
     services.inventory += [
         {"status": "modified", "filename": locale + "complete.md"} for locale in (RU, EN)
@@ -518,7 +518,6 @@ def test_mixed_direction_fixture_translates_all_markdown_pairs_without_repeating
     restored = replay(content, saved)
     assert scope_sha256(restored.plans.manifest) == scope_sha256(plans.manifest)
     assert {entry.pair.target_path.value for entry in restored.plans.manifest.entries} == {
-        EN + "complete.md",
         EN + "page.md",
         EN + "pending.md",
     }
@@ -644,7 +643,7 @@ def test_complete_pair_preparation_keeps_empty_candidate_noop():
 
 
 def test_shared_dependency_keeps_both_locale_pairs_in_saved_scope():
-    """§1.2/§1.3: both-locale Markdown stays in scope; shared deps still pull once."""
+    """Unpaired source Markdown still pulls shared deps; bilingual pairs stay out."""
     services = ReplayServices()
     services.inventory += [
         {"status": "modified", "filename": locale + "complete.md"} for locale in (RU, EN)
@@ -668,7 +667,6 @@ def test_shared_dependency_keeps_both_locale_pairs_in_saved_scope():
     services.events.clear()
     restored = replay(content, saved)
     assert {entry.pair.target_path.value for entry in restored.plans.manifest.entries} == {
-        EN + "complete.md",
         EN + "page.md",
         EN + "pending.md",
         EN + "dep.md",

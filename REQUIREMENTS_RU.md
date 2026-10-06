@@ -68,8 +68,13 @@ provider error / невалидном JSON. Вторая неудача → job 
   language-agnostic якорю из `before`: link destination, затем inline code
   `` `...` ``, затем `{#anchor}`; **insert-only** дельта без якоря переводится
   как один hunk и дописывается в конец существующего target; на стыке Python
-  гарантирует пустую строку перед ATX-заголовком). Whole-file перевод —
-  fallback, если якоря нет / он не уникален в EN, или target/source-before нет;
+  гарантирует пустую строку перед ATX-заголовком). Presentation-map после hunk
+  не гоняется: существующий EN уже presentation baseline. Если в inventory
+  уже изменены обе локали одной Markdown-пары, Python не переводит эту пару
+  (author supplied translation), даже если direction сказал
+  `translation_required=true`. Если таких пар нет других работ — комментарий
+  «перевод не требуется», PR не создаётся. Whole-file перевод — fallback, если
+  якоря нет / он не уникален в EN, или target/source-before нет;
 - delete → удалить парный target;
 - rename → зеркально переименовать target; если содержимое ещё изменилось → перевести;
 - locale-relative resource/binary → copy/delete/rename без модели;

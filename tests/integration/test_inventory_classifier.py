@@ -151,6 +151,24 @@ def test_every_inventory_is_classified_once_and_noop_is_reported_idempotently(ro
     )
 
 
+def test_bilingual_inventory_skips_translate_even_when_classifier_says_required():
+    """#55240/#55243: author already changed RU and EN; do not re-translate."""
+    rows = [
+        {"filename": PAGE, "status": "modified"},
+        {"filename": TARGET, "status": "modified"},
+    ]
+    services = ClassifierServices(rows, [answer(rows, required=True, direction="ru_to_en")])
+    runtime(services).doc_translate(
+        TranslateWorkflowInput(42, GitSha(services.source), Decimal(10))
+    )
+    assert len(services.requests) == 1
+    assert "translation_required" in request_schema(json.loads(services.requests[0].body))["schema"][
+        "properties"
+    ]
+    assert "перевод не требуется" in services.source_comments[0]["body"].lower()
+    assert not services.pr_exists and services.branch_head is None
+
+
 def test_classifier_reads_complete_pinned_before_after_and_binary_metadata():
     rows = [
         {"filename": PAGE, "status": "modified"},

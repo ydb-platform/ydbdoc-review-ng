@@ -5,6 +5,7 @@
 1. Immutable inventory source PR.
 2. Один direction call: `translation_required`, `direction`, `reason`.
 3. Python зеркалит Git: translate / delete / rename / resource / TOC.
+   Если RU и EN одной Markdown-страницы оба в inventory, пару не переводим.
 4. Рекурсия по внутренним ссылкам: нет target у A1 → A1 в группу, даже если
    A1 не менялся в PR. Есть target-файл → стоп, в review не входит.
 5. Glossary: нет EN-файла → как missing-target. EN-файл есть, точного anchor
@@ -16,10 +17,9 @@
 
 Unique string replacements без модели, если возможно. Иначе выровненные hunks:
 привязка к EN по уникальному якорю из `before` (link destination → inline code
-→ `{#anchor}`); модель переводит только hunk. Insert-only без якоря: модель
-переводит вставленный фрагмент, Python дописывает в конец EN. Иначе
-**thin whole-file**: полный source Markdown → DeepSeek → полный target
-Markdown. Placeholders нет.
+→ `{#anchor}`); модель переводит только hunk; presentation-map на stitched EN
+не накладывается. Insert-only без якоря: модель переводит вставленный фрагмент,
+Python дописывает в конец EN. Иначе **thin whole-file**. Placeholders нет.
 После ответа: снять только обёртку ` ```markdown ` вокруг всего файла, не
 открывающий fence документа; normalize split-backtick, затем publication gates
 (`source_locale_echo`, `split_backtick_identifiers`, `missing_include_target`,
