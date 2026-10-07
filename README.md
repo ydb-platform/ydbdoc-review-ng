@@ -159,3 +159,14 @@ YDB schema и подключение CI к translation head остаются dep
 Consumer label workflow находится в [шаблоне](docs/examples/doc_continue.yml):
 его устанавливают в `ydb-platform/ydb` с reviewed immutable action SHA после
 приёмки релиза и миграции schema. В этом репозитории consumer workflow не развёрнут.
+
+## Проект проверки правил документации
+
+[DOC_REVIEW_REQUIREMENTS_RU.md](DOC_REVIEW_REQUIREMENTS_RU.md) описывает
+предлагаемый отдельный режим `doc_review`: автоматический допуск для участников
+проекта, `ok-to-test` для внешних авторов, Docker, бюджет одного запуска и
+перезапуск меткой `doc_review`. Это черновик нового режима, не реализация
+и не изменение действующего контракта перевода.
+
+Источники исследования, состояние текущего CI, предложения и открытые вопросы
+собраны в [knowledge/doc-review/](knowledge/doc-review/INDEX.md).
