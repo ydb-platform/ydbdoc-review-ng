@@ -2212,6 +2212,9 @@ class RuntimeContent:
                     draft,
                     source_locale=entry.pair.source_locale.value,
                     target_path=entry.pair.target_path.value,
+                    # Whole-file drafts are judged without grandfathering old
+                    # sentence-case headings from the previous EN page.
+                    previous_target=None,
                 )
                 if not failures:
                     write_trace(
@@ -2257,11 +2260,13 @@ class RuntimeContent:
                 code=surgical.mode.value,
             )
             if (
-                surgical.mode is SurgicalMode.UNIQUE_REPLACEMENTS
+                surgical.mode
+                in {SurgicalMode.UNIQUE_REPLACEMENTS, SurgicalMode.NOOP}
                 and surgical.patched_target is not None
             ):
                 surgical_candidate = surgical.patched_target
-                self._unique_replacement_targets.add(entry.pair.target_path.value)
+                if surgical.mode is SurgicalMode.UNIQUE_REPLACEMENTS:
+                    self._unique_replacement_targets.add(entry.pair.target_path.value)
             elif surgical.mode is SurgicalMode.HUNKS:
                 patched = target_reference_bytes
                 translated_hunks: list[tuple[tuple[int, int], bytes]] = []
@@ -2348,6 +2353,7 @@ class RuntimeContent:
                 candidate,
                 source_locale=entry.pair.source_locale.value,
                 target_path=entry.pair.target_path.value,
+                previous_target=target_reference_bytes,
             )
             if gate_failures:
                 write_trace(

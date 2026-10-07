@@ -85,6 +85,16 @@ def build_pair_delta_scope(
         )
     plan = plan_surgical_update(source_before, source_after, draft)
     items = _changed_source_items(source_before, source_after)
+    if plan.mode is SurgicalMode.NOOP:
+        return PairDeltaScope(
+            "noop",
+            source_path,
+            target_path,
+            items,
+            (),
+            True,
+            0,
+        )
     if plan.mode is SurgicalMode.UNIQUE_REPLACEMENTS:
         needles: list[bytes] = []
         for before_line, after_line in items:

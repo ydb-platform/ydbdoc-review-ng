@@ -72,7 +72,10 @@ Python сам ставит этот исход, без модели, если so
   `` `...` ``, затем `{#anchor}`; **insert-only** дельта без якоря переводится
   как один hunk и дописывается в конец существующего target; на стыке Python
   гарантирует пустую строку перед ATX-заголовком). Presentation-map после hunk
-  не гоняется: существующий EN уже presentation baseline. Если в inventory
+  не гоняется: существующий EN уже presentation baseline. Если source-delta —
+  только удаления, и ни один удалённый hunk не находится в EN (типичный
+  RU-only note / experimental warning), Python делает **noop**: публикует
+  существующий EN без модели и без whole-file. Если в inventory
   уже изменены обе локали одной Markdown-пары, Python не переводит эту пару
   (author supplied translation), даже если direction сказал
   `translation_required=true`. Если таких пар нет других работ — комментарий
@@ -183,6 +186,7 @@ Soft-publish полупереведённого UTF-8 с кириллицей в
 | `missing_include_target` | relative `{% include %}` destination нет в результирующем target tree: overlay этого PR **или** уже существующий файл на translation base |
 | `heading_blank_lines` | ATX-заголовок без пустой строки сверху или снизу (кроме начала/конца файла); внутри code fence не считается |
 | `unlabeled_fence_opener` | открывающий ` ``` ` без языка (закрывающий unlabeled допустим) |
+| `en_heading_title_case` | RU→EN: новый/изменённый ATX-заголовок не в Title Case (Chicago subset). Whole-file судит все заголовки; surgical unique/noop/hunks дедуют только строки, отсутствующие в previous EN |
 
 Insert-only surgical: Python стыкует переведённый hunk с существующим EN. Если hunk начинается с ATX-заголовка, а EN перед стыком не заканчивается пустой строкой, Python вставляет `\n` без модели.
 

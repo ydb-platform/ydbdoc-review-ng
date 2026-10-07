@@ -39,6 +39,7 @@ def join_insert_hunk(existing: bytes, insert: bytes) -> bytes:
 class SurgicalMode(str, Enum):
     UNIQUE_REPLACEMENTS = "unique_replacements"
     HUNKS = "hunks"
+    NOOP = "noop"
     WHOLE_FILE = "whole_file"
 
 
@@ -248,8 +249,18 @@ def plan_surgical_update(
                 ),
             ),
         )
+    if (
+        line_hunks
+        and all(before and not after for before, after in line_hunks)
+        and all(
+            _locate_target_span(before, existing_target) is None
+            for before, _after in line_hunks
+        )
+    ):
+        # Source-only deletions (e.g. RU experimental notes never present in EN).
+        return SurgicalPlan(SurgicalMode.NOOP, patched_target=existing_target)
     hunks: list[SurgicalHunk] = []
-    for before_hunk, after_hunk in _changed_line_hunks(source_before, source_after):
+    for before_hunk, after_hunk in line_hunks:
         if not after_hunk:
             return SurgicalPlan(SurgicalMode.WHOLE_FILE)
         span = _locate_target_span(before_hunk or after_hunk, existing_target)

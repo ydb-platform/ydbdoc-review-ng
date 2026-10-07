@@ -233,6 +233,52 @@ def test_already_applied_english_is_unique_replacements_noop() -> None:
     assert plan.patched_target == existing_en
 
 
+def test_delete_only_source_notes_absent_from_english_are_noop_not_whole_file() -> None:
+    """#55139: RU-only experimental notes deleted; EN never had them."""
+    note = (
+        b"\n{% note warning \"Experimental\" %}\n\n"
+        b"Smart mode is experimental.\n\n"
+        b"{% endnote %}\n"
+    )
+    body = (
+        b"### Availability mode {#availability-mode}\n\n"
+        b"- **Smart**: behaves like Strong.\n"
+    )
+    source_before = body + note + b"\n### Priority {#priority}\n"
+    source_after = body + b"\n### Priority {#priority}\n"
+    existing_en = (
+        b"### Availability mode {#availability-mode}\n\n"
+        b"- **Weak**: does not exceed the failure model.\n\n"
+        b"### Priority {#priority}\n"
+    )
+
+    plan = plan_surgical_update(source_before, source_after, existing_en)
+
+    assert plan.mode is SurgicalMode.NOOP
+    assert plan.patched_target == existing_en
+    assert plan.hunks == ()
+
+
+def test_delete_only_source_span_present_in_english_still_whole_file() -> None:
+    note = (
+        b"\n{% note warning \"Experimental\" %}\n\n"
+        b"Smart mode is experimental and uses `enable_cms_smart`.\n\n"
+        b"{% endnote %}\n"
+    )
+    source_before = b"### Priority {#priority}\n" + note
+    source_after = b"### Priority {#priority}\n"
+    existing_en = (
+        b"### Priority {#priority}\n"
+        b"\n{% note warning \"Experimental\" %}\n\n"
+        b"Smart mode is experimental and uses `enable_cms_smart`.\n\n"
+        b"{% endnote %}\n"
+    )
+
+    plan = plan_surgical_update(source_before, source_after, existing_en)
+
+    assert plan.mode is SurgicalMode.WHOLE_FILE
+
+
 def test_apply_unique_replacements_rejects_missing_old_string() -> None:
     assert apply_unique_replacements(b"no match\n", ((OLD, NEW),)) is None
 
@@ -287,6 +333,31 @@ def _document(source: bytes, target: bytes):
     return Document(entry, source, plan, build_translation_request(source, plan))
 
 
+def test_runtime_skips_model_when_source_only_notes_deleted() -> None:
+    note = (
+        b"\n{% note warning \"Experimental\" %}\n\n"
+        b"Smart mode is experimental.\n\n"
+        b"{% endnote %}\n"
+    )
+    body = b"### Availability mode {#availability-mode}\n\n- **Smart**: strong.\n"
+    source_before = body + note + b"\n### Priority {#priority}\n"
+    source_after = body + b"\n### Priority {#priority}\n"
+    existing_en = (
+        b"### Availability mode {#availability-mode}\n\n"
+        b"- **Weak**: failure model.\n\n"
+        b"### Priority {#priority}\n"
+    )
+    content = RuntimeContent(
+        _SourceBefore(source_before, source_after), _BoomModels(), {}
+    )
+
+    _accepted, translated = content._translate_document(
+        _document(source_after, existing_en)
+    )
+
+    assert translated.translated_markdown == existing_en.decode()
+
+
 def test_runtime_skips_model_when_existing_english_needs_only_url_rewrites() -> None:
     source_before = b"* Enable views in [cfg](" + OLD + b").\n"
     source_after = b"* Enable views in [cfg](" + NEW + b").\n"
@@ -321,7 +392,7 @@ class _InsertOnlyModels:
         assert "KiKiMR" not in request.prompt
         assert "tablet-recovery-mode" in request.prompt
         return ModelCallResult(
-            "### Tablet recovery mode {#tablet-recovery-mode}\n\n"
+            "### Tablet Recovery Mode {#tablet-recovery-mode}\n\n"
             "**Recovery mode** is the restore mode.\n",
             None,
             (),
@@ -341,7 +412,7 @@ def test_runtime_translates_only_inserted_glossary_tail() -> None:
     _accepted, translated = content._translate_document(_document(source_after, existing_en))
     assert translated.translated_markdown == (
         existing_en.decode()
-        + "\n### Tablet recovery mode {#tablet-recovery-mode}\n\n"
+        + "\n### Tablet Recovery Mode {#tablet-recovery-mode}\n\n"
         + "**Recovery mode** is the restore mode.\n"
     )
     assert len(models.prompts) == 1

@@ -19,11 +19,13 @@ Unique string replacements без модели, если возможно. Ин�
 привязка к EN по уникальному якорю из `before` (link destination → inline code
 → `{#anchor}`); модель переводит только hunk; presentation-map на stitched EN
 не накладывается. Insert-only без якоря: модель переводит вставленный фрагмент,
-Python дописывает в конец EN. Иначе **thin whole-file**. Placeholders нет.
+Python дописывает в конец EN. Delete-only, если удалённые hunks не находятся в
+EN → **noop** (оставить EN, не whole-file). Иначе **thin whole-file**.
+Placeholders нет.
 После ответа: снять только обёртку ` ```markdown ` вокруг всего файла, не
 открывающий fence документа; normalize split-backtick, затем publication gates
 (`source_locale_echo`, `split_backtick_identifiers`, `missing_include_target`,
-`heading_blank_lines`, `unlabeled_fence_opener`).
+`heading_blank_lines`, `unlabeled_fence_opener`, `en_heading_title_case`).
 Insert-only: Python добавляет пустую строку перед ATX-заголовком на стыке с
 существующим EN, если модель её съела.
 Thin/hunk output: Python склеивает soft-wrapped prose в один абзац.

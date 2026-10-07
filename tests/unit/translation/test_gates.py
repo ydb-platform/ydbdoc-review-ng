@@ -31,6 +31,50 @@ def test_clean_english_passes() -> None:
     )
 
 
+def test_en_sentence_case_heading_fails_title_case_gate() -> None:
+    draft = b"# Cluster maintenance without downtime\n\nBody.\n"
+    failures = check_publication_gates(
+        draft, source_locale="ru", target_path="ydb/docs/en/core/x.md"
+    )
+    assert any(item.code == "en_heading_title_case" for item in failures)
+
+
+def test_en_title_case_heading_passes() -> None:
+    draft = b"# Cluster Maintenance Without Downtime\n\nBody.\n"
+    assert (
+        check_publication_gates(
+            draft, source_locale="ru", target_path="ydb/docs/en/core/x.md"
+        )
+        == ()
+    )
+
+
+def test_unchanged_sentence_case_heading_vs_previous_is_not_gated() -> None:
+    previous = b"# Cluster maintenance without downtime\n\nBody.\n"
+    draft = b"# Cluster maintenance without downtime\n\nBody with URL fix.\n"
+    assert (
+        check_publication_gates(
+            draft,
+            source_locale="ru",
+            target_path="ydb/docs/en/core/x.md",
+            previous_target=previous,
+        )
+        == ()
+    )
+
+
+def test_changed_sentence_case_heading_vs_previous_is_gated() -> None:
+    previous = b"# Maintenance without downtime\n\nBody.\n"
+    draft = b"# Cluster maintenance without downtime\n\nBody.\n"
+    failures = check_publication_gates(
+        draft,
+        source_locale="ru",
+        target_path="ydb/docs/en/core/x.md",
+        previous_target=previous,
+    )
+    assert any(item.code == "en_heading_title_case" for item in failures)
+
+
 def test_split_backtick_after_normalize_still_fails_when_present() -> None:
     draft = b"See `log`_`config` now.\n"
     failures = check_publication_gates(
@@ -69,7 +113,7 @@ def test_heading_without_blank_line_above_fails() -> None:
 
 
 def test_heading_at_start_of_file_does_not_need_blank_above() -> None:
-    draft = b"### Tablet recovery mode {#tablet-recovery-mode}\n\nBody.\n"
+    draft = b"### Tablet Recovery Mode {#tablet-recovery-mode}\n\nBody.\n"
     assert (
         check_publication_gates(
             draft, source_locale="ru", target_path="ydb/docs/en/core/concepts/glossary.md"
