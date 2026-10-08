@@ -5,7 +5,7 @@ inputs:
     description: gate, run or finalize
     default: run
   admission-token:
-    description: Token with repository collaborator administration read access; host only
+    description: Token with repository metadata read access; host only
     required: false
   publish-token:
     description: Token with PR comments and labels write access; host only

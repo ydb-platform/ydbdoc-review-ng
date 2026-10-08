@@ -12,7 +12,7 @@ _PREFIX = "/repos/ydb-platform/ydbdoc-review-ng"
 
 
 def action_revision(root: Path, api: JsonAPI) -> str:
-    reference = api("GET", _PREFIX + "/git/ref/tags/doc-review-stable", None)
+    reference = api("GET", _PREFIX + "/git/ref/tags/v1.2.0", None)
     try:
         for _ in range(5):
             kind, revision = reference["object"]["type"], sha(reference["object"]["sha"])

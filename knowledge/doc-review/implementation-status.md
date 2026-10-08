@@ -131,3 +131,18 @@ Build immutable worker; Docker/YDB smoke не выполнялись. Сборк
 в ydbdoc-review-ng; обработчики PR/завершения помещены в PR репозитория ydb.
 Два теста изменённых workflow contracts и Ruff прошли. Модель и production YDB
 не вызывались. Выпуск stable tag/образа и включение review по-прежнему не выполнены.
+
+## Подключение по примеру doc_translate
+
+Сверен актуальный main ydb: ydbdoc-review.yml вызывает
+.github/actions/doc-review@v1.0.1. Это версионный Git tag. Новый policy-review
+в gate/run/finalize подключается по v1.2.0; v1.1.0 уже занят continuation release.
+Resolver фактической версии также проверяет v1.2.0. Порядок переноса постоянного
+тега без правки consumer CI сохраняется; новый тег ещё не выпущен до image gate.
+
+Ссылки и credentials обновляются в draft PR ydb #55586. Model API/folder берутся
+из тех же YANDEX_CLOUD_API_KEY_DOC_REVIEW / YANDEX_CLOUD_FOLDER_DOC_REVIEW, что у
+переводчика. GitHub membership/publication используют native token вне Docker.
+Секрет YDB_GH_TOKEN в ydb не требуется; аудит использует существующий YDB_SA_KEY.
+193 целевых теста, Ruff и mypy нового пакета прошли; платных запросов не было.
+CI остаётся отключённым до готовности image/audit/rules/release.

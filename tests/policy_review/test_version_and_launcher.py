@@ -20,8 +20,10 @@ def test_moved_tag_is_used_only_when_downloaded_bundle_matches(tmp_path: Path) -
         path.write_bytes(b"trusted")
         entries.append({"path": name, "type": "blob", "sha": hashlib.sha1(b"blob 7\0trusted").hexdigest()})
     def api(method, path, payload):
-        return {"object": {"type": "commit", "sha": "a" * 40}} if "/ref/" in path else {
-            "truncated": False, "tree": entries}
+        if "/ref/" in path:
+            assert path.endswith("/git/ref/tags/v1.2.0")
+            return {"object": {"type": "commit", "sha": "a" * 40}}
+        return {"truncated": False, "tree": entries}
     assert action_revision(tmp_path, api) == "a" * 40
     (tmp_path / files[-1]).write_bytes(b"changed")
     with pytest.raises(ReviewError, match="review_action_version_changed"):

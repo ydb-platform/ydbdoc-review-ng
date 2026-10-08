@@ -84,7 +84,7 @@ Policy плюс полный набор нормативных файлов из
 в следующий запуск переносом тега в репозитории реализации.
 
 В consumer workflow ссылка на action имеет постоянный тег, например
-`doc-review-stable`. Consumer не содержит фиксацию action SHA или image
+`v1.2.0`. Consumer не содержит фиксацию action SHA или image
 digest, требующую правки при каждом выпуске. Этот пункт заменяет исходную
 рекомендацию фиксировать action по SHA в consumer CI.
 
@@ -95,7 +95,7 @@ action. Переносить два независимых тега action/image
 и image digest; выбранная версия не меняется в процессе работы.
 Откат: перенос того же тега на предыдущий рабочий коммит.
 
-Точные имя тега и registry path определяются при внедрении. Решение касается
+Имя тега при внедрении уточнено по примеру doc_translate: `v1.2.0`. Решение касается
 версии исполняемого ревьювера. Head SHA проверяемого PR, версия правил и
 исследовательские ссылки по-прежнему фиксируются для конкретного запуска.
 
@@ -167,3 +167,16 @@ head/status guard. Public API failure/rate limit останавливает пл
 в ydb-platform/ydb, а image build остаётся рядом с кодом в ydbdoc-review-ng.
 До готовности image/audit/tag новые jobs отключены отсутствующей/false переменной
 YDBDOC_REVIEW_ENABLED в ydb. Включение после проверок не требует правки CI.
+
+### D-16. Версионная ссылка по примеру doc_translate
+
+Заказчик попросил использовать способ подключения doc_translate. На текущем main
+ydb переводчик вызывает `.github/actions/doc-review@v1.0.1`: это тоже Git tag.
+Новый reviewer вызывает `.github/actions/policy-review@v1.2.0`, включая finalizer.
+v1.1.0 уже занят релизом continuation от 22 сентября 2026 года. Обновления сохраняют
+ранее согласованный перенос постоянного тега; чужие существующие release tags не меняются.
+
+Credentials consumer выровнены с действующим переводчиком: model API/folder
+из YANDEX_CLOUD_API_KEY_DOC_REVIEW / YANDEX_CLOUD_FOLDER_DOC_REVIEW, аудит через
+YDB_SA_KEY, GitHub операции через native github.token вне Docker. Секрет
+YDB_GH_TOKEN в consumer ydb не требуется. Workflow guard до готовности релиза сохраняется.
