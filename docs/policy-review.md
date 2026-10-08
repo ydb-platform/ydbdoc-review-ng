@@ -135,12 +135,12 @@ Inline review comments и GitHub suggestions пока не реализован�
    и транзакции на одноразовой anonymous /local YDB; затем публикует image в GHCR.
    Этот workflow не получает credentials модели и не может сделать платный вызов.
 3. После успеха перенести `review-image.json` из build artifact в `docker/review-image.json`,
-   опубликовать этот commit в main и сдвинуть `v1.2.0` на него.
+   опубликовать этот commit в main и сдвинуть `v1.0.1` на него.
    До этого image manifest содержит null, production worker не выпускается.
    Image должен быть доступен consumer repo для pull; для публичного YDB удобен public GHCR package.
 4. PR workflow и finalizer должны находиться в `.github/workflows/` репозитория
    **ydb-platform/ydb**. Согласованные копии хранятся в `examples/` репозитория кода.
-   Ссылка на action остаётся по `v1.2.0`; image digest меняется внутри action.
+   Ссылка на action остаётся по `v1.0.1`; image digest меняется внутри action.
 5. Как и `doc_translate`, consumer использует secrets
    `YANDEX_CLOUD_API_KEY_DOC_REVIEW`, `YANDEX_CLOUD_FOLDER_DOC_REVIEW`, `YDB_SA_KEY`
    и нативный `${{ github.token }}`. `YDB_TOKEN`, `YDB_ENDPOINT` и `YDB_DATABASE`
@@ -206,8 +206,10 @@ Workflows предложены в ydb: [draft PR](https://github.com/ydb-platfor
 ## Версионный тег по примеру doc_translate
 
 Проверенный consumer переводчика ссылается на `.github/actions/doc-review@v1.0.1`.
-Для нового action выбран `.github/actions/policy-review@v1.2.0`; v1.1.0 уже занят
-релизом continuation. Все три вызова (gate/run/finalize) используют одну версию.
-Имя v1.2.0 остаётся постоянным; перенос этого тега при обновлении и аудит фактического
+Новый action использует `.github/actions/policy-review@v1.0.1`: тот же тег, что
+переводчик. Все три вызова (gate/run/finalize) используют одну версию.
+Имя v1.0.1 остаётся постоянным; перенос этого тега при обновлении и аудит фактического
 SHA/digest соответствуют ранее согласованной доставке без изменений CI.
-Тег выпускается после успешного image build и проверки финансовых транзакций.
+Существующий тег переносится после успешного image build и проверки финансовых
+транзакций. Перенос обновляет также action переводчика: перед выпуском проверить
+его совместимость. Сейчас тег не перенесён; review остаётся отключённым.

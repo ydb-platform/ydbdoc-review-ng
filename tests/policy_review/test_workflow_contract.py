@@ -35,7 +35,7 @@ def test_completed_run_finalizer_has_no_model_credentials_or_mutable_pr_code() -
 def test_release_reference_and_credentials_match_translation_conventions() -> None:
     review = yaml.safe_load((ROOT / "examples/ydbdoc-policy-review.yml").read_text())
     finalizer = yaml.safe_load((ROOT / "examples/ydbdoc-policy-review-finalize.yml").read_text())
-    expected = "ydb-platform/ydbdoc-review-ng/.github/actions/policy-review@v1.2.0"
+    expected = "ydb-platform/ydbdoc-review-ng/.github/actions/policy-review@v1.0.1"
     for job in (review["jobs"]["gate"], review["jobs"]["review"], finalizer["jobs"]["finalize"]):
         step = job["steps"][0]
         assert step["uses"] == expected

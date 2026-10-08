@@ -136,9 +136,10 @@ Build immutable worker; Docker/YDB smoke не выполнялись. Сборк
 
 Сверен актуальный main ydb: ydbdoc-review.yml вызывает
 .github/actions/doc-review@v1.0.1. Это версионный Git tag. Новый policy-review
-в gate/run/finalize подключается по v1.2.0; v1.1.0 уже занят continuation release.
-Resolver фактической версии также проверяет v1.2.0. Порядок переноса постоянного
-тега без правки consumer CI сохраняется; новый тег ещё не выпущен до image gate.
+в gate/run/finalize подключается по тому же тегу v1.0.1.
+Resolver фактической версии также проверяет v1.0.1. Порядок переноса постоянного
+тега без правки consumer CI сохраняется; существующий тег пока не перенесён
+до image gate. Перенос обновит также переводчик; его совместимость нужно проверить.
 
 Ссылки и credentials обновляются в draft PR ydb #55586. Model API/folder берутся
 из тех же YANDEX_CLOUD_API_KEY_DOC_REVIEW / YANDEX_CLOUD_FOLDER_DOC_REVIEW, что у
