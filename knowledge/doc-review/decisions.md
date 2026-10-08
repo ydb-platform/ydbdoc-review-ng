@@ -126,3 +126,30 @@ action. Переносить два независимых тега action/image
 15 секунд и после полного ожидания; при смене SHA возвращает `superseded`,
 при закрытии/draft — `cancelled`; при ошибке API запрещает запуск.
 Helper сам не является admission gate, concurrency lock или работающим CI.
+
+
+## D-12. Admission до cancelling concurrency и постоянные финансовые leases
+
+GitHub job с нерелевантной меткой отсекается до запуска action. Host gate проверяет
+автора/оператора и атомарный ticket до входа в cancelling PR group. Поэтому duplicate
+событие или неразрешённая метка не могут остановить полезное ревью. Новый head
+внешнего автора без допуска может отменить устаревшую попытку, но не получает
+право на модель. После ожидания проверка допуска повторяется.
+
+Lease и reservation не имеют автоматического TTL: отмена HTTP не доказывает
+нулевой billing. Completed workflow finalizer снимает ownership только при отсутствии
+reserved/unknown attempts; иначе нужна сверка. SDK queries параметризованы;
+реальная атомарность проверяется на disposable local YDB перед выпуском image.
+
+## D-13. Раздельные полномочия и аудит передвигаемого тега
+
+Host controller имеет admission/publish credentials; Docker worker их не получает.
+Worker получает model API, audit credentials и read-only GitHub token для head check.
+Нет checkout PR и нет исполнения содержимого PR. Версия downloaded action проверяется
+по Git tree immutable commit, выбранному через stable tag; mismatch запрещает старт.
+Image проверяется по digest и OCI source revision. Audit фиксирует обе версии.
+
+В GitHub Actions нет delivery ID исходного label webhook: используем trusted
+Actions run ID как ID принятого события, одинаковый на rerun. Ticket автоматической
+проверки ключуется по head, ручной — по этому ID. Нельзя выводить approval из
+текущего списка меток или PR body.

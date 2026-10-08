@@ -1,0 +1,65 @@
+name: Build documentation policy reviewer
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  packages: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Build immutable worker
+        env:
+          IMAGE: ghcr.io/ydb-platform/ydbdoc-review-ng:review-${{ github.sha }}
+        run: |
+          docker build --build-arg "REVIEW_REVISION=$GITHUB_SHA" \
+            -f docker/Dockerfile.policy-review -t "$IMAGE" .
+      - name: Offline worker smoke
+        env:
+          IMAGE: ghcr.io/ydb-platform/ydbdoc-review-ng:review-${{ github.sha }}
+        run: |
+          docker run --rm --network=none --entrypoint=python "$IMAGE" \
+            -m ydbdoc_review_ng.cli review \
+            --snapshot /opt/review/fixtures/snapshot.json --output /tmp/report.json
+          docker run --rm --network=none "$IMAGE" --help
+      - name: Start disposable YDB
+        run: |
+          docker run -d --name policy-review-ydb --hostname localhost \
+            --memory=3g --cpus=2 -p 2136:2136 \
+            -e GRPC_PORT=2136 -e YDB_ANONYMOUS_CREDENTIALS=1 \
+            ydbplatform/local-ydb:25.4.1.15@sha256:55fdd320ee0064b9e8c628cb766d481f9be6a2c021ec8235ea8d2280fc937aaf
+      - name: Check real YDB transactions without model calls
+        env:
+          IMAGE: ghcr.io/ydb-platform/ydbdoc-review-ng:review-${{ github.sha }}
+        run: |
+          docker run --rm --network=host --memory=1g \
+            --mount "type=bind,src=$GITHUB_WORKSPACE/scripts,dst=/test/scripts,readonly" \
+            --mount "type=bind,src=$GITHUB_WORKSPACE/docs,dst=/test/docs,readonly" \
+            --entrypoint=python "$IMAGE" /test/scripts/test_policy_review_ydb.py
+      - name: Push tested image
+        env:
+          IMAGE: ghcr.io/ydb-platform/ydbdoc-review-ng:review-${{ github.sha }}
+          REGISTRY_TOKEN: ${{ github.token }}
+        run: |
+          printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker push "$IMAGE"
+          docker buildx imagetools inspect "$IMAGE" --format '{{json .Manifest.Digest}}' > image-digest.json
+          python - <<'PY'
+          import json, os
+          digest = json.load(open('image-digest.json'))
+          manifest = {'image': 'ghcr.io/ydb-platform/ydbdoc-review-ng@' + digest,
+                      'revision': os.environ['GITHUB_SHA']}
+          with open('review-image.json', 'w') as output:
+              json.dump(manifest, output, indent=2)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: review-image
+          path: review-image.json
+      - name: Stop disposable YDB
+        if: always()
+        run: docker rm --force policy-review-ydb || true

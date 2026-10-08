@@ -58,8 +58,8 @@ ydb-platform/ydbdoc-review-ng/
     decisions.md
     open-questions.md
   src/ydbdoc_review_ng/policy_review/
-  .github/actions/doc-policy-review/
-  Dockerfile.review
+  .github/actions/policy-review/
+  docker/Dockerfile.policy-review
   tests/policy_review/
 ```
 
@@ -67,7 +67,7 @@ ydb-platform/ydbdoc-review-ng/
 события, проверка допуска, передача параметров, запуск доверенного action и
 публикация результата. CI ссылается на постоянный передвигаемый тег action
 в репозитории реализации, например
-`ydb-platform/ydbdoc-review-ng/.github/actions/doc-policy-review@doc-review-stable`.
+`ydb-platform/ydbdoc-review-ng/.github/actions/policy-review@doc-review-stable`.
 Точное имя тега определяется при внедрении и затем остаётся постоянным.
 
 Новые версии выпускаются добавлением коммитов в репозиторий реализации и
@@ -274,7 +274,9 @@ workflow: `contents: read`, `pull-requests: write`, `issues: write`,
 Значение задаётся в GitHub Actions Variables проверяемого репозитория,
 валюта RUB, конечное неотрицательное число Decimal. Пустое, отрицательное,
 NaN или некорректное значение запрещает платный запуск с диагностикой.
-Ноль означает отключение платных вызовов. Числовой порог задаёт заказчик.
+Ноль означает отключение платных вызовов. Числовой порог задаёт заказчик. На момент внедрения через GitHub API проверено
+текущее значение repository Variable в ydb: `5000` RUB. Это настройка репозитория,
+а не default реализации.
 
 Создать в **ydb-platform/ydb**, где выполняется consumer workflow:
 `Settings → Secrets and variables → Actions → Variables → New repository variable`.

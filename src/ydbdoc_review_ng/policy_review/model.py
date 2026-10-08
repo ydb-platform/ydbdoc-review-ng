@@ -40,6 +40,7 @@ class BudgetedPolicyModel:
         record_attempt: Callable[[AttemptResult], None],
         *,
         timeout_seconds: float = 600,
+        before_attempt: Callable[[], None] | None = None,
     ) -> None:
         if not isfinite(timeout_seconds) or timeout_seconds <= 0:
             raise ReviewError("invalid_model_timeout")
@@ -47,10 +48,16 @@ class BudgetedPolicyModel:
         self.budget, self._record_attempt = budget, record_attempt
         self._timeout = timeout_seconds
         self._audit_failed = False
+        self._before_attempt = before_attempt
 
     def invoke(self, request: ModelRequest) -> PolicyModelResult:
         if self._audit_failed:
             return PolicyModelResult(None, "model_audit_unavailable")
+        if self._before_attempt is not None:
+            try:
+                self._before_attempt()
+            except ReviewError as error:
+                return PolicyModelResult(None, error.code)
         if request.model != PRODUCTION_MODEL or request.max_output_tokens is None:
             raise ReviewError("unsupported_policy_model")
         reservation: int | None = None

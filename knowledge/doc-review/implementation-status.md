@@ -66,12 +66,40 @@ Consumer wiring, постоянная lease и production workflow пока не
 
 ## Следующий этап
 
-1. GitHub admission: автор/collaborator, оператор метки, `ok-to-test`,
-   сохранение разрешения на head SHA, идемпотентность и `doc_review`.
-2. Доверенный snapshot producer, ссылки/includes/TOC и полноценный YDB audit.
-3. Docker worker, publisher результатов на правильный head SHA и дедупликация.
-4. Выпуск образа/action под передвигаемым тегом и consumer workflow в ydb.
-5. Ограниченный платный пилот после задания суммы бюджета.
+1. Подтвердить Docker build и реальные YDB transactions через отдельный workflow.
+2. Утвердить rules SHA до слияния #55451 либо дождаться main с canonical policy.
+3. Применить новую audit schema, выпустить image/action и установить consumer workflow.
+4. Добавить полную проверку links/includes/TOC и inline comments/suggestions.
+5. Провести ограниченный платный пилот после готовности источника правил и аудита.
 
 Новая GitHub automation, платный режим и перенос tag ещё не выполнены. Ограничения первого этапа описаны в
 [docs/policy-review.md](https://github.com/ydb-platform/ydbdoc-review-ng/blob/ac33a538eb94d599af5c4bb16316e81044d0e53a/docs/policy-review.md).
+
+
+## GitHub/YDB/Docker: следующий этап
+
+Добавлены API-based admission, tickets до concurrency, повторная проверка head
+и permissions после debounce, bounded snapshot producer с merge base, полный
+content/rules/context и запрет выполнения PR кода. Worker проверяет head/lease
+перед каждой оплачиваемой попыткой. Общий комментарий и head Check публикуются
+отдельным publisher, marker защищён проверкой автора.
+
+YDB store использует отдельные approvals/claims/leases/runs/attempts tables,
+parameterized queries и atomic claim/reserve. Применение schema в production
+не выполнялось. Lease с неизвестным расходом не освобождается автоматически.
+Подготовлены Dockerfile, hash-locked Linux CPython 3.11 зависимости, dedicated
+policy-review action, image build workflow и два consumer шаблона (review/finalize).
+Переводческий action и его runtime не изменены.
+
+189 целевых offline tests прошли: 91 тест пакета, provider client, entrypoints и package CLI.
+Ruff нового кода/тестов/launcher и mypy нового пакета прошли. Docker и реальные
+YDB transactions в MARS не проверены: здесь нет Docker. Подготовлен GitHub build
+с anonymous disposable /local integration smoke, без credentials и вызовов модели.
+Build workflow, image manifest и результаты сборки проверяются отдельно.
+
+Переменная в ydb проверена через API: лимит 5000 RUB. Это текущая конфигурация
+заказчика, не внесённый реализацией default. PR #55451 ещё открыт; canonical policy
+в main отсутствует. До слияния требуется отдельное утверждение rules SHA.
+Платного пилота, установки consumer workflow в ydb и переноса stable tag пока нет.
+Остаются inline comments/suggestions, полный link/include/TOC validator и процедура
+сверки незавершённых финансовых резервов. Неполная coverage остаётся явной.

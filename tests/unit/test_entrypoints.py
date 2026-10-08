@@ -380,12 +380,10 @@ def test_factory_is_injected_after_arguments_are_valid():
     assert dispatcher.requests == [VerifyWorkflowInput(123, GitSha(SHA), GitSha(TARGET))]
 
 
-def test_two_workflow_entrypoints_share_one_composite_action():
+def test_translation_workflow_entrypoints_share_one_composite_action():
     paths = sorted((ROOT / ".github/workflows").glob("doc_*.yml"))
     assert [p.stem for p in paths] == ["doc_translate", "doc_verify"]
-    actions = list((ROOT / ".github/actions").glob("*/action.yml"))
-    assert len(actions) == 1
-    action = actions[0].read_text()
+    action = (ROOT / ".github/actions/doc-review/action.yml").read_text()
     assert "using: composite" in action
     assert '"$MODE"' in action
     assert "YDBDOC_RUNTIME_FACTORY" in action

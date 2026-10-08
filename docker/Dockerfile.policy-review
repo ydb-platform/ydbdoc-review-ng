@@ -1,0 +1,14 @@
+FROM python:3.11.14-slim-bookworm
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONSAFEPATH=1
+COPY docker/review-requirements.lock /opt/review-requirements.lock
+RUN python -m pip install --no-cache-dir --only-binary=:all: --require-hashes \
+    --index-url https://pypi.yandex-team.ru/simple/ -r /opt/review-requirements.lock
+COPY src /opt/review/src
+COPY tests/fixtures/policy_review /opt/review/fixtures
+ENV PYTHONPATH=/opt/review/src
+ARG REVIEW_REVISION=unreleased
+LABEL org.opencontainers.image.source="https://github.com/ydb-platform/ydbdoc-review-ng"
+LABEL org.opencontainers.image.revision=$REVIEW_REVISION
+USER 10001:10001
+WORKDIR /opt/review
+ENTRYPOINT ["python", "-m", "ydbdoc_review_ng.policy_review.commands"]

@@ -1,8 +1,8 @@
-# Первый этап проверки правил документации
+# Проверка правил документации: реализация и подключение
 
 Добавлен самостоятельный пакет `ydbdoc_review_ng.policy_review` и локальная
-команда `ydbdoc-review review`. Это первый этап реализации; production workflow
-нового режима пока не подключён. Требования и согласованная схема передвигаемого
+команда `ydbdoc-review review`. Добавлены admission, доверенный producer, YDB audit и Docker worker; production
+workflow нового режима пока не подключён. Требования и согласованная схема передвигаемого
 тега находятся в [DOC_REVIEW_REQUIREMENTS_RU.md](../DOC_REVIEW_REQUIREMENTS_RU.md).
 
 ## Что реализовано
@@ -51,10 +51,11 @@ Snapshot содержит `head_sha`, `base_sha`, `rules_sha`, список `fil
 Изменение тарифа провайдера или превышение его фактического usage может
 привести к overrun, который сохраняется и запрещает следующие запросы.
 
-Audit callbacks должны сохранять reserve/cost вне worker до продолжения
-работы. Ошибка recorder запрещает дальнейшие вызовы. Production YDB wiring,
-восстановление незавершённых резервов и финализация отмены runner относятся
-к следующему этапу. Fake callbacks используются только в offline tests.
+Audit callbacks сохраняют reserve/cost вне worker до продолжения работы через
+`YdbReviewStore`. Ошибка recorder запрещает дальнейшие вызовы. Ledger не хранит
+model prompts/transcripts; сохраняются usage/cost и служебная версия. Отдельный
+finalizer восстанавливает отменённые запуски из ledger. Fake callbacks используются
+только в offline tests; реальные транзакции проверяет image build smoke.
 
 CLI первого этапа не включает платный режим и не читает model credentials.
 Это предотвращает обход ещё не подключённого admission gate через локальную команду.
@@ -78,8 +79,8 @@ Consumer должен передавать `${{ vars.YDBDOC_REVIEW_MAX_RUN_COST_
 измеряется monotonic clock от обработки события, не от timestamp коммита.
 Медленный runner может увеличить фактическую задержку.
 
-Это библиотечный механизм: подключение GitHub API, admission и consumer workflow
-ещё предстоит. Caller обязан проверить допуск после ожидания, обеспечить
+Механизм подключён к GitHub admission и producer; consumer workflow подготовлен
+как шаблон, но ещё не установлен в ydb. Caller обязан проверить допуск после ожидания, обеспечить
 `concurrency` по repository/PR и постоянную lease между платными worker,
 повторно сверить SHA перед вызовом модели и перед публикацией. Сам helper не
 предоставляет разрешение, не дедуплицирует события и не блокирует другие процессы.
@@ -100,3 +101,72 @@ Consumer должен передавать `${{ vars.YDBDOC_REVIEW_MAX_RUN_COST_
 
 В этом этапе не выполняются платные вызовы, публикация замечаний в ydb,
 перенос тегов или установка workflow в ydb.
+
+
+## Admission, snapshot и публикация
+
+`commands gate` проверяет автора через collaborators API и оператора метки через
+repository permissions API. `ok-to-test` сохраняется на конкретный head SHA;
+удаление метки другим CI не аннулирует разрешение. `doc_review` не обходит gate.
+Командная метка принимается от write/maintain/admin и снимается доверенным caller.
+Actor association, PR body, инструкции и расположение fork не являются допуском.
+
+До `concurrency` атомарно сохраняется ticket события в YDB. Повтор того же head
+не отменяет существующую работу. `gate` не вызывает модель. Новый head внешнего
+автора без approval останавливает старую попытку, но сам остаётся в ожидании.
+После debounce повторно проверяются author/operator/head и approval.
+
+Producer читает все pages списка файлов (до лимита API 3000), сверяет количество,
+читает полные Markdown/YFM тексты; before берёт с merge base, rules — с base SHA
+или явно утверждённого `YDBDOC_REVIEW_RULES_SHA`. Symlink/submodule не принимаются.
+Связанные Markdown includes/страницы читаются как данные, без внешних URL и выполнения
+кода. Неоднозначный, слишком большой или неполный snapshot прекращает запуск.
+
+После atomic claim только владелец lease данного PR начинает платные попытки.
+Перед каждой попыткой перепроверяются текущий head/status и ownership. Отмена
+сохраняет reserve; неизвестная стоимость не освобождает lease автоматически.
+Publisher получает отдельный write token, создаёт Check именно на проверенный head
+и обновляет собственный общий комментарий. Чужой скопированный marker игнорируется.
+Для информационного пилота неполная проверка даёт neutral, а не clean/success.
+Inline review comments и GitHub suggestions пока не реализованы.
+
+## Подключение
+
+1. Инициализировать только новые audit tables из `docs/doc-review-schema.sql`:
+   `python -m ydbdoc_review_ng.policy_review.commands init-schema --file docs/doc-review-schema.sql`.
+   Запускать из доверенного checkout с доступом к audit YDB; PR worker не выполняет DDL.
+2. Выполнить workflow `Build documentation policy reviewer` в main. Он собирает
+   worker с hash-locked зависимостями из внутреннего mirror, проверяет offline CLI
+   и транзакции на одноразовой anonymous /local YDB; затем публикует image в GHCR.
+   Этот workflow не получает credentials модели и не может сделать платный вызов.
+3. После успеха перенести `review-image.json` из build artifact в `docker/review-image.json`,
+   опубликовать этот commit в main и сдвинуть `doc-review-stable` на него.
+   До этого image manifest содержит null, production worker не выпускается.
+   Image должен быть доступен consumer repo для pull; для публичного YDB удобен public GHCR package.
+4. Установить оба готовых шаблона из `examples/` в `.github/workflows/` репозитория ydb.
+   Ссылка на action остаётся по `doc-review-stable`; image digest меняется внутри action.
+5. Consumer использует существующие secrets `YANDEX_API_KEY`, `YDB_GH_TOKEN`,
+   `YDB_TOKEN`/`YDB_SA_KEY`, Variables `YANDEX_FOLDER_ID`, `YDB_ENDPOINT`, `YDB_DATABASE`
+   и новый `YDBDOC_REVIEW_MAX_RUN_COST_RUB`. Нативный `github.token` имеет только
+   contents read (finalizer дополнительно actions read). Membership/publish token
+   должен иметь collaborator administration read, checks write и PR comments/labels write.
+6. До слияния правил в main явно согласовать immutable `YDBDOC_REVIEW_RULES_SHA`.
+   Без этой настройки missing canonical rules приводит к остановке без модели.
+
+Gate, run и finalizer используют один trusted action. Controller до Docker проверяет
+фактический action SHA: downloaded code должен совпасть с Git tree разрешённого tag.
+Если tag сдвинут между скачиванием и разрешением версии, выполнение останавливается.
+Worker image выбирается по digest; его OCI revision сверяется с release manifest.
+В audit сохраняются action SHA, runtime revision, image digest и pricing version.
+Доставка обновлений consumer workflow не меняет.
+
+## Отмена и зависшие запуски
+
+Обычная отмена launcher останавливает Docker и затем восстанавливает результат
+из YDB. Финализирующий workflow работает после завершения Actions run, включая
+уничтожение runner. Он проверяет статус/name/event удалённого run и не вызывает модель.
+Без незавершённых paid reservations lease освобождается. При reserved/unknown
+PR остаётся заблокированным до сверки реальной стоимости: автоматическое присвоение
+нулевой цены или освобождение по TTL могло бы нарушить финансовый контракт.
+Сверка расходов после timeout пока является процедурой сопровождающего.
+Не выдавать такую остановку за успешное ревью.
