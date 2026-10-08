@@ -64,6 +64,7 @@ from ydbdoc_review_ng.locales import (
     paired_markdown_path,
 )
 from ydbdoc_review_ng.models import AttemptError, ModelRequest
+from ydbdoc_review_ng.models.configuration import PRODUCTION_MODEL
 from ydbdoc_review_ng.models.types import FrozenJson, mutable_json
 from ydbdoc_review_ng.parser.markdown import build_markdown_plan
 from ydbdoc_review_ng.plan import ProtectedKind, SourcePlan, fields_of
@@ -649,7 +650,7 @@ class RuntimeContent:
         self, source: RuntimeSource, models: RecordedModels, environment: Mapping[str, str],
     ) -> None:
         self.source, self.models, self.environment = source, models, environment
-        self.model = "deepseek-v4-flash"
+        self.model = PRODUCTION_MODEL
         self.critic_model = self.model
         self.arbiter_model = self.model
         self.wikipedia = WikipediaLanglinks()

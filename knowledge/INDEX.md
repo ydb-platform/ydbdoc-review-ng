@@ -1,6 +1,9 @@
 # Банк знаний ydbdoc-review-ng
 
-Только подтверждённые решения. При конфликте побеждает `REQUIREMENTS_RU.md`.
+Для переводчика при конфликте побеждает `REQUIREMENTS_RU.md`. Проект
+отдельного режима проверки правил описан в `DOC_REVIEW_REQUIREMENTS_RU.md`;
+он не изменяет действующий контракт переводчика. В разделе нового режима
+подтверждённые факты отделены от рекомендаций и открытых вопросов.
 
 - `architecture.md` — режимы и инварианты (thin pipeline)
 - `translation-algorithm.md` — scope, thin translate, gates, arbiter
@@ -14,3 +17,5 @@
 - `p0-deepseek-tools-probe.md` — исторический live tools probe
 
 Не хранить секреты, полные transcripts, черновики агентов.
+
+- [doc-review/INDEX.md](doc-review/INDEX.md) — проект проверки правил, исследованные источники и открытые решения.

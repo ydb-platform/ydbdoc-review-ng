@@ -33,13 +33,12 @@ from ydbdoc_review_ng.models import (
     HttpTransport,
     ModelCallResult,
     ModelRequest,
-    ModelTokenPrice,
     NativeYandexClient,
-    PerModelPricing,
     UrllibTransport,
     YandexCredentials,
     YandexOpenAIClient,
 )
+from ydbdoc_review_ng.models.configuration import PRODUCTION_PRICING as _PRODUCTION_PRICING
 from ydbdoc_review_ng.persistence import ContinuationCheckpoint, YdbExecutor, YdbPersistence
 from ydbdoc_review_ng.publication import (
     GitPublicationAdapter,
@@ -57,37 +56,6 @@ from ydbdoc_review_ng.runtime_github import (
 )
 from ydbdoc_review_ng.runtime_ydb import DEFAULT_YDB_DATABASE, DEFAULT_YDB_ENDPOINT, SDKExecutor
 from ydbdoc_review_ng.trace import traced, write_trace
-
-_YANDEXGPT_5_1_TOKEN_RUB = Decimal("0.0012")
-_DEEPSEEK_V4_INPUT_TOKEN_RUB = Decimal("0.0003")
-_DEEPSEEK_V4_CACHED_INPUT_TOKEN_RUB = Decimal("0.000075")
-_DEEPSEEK_V4_OUTPUT_TOKEN_RUB = Decimal("0.0005")
-_PRODUCTION_PRICING = PerModelPricing(
-    {
-        "yandexgpt-5.1": ModelTokenPrice(
-            _YANDEXGPT_5_1_TOKEN_RUB,
-            _YANDEXGPT_5_1_TOKEN_RUB,
-            _YANDEXGPT_5_1_TOKEN_RUB,
-        ),
-        "yandexgpt-5.1/latest": ModelTokenPrice(
-            _YANDEXGPT_5_1_TOKEN_RUB,
-            _YANDEXGPT_5_1_TOKEN_RUB,
-            _YANDEXGPT_5_1_TOKEN_RUB,
-        ),
-        "deepseek-v4-flash": ModelTokenPrice(
-            _DEEPSEEK_V4_INPUT_TOKEN_RUB,
-            _DEEPSEEK_V4_OUTPUT_TOKEN_RUB,
-            Decimal(0),
-            _DEEPSEEK_V4_CACHED_INPUT_TOKEN_RUB,
-        ),
-        "deepseek-v4-flash/latest": ModelTokenPrice(
-            _DEEPSEEK_V4_INPUT_TOKEN_RUB,
-            _DEEPSEEK_V4_OUTPUT_TOKEN_RUB,
-            Decimal(0),
-            _DEEPSEEK_V4_CACHED_INPUT_TOKEN_RUB,
-        ),
-    }
-)
 
 # Full-file critic/arbiter calls need well above the old 180s wall
 # (Actions run 37009373894: TRANSPORT @ ~182s, http_status=null).

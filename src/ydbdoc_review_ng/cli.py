@@ -69,6 +69,9 @@ def _parser() -> argparse.ArgumentParser:
             command.add_argument("--target-sha", required=True)
     continuation = subcommands.add_parser("continue", allow_abbrev=False)
     continuation.add_argument("--pr", type=int, required=True)
+    review = subcommands.add_parser("review", allow_abbrev=False)
+    review.add_argument("--snapshot", required=True)
+    review.add_argument("--output", required=True)
     return parser
 
 
@@ -79,6 +82,10 @@ def main(
     factory: Callable[[], Dispatcher] | None = None,
 ) -> int:
     args = _parser().parse_args(argv)
+    if args.mode == "review":
+        from ydbdoc_review_ng.policy_review.cli import main as review_main
+
+        return review_main(args.snapshot, args.output)
     from ydbdoc_review_ng.application import (
         ContinueWorkflowInput,
         TranslateWorkflowInput,
