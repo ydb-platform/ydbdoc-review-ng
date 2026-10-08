@@ -138,7 +138,8 @@ Inline review comments и GitHub suggestions пока не реализован�
    опубликовать этот commit в main и сдвинуть `doc-review-stable` на него.
    До этого image manifest содержит null, production worker не выпускается.
    Image должен быть доступен consumer repo для pull; для публичного YDB удобен public GHCR package.
-4. Установить оба готовых шаблона из `examples/` в `.github/workflows/` репозитория ydb.
+4. PR workflow и finalizer должны находиться в `.github/workflows/` репозитория
+   **ydb-platform/ydb**. Согласованные копии хранятся в `examples/` репозитория кода.
    Ссылка на action остаётся по `doc-review-stable`; image digest меняется внутри action.
 5. Consumer использует существующие secrets `YANDEX_API_KEY`, `YDB_GH_TOKEN`,
    `YDB_TOKEN`/`YDB_SA_KEY`, Variables `YANDEX_FOLDER_ID`, `YDB_ENDPOINT`, `YDB_DATABASE`
@@ -179,3 +180,21 @@ Checks API вызывается через отдельный host transport с 
 Остальной snapshot уже подготовлен доверенным controller. Ошибка или rate limit
 публичного API прекращают работу до очередного платного запроса. Аутентифицированные
 polling/debounce, membership, comment/label и Checks операции остаются вне контейнера.
+
+## Размещение CI и включение
+
+Workflow сборки `Build documentation policy reviewer` живёт в `ydbdoc-review-ng`:
+он собирает код worker и не реагирует на PR документации. Два workflows, которые
+обрабатывают PR документации (`ydbdoc-policy-review.yml` и finalizer), устанавливаются
+в `ydb-platform/ydb/.github/workflows/`. Внешний action вызывается по стабильному тегу.
+
+Переменная `YDBDOC_REVIEW_ENABLED` в **ydb-platform/ydb** должна иметь ровно `true`
+для запуска jobs. Пока image build/YDB smoke, production audit schema и stable tag
+не готовы, переменная отсутствует или равна `false`: новые jobs пропускаются до
+скачивания action, доступа к YDB и модели. Это позволяет опубликовать CI сейчас
+и включить его без следующей правки workflow. Бюджет 5000 RUB сам по себе не включает CI.
+Не менять этот переключатель во время активного платного запуска: дать finalizer
+сохранить его аудит. Для отключения платных запусков использовать бюджет `0`.
+
+Workflows предложены в ydb: [draft PR](https://github.com/ydb-platform/ydb/pull/55586). Прямая запись в main
+запрещена repository rules; CI ещё не установлен и не включён.

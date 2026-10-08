@@ -1,4 +1,4 @@
-# Copy to ydb/.github/workflows after the image, schema and stable tag are released.
+# Deployed in ydb/.github/workflows; enable only after image, schema and stable tag are ready.
 name: YDB documentation policy review
 on:
   pull_request_target:
@@ -9,8 +9,9 @@ permissions:
 jobs:
   gate:
     if: >-
-      github.event.action != 'labeled' ||
-      github.event.label.name == 'doc_review' || github.event.label.name == 'ok-to-test'
+      vars.YDBDOC_REVIEW_ENABLED == 'true' &&
+      (github.event.action != 'labeled' ||
+      github.event.label.name == 'doc_review' || github.event.label.name == 'ok-to-test')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:

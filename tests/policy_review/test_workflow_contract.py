@@ -19,6 +19,7 @@ def test_only_admitted_review_or_explicit_stop_enters_cancelling_group() -> None
     assert "pull_request.number" in review["concurrency"]["group"]
     assert workflow["permissions"] == {"contents": "read", "checks": "write"}
     assert "api-key" not in gate["steps"][0]["with"]
+    assert "vars.YDBDOC_REVIEW_ENABLED == 'true' &&" in gate["if"]
     assert "checkout" not in (ROOT / "examples/ydbdoc-policy-review.yml").read_text()
 
 
@@ -27,3 +28,4 @@ def test_completed_run_finalizer_has_no_model_credentials_or_mutable_pr_code() -
     assert "workflow_run:" in text and "types: [completed]" in text
     assert "api-key" not in text and "YANDEX_API_KEY" not in text
     assert "head.sha" not in text and "checkout" not in text
+    assert "if: vars.YDBDOC_REVIEW_ENABLED == 'true'" in text

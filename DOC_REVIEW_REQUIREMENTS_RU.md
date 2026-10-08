@@ -268,6 +268,14 @@ workflow: `contents: read`, `pull-requests: write`, `issues: write`,
 в отдельном шаге допуска и не передаётся модели. Если автоматические правки
 будут согласованы, права записи контента добавляются отдельно.
 
+**T-06.** Workflow, реагирующий на PR документации, и его finalizer размещать
+в `ydb-platform/ydb/.github/workflows/`. Сборку worker image размещать рядом с кодом
+в `ydbdoc-review-ng`. До готовности image, audit schema, stable tag и источника
+правил новые jobs отключены: `YDBDOC_REVIEW_ENABLED` в ydb отсутствует или равна
+`false`. Значение ровно `true` включает jobs без изменения CI; бюджет сам по себе
+не включает проверку. Установка CI в main ydb выполняется через PR и проверки
+защищённой ветки, без обхода repository rules.
+
 ## 6. Учёт расходов и отмена
 
 **B-01.** Обязательная переменная: `YDBDOC_REVIEW_MAX_RUN_COST_RUB`.

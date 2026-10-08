@@ -1,4 +1,4 @@
-# Copy alongside ydbdoc-policy-review.yml. This finalizer cannot call the model.
+# Deployed alongside ydbdoc-policy-review.yml. This finalizer cannot call the model.
 name: Finalize YDB documentation policy review
 on:
   workflow_run:
@@ -10,6 +10,7 @@ permissions:
   checks: write
 jobs:
   finalize:
+    if: vars.YDBDOC_REVIEW_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

@@ -117,3 +117,17 @@ Runtime опубликован напрямую в main: `83227d67727a41747e37d8
 В worker не передаются GitHub credentials. Он проверяет только публичный текущий
 head/status через GET PR endpoint; ошибки API запрещают дальнейшие платные попытки.
 94 tests нового пакета и 98 целевых совместимых tests прошли; Ruff и mypy прошли.
+
+## Workflow ревью в ydb
+
+PR review и workflow_run finalizer подготовлены в репозитории документации:
+[https://github.com/ydb-platform/ydb/pull/55586](https://github.com/ydb-platform/ydb/pull/55586). Это draft PR, а не установленный в main workflow.
+Прямой push отклонён правилами ydb: изменения должны идти через PR, нужен
+required check checks_integrated. Никакие защиты ветки не обходились.
+
+Jobs отключены до готовности релиза: переменная YDBDOC_REVIEW_ENABLED в ydb
+отсутствует. Сборка внешнего image run 37778165215 завершилась failure на шаге
+Build immutable worker; Docker/YDB smoke не выполнялись. Сборка образа остаётся
+в ydbdoc-review-ng; обработчики PR/завершения помещены в PR репозитория ydb.
+Два теста изменённых workflow contracts и Ruff прошли. Модель и production YDB
+не вызывались. Выпуск stable tag/образа и включение review по-прежнему не выполнены.

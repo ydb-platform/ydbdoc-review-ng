@@ -160,3 +160,10 @@ Classic PAT не используется для создания GitHub Check. 
 используют нативный Actions token с checks write, комментарии/метки — существующий
 YDB_GH_TOKEN. Worker не получает GitHub credentials: только публичный PR GET для
 head/status guard. Public API failure/rate limit останавливает платные попытки.
+
+### D-15. CI для PR устанавливается в ydb
+
+Заказчик уточнил размещение CI: PR review и workflow_run finalizer устанавливаются
+в ydb-platform/ydb, а image build остаётся рядом с кодом в ydbdoc-review-ng.
+До готовности image/audit/tag новые jobs отключены отсутствующей/false переменной
+YDBDOC_REVIEW_ENABLED в ydb. Включение после проверок не требует правки CI.
