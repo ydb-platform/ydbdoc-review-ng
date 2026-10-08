@@ -153,3 +153,10 @@ Image проверяется по digest и OCI source revision. Audit фикс�
 Actions run ID как ID принятого события, одинаковый на rerun. Ticket автоматической
 проверки ключуется по head, ручной — по этому ID. Нельзя выводить approval из
 текущего списка меток или PR body.
+
+### D-14. GitHub Check и write tokens вне Docker
+
+Classic PAT не используется для создания GitHub Check. Controller/publisher
+используют нативный Actions token с checks write, комментарии/метки — существующий
+YDB_GH_TOKEN. Worker не получает GitHub credentials: только публичный PR GET для
+head/status guard. Public API failure/rate limit останавливает платные попытки.

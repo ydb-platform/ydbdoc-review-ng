@@ -1,10 +1,11 @@
 import base64
+import io
 from dataclasses import replace
 
 import pytest
 
 from ydbdoc_review_ng.policy_review.admission import ReviewPR
-from ydbdoc_review_ng.policy_review.github import PREFIX, ReviewGitHub
+from ydbdoc_review_ng.policy_review.github import PREFIX, ReviewGitHub, ReviewHTTP
 from ydbdoc_review_ng.policy_review.types import ReviewError
 
 from .helpers import PATH, snapshot_json
@@ -115,3 +116,47 @@ def test_own_report_is_updated_and_new_head_prevents_any_publication() -> None:
     with pytest.raises(ReviewError, match="superseded"):
         ReviewGitHub(api).publish(42, "c" * 40, "old report", "neutral")
     assert len(writes) == 2
+
+
+def test_checks_use_separate_app_transport_and_comments_keep_publisher_identity() -> None:
+    check_writes, comment_writes = [], []
+    def read(method, path, payload):
+        return [] if "/comments?" in path else row()
+    def publisher(method, path, payload):
+        if path == "/user":
+            return {"login": "publisher"}
+        assert "/check-runs" not in path
+        comment_writes.append(path)
+        return {}
+    def checks(method, path, payload):
+        check_writes.append((path, payload))
+        return {}
+    ReviewGitHub(read, publish=publisher, checks=checks).publish(42, PR.head_sha, "report", "neutral")
+    assert check_writes[0][0] == PREFIX + "/check-runs"
+    assert check_writes[0][1]["head_sha"] == PR.head_sha
+    assert comment_writes == [PREFIX + "/issues/42/comments"]
+
+
+def test_worker_can_read_public_head_without_any_github_credential() -> None:
+    requests = []
+    class Response(io.BytesIO):
+        status = 200
+    class Opener:
+        def open(self, request, timeout):
+            requests.append(request)
+            return Response(b'{"number":42}')
+    api = ReviewHTTP("", anonymous_pr_read=True)
+    api._opener = Opener()
+    assert api("GET", PREFIX + "/pulls/42") == {"number": 42}
+    assert not requests[0].has_header("Authorization")
+    for method, path in [("POST", PREFIX + "/check-runs"), ("GET", "/user"),
+                         ("GET", PREFIX + "/collaborators/member"),
+                         ("GET", PREFIX + "/pulls/42?redirect=1")]:
+        with pytest.raises(ReviewError, match="review_github_configuration_invalid"):
+            api(method, path)
+    assert len(requests) == 1
+
+
+def test_missing_host_credentials_do_not_enable_public_mode_implicitly() -> None:
+    with pytest.raises(ReviewError, match="review_github_configuration_invalid"):
+        ReviewHTTP("")("GET", PREFIX + "/pulls/42")

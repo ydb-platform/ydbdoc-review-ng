@@ -37,6 +37,7 @@ def test_worker_docker_command_excludes_write_and_admission_tokens() -> None:
     image = "ghcr.io/ydb-platform/ydbdoc-review-ng@sha256:" + "a" * 64
     args = launcher.docker_arguments(image, "worker", Path("/input"), Path("/output"), 1001, 1001)
     assert "YDBDOC_REVIEW_ADMISSION_TOKEN" not in args and "YDBDOC_REVIEW_PUBLISH_TOKEN" not in args
+    assert "YDBDOC_REVIEW_CHECKS_TOKEN" not in args and "YDBDOC_REVIEW_READ_TOKEN" not in args
     assert "--read-only" in args and "--user" in args
     assert any("dst=/review/input,readonly" in arg for arg in args)
     assert "--privileged" not in args and not any("docker.sock" in arg for arg in args)

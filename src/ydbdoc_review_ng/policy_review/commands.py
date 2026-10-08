@@ -87,9 +87,11 @@ def main(argv: list[str] | None = None) -> int:
     env = dict(os.environ)
     sdk = _sdk(env)
     store = YdbReviewStore(sdk)
-    github = ReviewGitHub(ReviewHTTP(env.get("YDBDOC_REVIEW_READ_TOKEN", "")),
+    github = ReviewGitHub(ReviewHTTP(env.get("YDBDOC_REVIEW_READ_TOKEN", ""),
+                                   anonymous_pr_read=args.mode == "worker"),
                           ReviewHTTP(env.get("YDBDOC_REVIEW_ADMISSION_TOKEN", "")),
-                          ReviewHTTP(env.get("YDBDOC_REVIEW_PUBLISH_TOKEN", "")))
+                          ReviewHTTP(env.get("YDBDOC_REVIEW_PUBLISH_TOKEN", "")),
+                          ReviewHTTP(env.get("YDBDOC_REVIEW_CHECKS_TOKEN", "")))
     preparation: Preparation | None = None
     try:
         if args.mode == "init-schema":

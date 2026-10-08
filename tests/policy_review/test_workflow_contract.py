@@ -17,7 +17,7 @@ def test_only_admitted_review_or_explicit_stop_enters_cancelling_group() -> None
     assert "outputs.admitted" in review["if"] and "outputs.stop" in review["if"]
     assert review["concurrency"]["cancel-in-progress"] is True
     assert "pull_request.number" in review["concurrency"]["group"]
-    assert workflow["permissions"] == {"contents": "read"}
+    assert workflow["permissions"] == {"contents": "read", "checks": "write"}
     assert "api-key" not in gate["steps"][0]["with"]
     assert "checkout" not in (ROOT / "examples/ydbdoc-policy-review.yml").read_text()
 

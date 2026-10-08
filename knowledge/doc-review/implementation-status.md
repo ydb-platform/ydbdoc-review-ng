@@ -91,7 +91,7 @@ parameterized queries и atomic claim/reserve. Применение schema в pr
 policy-review action, image build workflow и два consumer шаблона (review/finalize).
 Переводческий action и его runtime не изменены.
 
-189 целевых offline tests прошли: 91 тест пакета, provider client, entrypoints и package CLI.
+192 целевых offline tests прошли: 94 теста пакета, provider client, entrypoints и package CLI.
 Ruff нового кода/тестов/launcher и mypy нового пакета прошли. Docker и реальные
 YDB transactions в MARS не проверены: здесь нет Docker. Подготовлен GitHub build
 с anonymous disposable /local integration smoke, без credentials и вызовов модели.
@@ -103,3 +103,17 @@ Build workflow, image manifest и результаты сборки провер
 Платного пилота, установки consumer workflow в ydb и переноса stable tag пока нет.
 Остаются inline comments/suggestions, полный link/include/TOC validator и процедура
 сверки незавершённых финансовых резервов. Неполная coverage остаётся явной.
+
+## Проверка выпуска и GitHub Check
+
+Runtime опубликован напрямую в main: `83227d67727a41747e37d8d3138e3f50b166b163`.
+[Сборка образа и smoke временной YDB](https://github.com/ydb-platform/ydbdoc-review-ng/actions/runs/37777043461)
+запущены через workflow_dispatch; runner ещё не был назначен на момент фиксации.
+Успех Docker и реальных SQL transactions пока не подтверждён.
+
+Выявлено, что доступный `YDB_GH_TOKEN` — classic PAT. Публикация Check переведена
+на отдельный host transport с нативным Actions token (`checks: write`), как требует
+[GitHub Checks API](https://docs.github.com/en/rest/checks/runs#create-a-check-run).
+В worker не передаются GitHub credentials. Он проверяет только публичный текущий
+head/status через GET PR endpoint; ошибки API запрещают дальнейшие платные попытки.
+94 tests нового пакета и 98 целевых совместимых tests прошли; Ruff и mypy прошли.

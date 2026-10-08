@@ -8,7 +8,7 @@ inputs:
     description: Token with repository collaborator administration read access; host only
     required: false
   publish-token:
-    description: Token with checks and PR comments write access; host only
+    description: Token with PR comments and labels write access; host only
     required: true
   api-key:
     description: Same model API key as doc_translate; worker only
@@ -64,6 +64,7 @@ runs:
         PYTHONSAFEPATH: '1'
         YDBDOC_POLICY_MODE: ${{ inputs.mode }}
         YDBDOC_REVIEW_READ_TOKEN: ${{ github.token }}
+        YDBDOC_REVIEW_CHECKS_TOKEN: ${{ github.token }}
         YDBDOC_REVIEW_ADMISSION_TOKEN: ${{ inputs.admission-token }}
         YDBDOC_REVIEW_PUBLISH_TOKEN: ${{ inputs.publish-token }}
         YDBDOC_REVIEW_MAX_RUN_COST_RUB: ${{ inputs.budget-rub }}

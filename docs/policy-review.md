@@ -88,20 +88,15 @@ Consumer должен передавать `${{ vars.YDBDOC_REVIEW_MAX_RUN_COST_
 недостаточно, чтобы исключить новый push после начала платного ревью: такую
 старую попытку потребуется остановить и сохранить её расходы.
 
-## Следующие этапы
+## Оставшиеся этапы
 
-1. GitHub admission: collaborator/owner, проверка оператора, `ok-to-test` с
-   разрешением конкретного head SHA, снятие `doc_review`, идемпотентность.
-2. Snapshot producer с проверкой provenance, scope ссылок/includes/TOC,
-   полные формальные проверки и постоянный YDB аудит/approvals.
-3. Docker worker и отдельный GitHub publisher: head Check, замечания и дедупликация.
-4. Выпуск образа и action под передвигаемым тегом; consumer workflow в ydb.
-   Новые релизы подключаются переносом тега без изменения consumer CI.
-5. Малый платный пилот после задания суммы бюджета и готовности аудита.
+1. Подтвердить Docker build и финансовые транзакции на временной YDB.
+2. Выпустить проверенный image/action, применить новые audit tables и подключить
+   consumer workflow в ydb.
+3. Добавить полные формальные проверки links/includes/TOC, inline comments и suggestions.
+4. Провести небольшой платный пилот после утверждения источника правил.
 
-В этом этапе не выполняются платные вызовы, публикация замечаний в ydb,
-перенос тегов или установка workflow в ydb.
-
+Платные вызовы и публикация замечаний в ydb пока не выполнялись.
 
 ## Admission, snapshot и публикация
 
@@ -147,9 +142,11 @@ Inline review comments и GitHub suggestions пока не реализован�
    Ссылка на action остаётся по `doc-review-stable`; image digest меняется внутри action.
 5. Consumer использует существующие secrets `YANDEX_API_KEY`, `YDB_GH_TOKEN`,
    `YDB_TOKEN`/`YDB_SA_KEY`, Variables `YANDEX_FOLDER_ID`, `YDB_ENDPOINT`, `YDB_DATABASE`
-   и новый `YDBDOC_REVIEW_MAX_RUN_COST_RUB`. Нативный `github.token` имеет только
-   contents read (finalizer дополнительно actions read). Membership/publish token
-   должен иметь collaborator administration read, checks write и PR comments/labels write.
+   и новый `YDBDOC_REVIEW_MAX_RUN_COST_RUB`. Нативный `github.token` имеет
+   contents read и checks write (finalizer дополнительно actions read). Он создаёт
+   head Check вне Docker. Membership/publish token используется только вне Docker
+   для collaborator administration read и PR comments/labels write. Обычный PAT
+   не используется для Checks API.
 6. До слияния правил в main явно согласовать immutable `YDBDOC_REVIEW_RULES_SHA`.
    Без этой настройки missing canonical rules приводит к остановке без модели.
 
@@ -170,3 +167,15 @@ PR остаётся заблокированным до сверки реаль�
 нулевой цены или освобождение по TTL могло бы нарушить финансовый контракт.
 Сверка расходов после timeout пока является процедурой сопровождающего.
 Не выдавать такую остановку за успешное ревью.
+
+## Разделение GitHub credentials
+
+Checks API вызывается через отдельный host transport с нативным Actions token.
+Так reviewer работает с существующим classic PAT `YDB_GH_TOKEN`, которому Checks API
+не предоставляет возможность создавать Check. Основание: [GitHub Checks API](https://docs.github.com/en/rest/checks/runs#create-a-check-run).
+
+В Docker не передаётся ни один GitHub token. Worker читает только публичный
+`GET /repos/ydb-platform/ydb/pulls/<number>` для проверки актуального head/status.
+Остальной snapshot уже подготовлен доверенным controller. Ошибка или rate limit
+публичного API прекращают работу до очередного платного запроса. Аутентифицированные
+polling/debounce, membership, comment/label и Checks операции остаются вне контейнера.

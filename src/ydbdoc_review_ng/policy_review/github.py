@@ -33,22 +33,29 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 class ReviewHTTP:
-    def __init__(self, token: str, *, repository: str = REPOSITORY) -> None:
+    def __init__(self, token: str, *, repository: str = REPOSITORY,
+                 anonymous_pr_read: bool = False) -> None:
         if repository not in {REPOSITORY, "ydb-platform/ydbdoc-review-ng"}:
             raise ReviewError("review_github_configuration_invalid")
         self._token = token
         self._prefix = "/repos/" + repository
+        self._anonymous_pr_read = anonymous_pr_read and repository == REPOSITORY
         self._opener = urllib.request.build_opener(_NoRedirect())
 
     def __call__(self, method: str, path: str, payload: object = None) -> Any:
-        if not self._token or (not path.startswith(self._prefix + "/") and path != "/user") or "#" in path:
+        anonymous = (not self._token and self._anonymous_pr_read and method == "GET"
+                     and re.fullmatch(re.escape(PREFIX) + r"/pulls/[1-9][0-9]*", path) is not None)
+        if (not self._token and not anonymous
+                or not path.startswith(self._prefix + "/") and path != "/user" or "#" in path):
             raise ReviewError("review_github_configuration_invalid")
+        headers = {"Accept": "application/vnd.github+json",
+                   "X-GitHub-Api-Version": "2022-11-28", "Content-Type": "application/json"}
+        if self._token:
+            headers["Authorization"] = "Bearer " + self._token
         request = urllib.request.Request(
             "https://api.github.com" + path, method=method,
             data=None if payload is None else json.dumps(payload).encode(),
-            headers={"Authorization": "Bearer " + self._token,
-                     "Accept": "application/vnd.github+json",
-                     "X-GitHub-Api-Version": "2022-11-28", "Content-Type": "application/json"},
+            headers=headers,
         )
         try:
             with self._opener.open(request, timeout=60) as response:
@@ -68,8 +75,9 @@ class ReviewHTTP:
 
 class ReviewGitHub:
     def __init__(self, read: JsonAPI, admission: JsonAPI | None = None,
-                 publish: JsonAPI | None = None) -> None:
+                 publish: JsonAPI | None = None, checks: JsonAPI | None = None) -> None:
         self._read, self._admission, self._publish = read, admission or read, publish or read
+        self._checks = checks or self._publish
 
     def read_pr(self, pr: int) -> ReviewPR:
         row = self._read("GET", PREFIX + f"/pulls/{pr}", None)
@@ -207,7 +215,7 @@ class ReviewGitHub:
     def publish(self, pr: int, head: str, body: str, conclusion: str) -> None:
         if self.read_pr(pr).head_sha != head:
             raise ReviewError("superseded")
-        self._publish("POST", PREFIX + "/check-runs", {
+        self._checks("POST", PREFIX + "/check-runs", {
             "name": "YDB documentation policy review", "head_sha": head,
             "status": "completed", "conclusion": conclusion,
             "output": {"title": "Проверка документации YDB", "summary": body[:60000]},
