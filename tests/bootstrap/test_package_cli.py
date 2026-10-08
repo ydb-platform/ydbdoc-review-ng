@@ -58,7 +58,7 @@ def test_cli_help_is_successful_on_stdout() -> None:
     result = run_cli("--help")
 
     assert result.returncode == 0
-    assert "{translate,verify,continue}" in result.stdout
+    assert "{translate,verify,continue,review}" in result.stdout
     assert result.stderr == ""
 
 
@@ -71,7 +71,7 @@ def test_cli_rejects_missing_or_unknown_mode(args: tuple[str, ...]) -> None:
     assert "usage:" in result.stderr
 
 
-@pytest.mark.parametrize("mode", ["translate", "verify", "continue"])
+@pytest.mark.parametrize("mode", ["translate", "verify", "continue", "review"])
 def test_valid_modes_require_explicit_workflow_inputs(mode: str) -> None:
     result = run_cli(mode)
 
@@ -80,7 +80,9 @@ def test_valid_modes_require_explicit_workflow_inputs(mode: str) -> None:
     assert result.stderr.endswith("Invalid workflow inputs\n")
 
 
-@pytest.mark.parametrize("argv", [[mode, "--help"] for mode in ("translate", "verify", "continue")])
+@pytest.mark.parametrize("argv", [[mode, "--help"] for mode in (
+    "translate", "verify", "continue", "review"
+)])
 def test_import_help_and_modes_avoid_application_side_effects(argv: list[str]) -> None:
     probe = r"""
 import builtins

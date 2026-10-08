@@ -1,5 +1,10 @@
 # ydbdoc-review-ng
 
+Первый этап нового режима проверки нормативных правил документации описан
+в [docs/policy-review.md](docs/policy-review.md). Локальная команда
+`ydbdoc-review review --snapshot ... --output ...` работает без сети;
+production CI нового режима подключается следующим этапом.
+
 Библиотека и CLI для двунаправленного перевода документации YDB, Python 3.11+.
 Версия `1.1.0` поддерживает `translate`, `verify` и `continue`.
 
