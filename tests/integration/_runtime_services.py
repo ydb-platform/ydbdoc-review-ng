@@ -166,6 +166,7 @@ class RuntimeServices:
         self.comments = []
         self.source_comments = []
         self.branch_head = None
+        self.translation_branch = "translation/pr-42"
         self.pr_exists = False
         self.jobs = {}
         self.checkpoints = {}
@@ -253,7 +254,7 @@ class RuntimeServices:
                 "changed_files": len([name for name in self.files if name.startswith("ydb/docs/en/")]),
                 "head": {
                     "sha": self.translated,
-                    "ref": "translation/pr-42",
+                    "ref": self.translation_branch,
                     "repo": {"full_name": "ydb-platform/ydb"},
                 },
                 "base": {
@@ -272,9 +273,11 @@ class RuntimeServices:
                     if name.startswith("ydb/docs/en/")]
         if path == "/git/ref/heads/main":
             return {"object": {"sha": self.base}}
-        if path.startswith("/git/ref/heads/translation"):
+        if path.startswith(("/git/ref/heads/translation/", "/git/ref/heads/robots/docs/")):
+            if path != "/git/ref/heads/" + self.translation_branch:
+                return None
             return None if self.branch_head is None else {"object": {"sha": self.branch_head}}
-        if method == "DELETE" and path.startswith("/git/refs/heads/translation"):
+        if method == "DELETE" and path == "/git/refs/heads/" + self.translation_branch:
             self.branch_head = None
             return None
         if method == "DELETE" and "/labels/" in path:
@@ -308,6 +311,8 @@ class RuntimeServices:
             self.translated = f"{0xE000 + self._commit_n:040x}"
             return {"sha": self.translated}
         if path == "/git/refs" or path.startswith("/git/refs/heads/"):
+            if path == "/git/refs":
+                self.translation_branch = payload["ref"].removeprefix("refs/heads/")
             self.branch_head = payload["sha"]
             for item in self.tree:
                 path_name = item.get("path")

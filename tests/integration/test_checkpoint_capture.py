@@ -166,6 +166,8 @@ class CaptureServices(RuntimeServices):
             if method == "DELETE":
                 self.branch_head = None
                 return {}
+            if relative == "/git/refs":
+                self.translation_branch = payload["ref"].removeprefix("refs/heads/")
             self.branch_head = payload["sha"]
             self.files = dict(self.snapshots[self.branch_head])
             return {}

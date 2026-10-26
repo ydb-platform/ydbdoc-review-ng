@@ -274,9 +274,15 @@ class RuntimeSource:
     def authorize_translate(self, request: TranslateWorkflowInput, /) -> AuthorizedRun:
         self._authorize()
         self.github.remove_label(request.pr_number, Mode.DOC_TRANSLATE.value)
-        return AuthorizedRun(
-            Mode.DOC_TRANSLATE, f"translation/pr-{request.pr_number}", None, request
+        legacy_branch = f"translation/pr-{request.pr_number}"
+        # Continue existing translations on their original refs; only new branches
+        # belong to the robot namespace.
+        branch = (
+            legacy_branch
+            if self.github.head(legacy_branch) is not None
+            else f"robots/docs/{legacy_branch}"
         )
+        return AuthorizedRun(Mode.DOC_TRANSLATE, branch, None, request)
 
     def authorize_continue(
         self, pr_number: int, checkpoints: CheckpointReader, /, *, now: datetime
