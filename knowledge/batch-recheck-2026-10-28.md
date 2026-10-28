@@ -248,3 +248,19 @@ success, [новый комментарий](https://github.com/ydb-platform/ydb
 GREEN:39classifier tests passed; Ruff/mypy изменённого модуля clean.
 Full suite272failed2354passed7deselected; множество272падений точно совпало
 с baseline после #55307, новых падений нет.
+
+
+## Завершение #52520
+
+Код7015a99 опубликован в main, тегv1.0.1 обновлён. Независимое review
+подтвердило устранение fallback ошибки, блокеров нет.
+[Run40735729708](https://github.com/ydb-platform/ydb/actions/runs/40735729708)
+completed/success. Лог подтверждает checkout7015a99bb01b644d5d38573146da8ecda43899d0,
+единственный pair_request attempt1 request_bytes21999 и no_translation.
+Локальный размер21872 отличался из-за сокращённых путей fixture, CI21999
+содержит настоящие пути и key.
+[Новый комментарий](https://github.com/ydb-platform/ydb/pull/52520#issuecomment-6475931538)
+создан2026-10-28T17:26:56Z (20:26:56МСК), модель явно подтвердила совпадение
+RATE→GAUGE и дополненного описания обеих локалей.
+Все три ошибки исходного batch (#55293,#55307,#52520) разобраны, исправления
+проверены повторными успешными CI с новыми no-translation комментариями.
