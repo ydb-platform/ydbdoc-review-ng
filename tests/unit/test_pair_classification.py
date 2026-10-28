@@ -392,3 +392,19 @@ def test_new_page_can_be_translation_source_without_explicit_delta():
         files, (pair,), BEFORE, AFTER, "model", lambda _: response("ru_to_en")
     )
     assert result[0].action == "ru_to_en"
+
+
+def test_balanced_batches_keep_both_locales_changes_when_they_fit(monkeypatch):
+    monkeypatch.setattr(pc, "MAX_REQUEST_BYTES", 20000)
+    files, pair = batching_fixture()
+    seen = []
+
+    def invoke(request):
+        payload = json.loads(request.prompt.split("\nPair evidence: ", 1)[1])
+        seen.append(payload["focused_delta_locales"])
+        return response("no_translation")
+
+    result = pc.classify_pairs(files, (pair,), BEFORE, AFTER, "model", invoke)
+    assert result[0].action == "no_translation"
+    assert len(seen) > 1
+    assert all(locales == ["en", "ru"] for locales in seen)

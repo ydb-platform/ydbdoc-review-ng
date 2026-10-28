@@ -401,7 +401,12 @@ def classify_pairs(
                         focus=focus,
                     )
                 except ContextBoundExceeded:
-                    group = sorted(units if focus is None else focus)
+                    # Interleave locales so batching does not separate all RU
+                    # evidence from all EN evidence. Ordinals are packing hints,
+                    # never a claim that two changes are translations.
+                    group = sorted(
+                        units if focus is None else focus, key=lambda unit: (unit[1], unit[0])
+                    )
                     if len(group) > 1:
                         midpoint = len(group) // 2
                         pending[0:0] = [frozenset(group[:midpoint]), frozenset(group[midpoint:])]
