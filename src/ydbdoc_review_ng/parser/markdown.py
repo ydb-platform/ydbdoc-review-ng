@@ -749,7 +749,13 @@ def _inline_regions(
             )
             cursor = anchor.end()
             continue
+        # Link labels are translatable, but their closing syntax/destination
+        # is already protected. A bare URL in the label must stay inside it.
         match = _URL.match(data, cursor)
+        if match is not None:
+            url_limit = occupied.find(b"\1", cursor, match.end())
+            if url_limit >= 0:
+                match = _URL.match(data, cursor, url_limit)
         if match is not None:
             end = match.end()
             while end > match.start() and data[end - 1] in b".,;:!?":

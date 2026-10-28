@@ -25,3 +25,5 @@
 - [pair-classification.md](pair-classification.md): решения пар, компактный контекст, смешанные направления и continue.
 
 - [release-2026-10-28.md](release-2026-10-28.md): проверки, baseline и результат повторного CI.
+
+- [batch-recheck-2026-10-28.md](batch-recheck-2026-10-28.md): повторные запуски девяти PR и новые комментарии.
