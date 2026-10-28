@@ -150,7 +150,8 @@ def test_complete_fence_list_and_table_are_retained(block):
     )
     request = pc.pair_request(files, pair, BEFORE, AFTER, "model")
     payload = json.loads(request.prompt.split("\nPair evidence: ", 1)[1])
-    assert any(chunk["text"] == block for chunk in payload["ru"]["before_blocks"])
+    expected = block.split("\n- second")[0]
+    assert any(chunk["text"] == expected for chunk in payload["ru"]["before_blocks"])
 
 
 def test_new_page_content_is_sent_once_and_in_full():
@@ -244,3 +245,102 @@ def test_malformed_response_retries_same_compact_request_and_recovers(capsys):
         for line in capsys.readouterr().err.splitlines()
     ]
     assert all(event["article"] == "page.md" for event in events)
+
+
+def test_large_list_change_keeps_complete_item_without_unrelated_items():
+    items = [f"- Unrelated entry {i}: " + "background " * 80 for i in range(150)]
+    old = ("# Release\n\n" + "\n".join(items) + "\n\n").encode()
+    new = old.replace(b"Unrelated entry 75:", b"Changed entry 75:")
+    files, pair = fixture(old, new, old, new)
+    request = pc.pair_request(files, pair, BEFORE, AFTER, "model")
+    payload = json.loads(request.prompt.split("\nPair evidence: ", 1)[1])
+    assert payload["ru"]["before_blocks"][0]["text"] == items[75]
+    assert payload["ru"]["after_blocks"][0]["text"] == items[75].replace("Unrelated", "Changed")
+    assert "Unrelated entry 0:" not in request.prompt
+
+
+def test_large_list_item_keeps_nested_list_and_fenced_continuation():
+    lead = "- Other entry " + "background " * 500 + "\n"
+    item = "- Main item\n\n  continuation\n  - child\n\n  ```text\n- fence content\n  ```"
+    blocks = pc._blocks(lead + item + "\n- Last item\n")
+    assert any(block.text == item for block in blocks)
+
+
+def batching_fixture():
+    old = "# Changes\n\n" + "\n\n".join(
+        f"- `setting_{i}` old " + "background " * 70 for i in range(12)
+    )
+    new = (
+        old.replace("`setting_1` old", "`setting_1` new")
+        .replace("- `setting_4` old " + "background " * 70, "")
+        .replace("`setting_9` old", "`setting_9` new")
+    )
+    new += "\n\n- `added` new " + "background " * 70
+    return fixture(old.encode(), new.encode(), old.encode(), new.encode())
+
+
+def test_batches_cover_every_delta_once_including_insert_and_delete(monkeypatch):
+    monkeypatch.setattr(pc, "MAX_REQUEST_BYTES", 14000)
+    files, pair = batching_fixture()
+    requests = []
+
+    def invoke(request):
+        requests.append(request)
+        assert len(request.prompt.encode()) <= pc.MAX_REQUEST_BYTES
+        return response("no_translation")
+
+    decisions = pc.classify_pairs(files, (pair,), BEFORE, AFTER, "model", invoke)
+    assert decisions[0].action == "no_translation"
+    assert len(requests) > 1
+    payloads = [json.loads(r.prompt.split("\nPair evidence: ", 1)[1]) for r in requests]
+    for locale, item in zip(("ru", "en"), files):
+        expected = pc._delta(item.before.decode(), item.after.decode())
+        seen = [d for payload in payloads for d in payload[locale]["delta"]]
+        assert sorted(seen, key=lambda d: d["old_start"]) == expected
+        removed = [line for delta in seen for line in delta["removed"] if line.strip()]
+        added = [line for delta in seen for line in delta["added"] if line.strip()]
+        assert [line.split("`")[1] for line in removed] == ["setting_1", "setting_4", "setting_9"]
+        assert [line.split("`")[1] for line in added] == ["setting_1", "setting_9", "added"]
+        assert all(" old " in line for line in removed)
+        assert all(" new " in line for line in added)
+        for payload in payloads:
+            side = payload[locale]
+            for delta in side["delta"]:
+                for kind, lines in [
+                    ("before_blocks", delta["removed"]),
+                    ("after_blocks", delta["added"]),
+                ]:
+                    text = "\n".join(b["text"] for b in side[kind])
+                    assert all(not line.strip() or line in text for line in lines)
+
+
+@pytest.mark.parametrize(
+    "actions,expected",
+    [
+        (["no_translation"], "no_translation"),
+        (["ru_to_en", "no_translation"], "ru_to_en"),
+        (["ru_to_en", "en_to_ru"], "conflict"),
+        (["no_translation", "conflict"], "conflict"),
+        (["need_context"], "need_context"),
+    ],
+)
+def test_batch_decisions_are_aggregated_conservatively(monkeypatch, actions, expected):
+    monkeypatch.setattr(pc, "MAX_REQUEST_BYTES", 14000)
+    files, pair = batching_fixture()
+    calls = []
+
+    def invoke(request):
+        action = actions[min(len(calls), len(actions) - 1)]
+        calls.append(request)
+        return response(action)
+
+    result = pc.classify_pairs(files, (pair,), BEFORE, AFTER, "model", invoke)
+    assert len(calls) > 1
+    assert result[0].action == expected
+
+
+def test_list_item_fence_with_trailing_text_does_not_close():
+    text = "- Main\n  ```text\n  ```not-a-close\n- inside fence\n  ```\n- Next"
+    block = pc._Block(0, 7, text, ("# H",), 0)
+    items = pc._list_items(block)
+    assert [item.text for item in items] == [text.rsplit("\n- Next", 1)[0], "- Next"]

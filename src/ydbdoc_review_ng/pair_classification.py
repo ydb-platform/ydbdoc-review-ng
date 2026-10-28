@@ -32,7 +32,7 @@ Counterpart blocks are retrieval candidates, NOT proven translations. Heading or
 are hints only: translated documents may reorder, insert or omit sections. Check heading
 context and anchors. before_blocks/after_blocks contain whole affected Markdown blocks;
 current_blocks contain counterpart candidates; delta contains the actual changed lines.
-The heading outline shows omitted sections; do not assume unseen text is absent. An
+The heading outline describes selected sections; omitted_sections counts other sections. Do not assume unseen text is absent. A batch contains only some PR deltas; classify only the deltas shown, using counterpart candidates as evidence. An
 expanded_sections request is the final bounded context retry. If still insufficient,
 return need_context. New pages provide complete content within the request bound.
 Return exactly {key, action, reason}, with action one of no_translation, ru_to_en,
@@ -113,6 +113,45 @@ def _blocks(text: str) -> list[_Block]:
         result.append(
             _Block(start, i, "\n".join(lines[start:i]), tuple(h for _, h in headings), section)
         )
+    return [item for block in result for item in _list_items(block)]
+
+
+def _list_items(block: _Block) -> list[_Block]:
+    """Keep each top-level item with its nested lists and fenced continuations."""
+    lines = block.text.splitlines()
+    first = re.match(r"^( {0,3})(?:[-+*]|\d+[.)])\s", lines[0])
+    if first is None:
+        return [block]
+    indent = len(first[1])
+    starts = [0]
+    fence: str | None = None
+    for i, line in enumerate(lines[1:], 1):
+        marker = re.match(r"^\s*(`{3,}|~{3,})", line)
+        if marker:
+            if fence is None:
+                fence = marker[1]
+            elif re.fullmatch(
+                r"\s*" + re.escape(fence[0]) + r"{" + str(len(fence)) + r",}\s*", line
+            ):
+                fence = None
+            continue
+        if fence is None and re.match(r"^ {" + str(indent) + r"}(?:[-+*]|\d+[.)])\s", line):
+            starts.append(i)
+    if len(starts) == 1:
+        return [block]
+    result = []
+    for start, end in zip(starts, starts[1:] + [len(lines)]):
+        while end > start and not lines[end - 1].strip():
+            end -= 1
+        result.append(
+            _Block(
+                block.start + start,
+                block.start + end,
+                "\n".join(lines[start:end]),
+                block.headings,
+                block.section,
+            )
+        )
     return result
 
 
@@ -161,6 +200,7 @@ def pair_request(
     operator_context: str | None = None,
     *,
     expanded: bool = False,
+    focus: frozenset[tuple[str, int]] | None = None,
 ) -> ModelRequest:
     """Build one bounded request without truncating any selected Markdown block."""
     sides = {"ru": pair.ru, "en": pair.en}
@@ -185,6 +225,8 @@ def pair_request(
             ).get_opcodes()
             if op[0] != "equal"
         ]
+        if focus is not None:
+            changes = [op for i, op in enumerate(changes) if (locale, i) in focus]
         affected[locale] = (
             _affected(old_blocks, [(a, b) for _, a, b, _, _ in changes]),
             _affected(new_blocks, [(a, b) for _, _, _, a, b in changes]),
@@ -225,6 +267,7 @@ def pair_request(
             old_indices = old_indices | {
                 i for i, block in enumerate(old_blocks) if block.section in old_sections
             }
+        selected_sections = {new_blocks[i].section for i in selected}
         payload[locale] = {
             "path": side.path.value,
             "exists": side.exists,
@@ -232,12 +275,19 @@ def pair_request(
             "new_page": is_new,
             "total_blocks": len(new_blocks),
             "complete_current": len(selected) == len(new_blocks),
+            "omitted_sections": len({b.section for b in new_blocks} - selected_sections),
             "heading_outline": [
                 {"block": i, "headings": list(b.headings)}
                 for i, b in enumerate(new_blocks)
-                if b.text.lstrip().startswith("#")
+                if b.text.lstrip().startswith("#") and b.section in selected_sections
             ],
-            "delta": _delta(old_text, new_text) if changed and not is_new else [],
+            "delta": [
+                d
+                for i, d in enumerate(_delta(old_text, new_text))
+                if focus is None or (locale, i) in focus
+            ]
+            if changed and not is_new
+            else [],
             "before_blocks": _wire(old_blocks, old_indices),
             "after_blocks": _wire(new_blocks, new_indices),
             # No duplicated after blocks in the counterpart context.
@@ -303,52 +353,88 @@ def classify_pairs(
     decisions = []
     for index, pair in enumerate(pairs, 1):
         key = pair.key.relative_path.value
-        expanded = False
-        for attempt in (1, 2):
-            try:
-                request = pair_request(
-                    files, pair, before, after, model, operator_context, expanded=expanded
-                )
-            except ContextBoundExceeded:
-                decision = PairDecision(
-                    key,
-                    "need_context",
-                    "Whole relevant context exceeds request bound; operator review required",
-                )
-                break
-            except (UnicodeDecodeError, ValueError):
-                decision = PairDecision(
-                    key,
-                    "conflict",
-                    "Pair evidence is not valid text; deterministic handling required",
-                )
-                break
-            write_trace(
-                "direction",
-                "pair_request",
-                "start",
-                document_index=index,
-                article=key,
-                attempt=attempt,
-                request_bytes=len(request.prompt.encode("utf-8")),
+        units: list[tuple[str, int]] = []
+        for locale, side in (("ru", pair.ru), ("en", pair.en)):
+            item = next(
+                (f for f in files if side.path in (f.change.old_path, f.change.new_path)), None
             )
-            result = invoke(request)
-            try:
-                if not result.success or result.text is None:
-                    raise ValueError("Provider failure")
-                decision = parse_pair_response(result.text, key)
-            except (ValueError, TypeError):
-                decision = PairDecision(
-                    key,
-                    "conflict",
-                    "Invalid or failed pair classification response; operator review required",
+            if item is not None:
+                try:
+                    units.extend(
+                        (locale, i)
+                        for i, _ in enumerate(
+                            _delta((item.before or b"").decode(), (item.after or b"").decode())
+                        )
+                    )
+                except UnicodeDecodeError:
+                    pass
+        pending: list[frozenset[tuple[str, int]] | None] = [None]
+        parts: list[PairDecision] = []
+        while pending:
+            focus = pending.pop(0)
+            expanded = False
+            for attempt in (1, 2):
+                try:
+                    request = pair_request(
+                        files,
+                        pair,
+                        before,
+                        after,
+                        model,
+                        operator_context,
+                        expanded=expanded,
+                        focus=focus,
+                    )
+                except ContextBoundExceeded:
+                    group = sorted(units if focus is None else focus)
+                    if len(group) > 1:
+                        midpoint = len(group) // 2
+                        pending[0:0] = [frozenset(group[:midpoint]), frozenset(group[midpoint:])]
+                        decision = None
+                    else:
+                        decision = PairDecision(
+                            key,
+                            "need_context",
+                            "One complete change and its context exceed the request bound",
+                        )
+                    break
+                except (UnicodeDecodeError, ValueError):
+                    decision = PairDecision(key, "conflict", "Pair evidence is not valid text")
+                    break
+                write_trace(
+                    "direction",
+                    "pair_request",
+                    "start",
+                    document_index=index,
+                    article=key,
+                    attempt=attempt,
+                    request_bytes=len(request.prompt.encode("utf-8")),
                 )
-                # Technical failures retry the exact bounded request once. Only
-                # an explicit semantic need_context decision expands sections.
-                continue
-            if decision.action != "need_context":
-                break
-            expanded = True
+                result = invoke(request)
+                try:
+                    if not result.success or result.text is None:
+                        raise ValueError("Provider failure")
+                    decision = parse_pair_response(result.text, key)
+                except (ValueError, TypeError):
+                    decision = PairDecision(
+                        key,
+                        "conflict",
+                        "Invalid or failed pair classification response; operator review required",
+                    )
+                    continue
+                if decision.action != "need_context":
+                    break
+                expanded = True
+            if decision is not None:
+                parts.append(decision)
+        actions = {part.action for part in parts}
+        if "conflict" in actions or {"ru_to_en", "en_to_ru"} <= actions:
+            action = "conflict"
+        elif "need_context" in actions:
+            action = "need_context"
+        else:
+            action = next(iter(actions - {"no_translation"}), "no_translation")
+        decision = PairDecision(key, action, "; ".join(dict.fromkeys(p.reason for p in parts)))
         write_trace(
             "direction",
             "pair_decision",
