@@ -35,6 +35,10 @@ current_blocks contain counterpart candidates; delta contains the actual changed
 The heading outline describes selected sections; omitted_sections counts other sections. Do not assume unseen text is absent. A batch contains only some PR deltas; classify only the deltas shown, using counterpart candidates as evidence. An
 expanded_sections request is the final bounded context retry. If still insufficient,
 return need_context. New pages provide complete content within the request bound.
+Only focused_delta_locales can be translation sources: ru_to_en requires a shown RU
+change missing from current EN; en_to_ru requires a shown EN change missing from
+current RU. Counterpart current text is evidence, never a new source delta. If the
+counterpart already contains the shown change, return no_translation.
 Return exactly {key, action, reason}, with action one of no_translation, ru_to_en,
 en_to_ru, need_context, conflict and a concise evidence-based reason.
 """
@@ -207,6 +211,7 @@ def pair_request(
     versions: dict[str, tuple[str, str, bool, bool]] = {}
     parsed: dict[str, tuple[list[_Block], list[_Block]]] = {}
     affected: dict[str, tuple[set[int], set[int]]] = {}
+    delta_locales: set[str] = set()
     for locale, side in sides.items():
         item = next((f for f in files if side.path in (f.change.old_path, f.change.new_path)), None)
         old = side.content if item is None else item.before
@@ -227,6 +232,8 @@ def pair_request(
         ]
         if focus is not None:
             changes = [op for i, op in enumerate(changes) if (locale, i) in focus]
+        if changes:
+            delta_locales.add(locale)
         affected[locale] = (
             _affected(old_blocks, [(a, b) for _, a, b, _, _ in changes]),
             _affected(new_blocks, [(a, b) for _, _, _, a, b in changes]),
@@ -238,6 +245,7 @@ def pair_request(
         "after_sha": after.commit_sha.value,
         "context": "expanded_sections" if expanded else "affected_blocks",
         "operator_context": operator_context,
+        "focused_delta_locales": sorted(delta_locales),
     }
     for locale, side in sides.items():
         old_text, new_text, changed, is_new = versions[locale]
@@ -302,7 +310,14 @@ def pair_request(
         raise ContextBoundExceeded("Whole relevant Markdown context exceeds request bound")
     properties = {
         "key": {"type": "string", "enum": [pair.key.relative_path.value]},
-        "action": {"type": "string", "enum": list(ACTIONS)},
+        "action": {
+            "type": "string",
+            "enum": [
+                action
+                for action in ACTIONS
+                if action not in ("ru_to_en", "en_to_ru") or action[:2] in delta_locales
+            ],
+        },
         "reason": {"type": "string", "minLength": 1},
     }
     return ModelRequest(
@@ -415,6 +430,12 @@ def classify_pairs(
                     if not result.success or result.text is None:
                         raise ValueError("Provider failure")
                     decision = parse_pair_response(result.text, key)
+                    source_locales = {locale for locale, _ in (units if focus is None else focus)}
+                    if (
+                        decision.action in ("ru_to_en", "en_to_ru")
+                        and decision.action[:2] not in source_locales
+                    ):
+                        raise ValueError("Direction has no source delta in this batch")
                 except (ValueError, TypeError):
                     decision = PairDecision(
                         key,

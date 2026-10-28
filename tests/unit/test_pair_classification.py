@@ -318,8 +318,8 @@ def test_batches_cover_every_delta_once_including_insert_and_delete(monkeypatch)
     "actions,expected",
     [
         (["no_translation"], "no_translation"),
-        (["ru_to_en", "no_translation"], "ru_to_en"),
-        (["ru_to_en", "en_to_ru"], "conflict"),
+        (["en_to_ru", "no_translation"], "en_to_ru"),
+        (["en_to_ru", "ru_to_en"], "conflict"),
         (["no_translation", "conflict"], "conflict"),
         (["need_context"], "need_context"),
     ],
@@ -331,6 +331,9 @@ def test_batch_decisions_are_aggregated_conservatively(monkeypatch, actions, exp
 
     def invoke(request):
         action = actions[min(len(calls), len(actions) - 1)]
+        if actions == ["en_to_ru", "ru_to_en"]:
+            payload = json.loads(request.prompt.split("\nPair evidence: ", 1)[1])
+            action = "en_to_ru" if payload["en"]["delta"] else "ru_to_en"
         calls.append(request)
         return response(action)
 
@@ -344,3 +347,48 @@ def test_list_item_fence_with_trailing_text_does_not_close():
     block = pc._Block(0, 7, text, ("# H",), 0)
     items = pc._list_items(block)
     assert [item.text for item in items] == [text.rsplit("\n- Next", 1)[0], "- Next"]
+
+
+@pytest.mark.parametrize("locale,invalid", [("en", "ru_to_en"), ("ru", "en_to_ru")])
+def test_one_sided_delta_retries_direction_from_unchanged_locale(locale, invalid):
+    args = [b"RU", b"RU", b"EN", b"EN"]
+    args[1 if locale == "ru" else 3] += b" new"
+    files, pair = fixture(*args)
+    replies = iter([response(invalid), response("no_translation")])
+    requests = []
+
+    def invoke(request):
+        requests.append(request)
+        return next(replies)
+
+    result = pc.classify_pairs(files, (pair,), BEFORE, AFTER, "model", invoke)
+    assert result[0].action == "no_translation"
+    assert len(requests) == 2 and requests[0] == requests[1]
+    assert invalid not in requests[0].schema["properties"]["action"]["enum"]
+
+
+def test_repeated_direction_from_unchanged_locale_is_conflict():
+    files, pair = fixture(b"RU", b"RU", b"Old EN", b"New EN")
+    result = pc.classify_pairs(
+        files, (pair,), BEFORE, AFTER, "model", lambda _: response("ru_to_en")
+    )
+    assert result[0].action == "conflict"
+
+
+def test_batch_directions_follow_focus_not_whole_pr():
+    files, pair = fixture(b"Old RU", b"New RU", b"Old EN", b"New EN")
+    request = pc.pair_request(files, pair, BEFORE, AFTER, "model", focus=frozenset({("en", 0)}))
+    assert tuple(request.schema["properties"]["action"]["enum"]) == (
+        "no_translation",
+        "en_to_ru",
+        "need_context",
+        "conflict",
+    )
+
+
+def test_new_page_can_be_translation_source_without_explicit_delta():
+    files, pair = fixture(None, b"New RU page", None, None)
+    result = pc.classify_pairs(
+        files, (pair,), BEFORE, AFTER, "model", lambda _: response("ru_to_en")
+    )
+    assert result[0].action == "ru_to_en"
