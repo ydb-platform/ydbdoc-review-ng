@@ -233,7 +233,7 @@ class CommentBackend(Protocol):
 def report_classification(
     backend: CommentBackend, source_pr: int, *, reason: str | None = None
 ) -> None:
-    """Keep one publisher-owned source comment for no-op or technical failure."""
+    """Append visible no-op results; retain upsert behavior for technical failures."""
     body = (
         (
             "Перевод не требуется.\n\nПричина: " + _line(reason)
@@ -245,6 +245,9 @@ def report_classification(
         + "\n"
         + CLASSIFICATION_MARKER
     )
+    if reason is not None:
+        backend.create_comment(source_pr, body)
+        return
     existing = next(
         (
             comment

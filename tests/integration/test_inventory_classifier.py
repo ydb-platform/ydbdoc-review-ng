@@ -149,15 +149,18 @@ def runtime(services):
         [{"filename": IMAGE, "status": "renamed", "previous_filename": OLD_IMAGE, "changes": 2}],
     ],
 )
-def test_every_inventory_is_classified_once_and_noop_is_reported_idempotently(rows):
+def test_every_run_classifies_once_and_leaves_a_new_noop_comment(rows):
     services = ClassifierServices(rows, [answer(rows), answer(rows)])
-    for _ in range(2):
+    for run in range(2):
         runtime(services).doc_translate(
             TranslateWorkflowInput(42, GitSha(services.source), Decimal(10))
         )
+        assert len(services.source_comments) == run + 1
     assert len(services.requests) == 2
-    assert len(services.source_comments) == 1
-    assert "перевод не требуется" in services.source_comments[0]["body"].lower()
+    assert all("перевод не требуется" in comment["body"].lower()
+               for comment in services.source_comments)
+    assert not any(method == "PATCH" and "/issues/comments/" in path
+                   for method, path in services.events)
     assert not services.pr_exists and services.branch_head is None
     # §5.1 may DELETE the previous translation ref; §0 removes the trigger label.
     assert not any(
