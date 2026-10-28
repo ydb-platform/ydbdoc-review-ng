@@ -44,7 +44,7 @@ def client(
 def test_complete_wire_bytes_determine_output_for_different_prompt_sizes() -> None:
     transport = RecordingTransport()
     model = client(transport)
-    for prompt in ("Translate", "Translate " + "я🙂\n\"" * 2000):
+    for prompt in ("x" * 800_000, "x" * 900_000):
         model.invoke(ModelRequest(ModelRole.TRANSLATE, "deepseek-v4-flash", prompt, None))
 
     bodies = [item.body for item in transport.requests]
@@ -88,7 +88,7 @@ def test_packing_budget_exposes_only_complete_wire_input_requirement() -> None:
     request = ModelRequest(ModelRole.CRITIC, "deepseek-v4-flash", "Review full files", None)
     budget = model.prepare_request(request)
     assert budget.input_tokens == len(budget.body)
-    assert budget.max_tokens == 1_048_576 - budget.input_tokens
+    assert budget.max_tokens == min(262_144, 1_048_576 - budget.input_tokens)
     assert not hasattr(budget, "expected_output_tokens")
     model.invoke(request)
     assert transport.requests[0].body == budget.body
@@ -138,7 +138,7 @@ def test_response_content_and_size_do_not_change_wire_budget() -> None:
         assert result.text == transport.response_text
     assert short.requests[0].body == long.requests[0].body
     body = long.requests[0].body
-    assert json.loads(body)["max_tokens"] == 1_048_576 - len(body)
+    assert json.loads(body)["max_tokens"] == min(262_144, 1_048_576 - len(body))
     assert json.loads(body)["max_tokens"] > len(long.response_text.encode())
 
 
@@ -146,7 +146,7 @@ def test_response_content_and_size_do_not_change_wire_budget() -> None:
 def test_schema_and_normalized_model_uri_consume_wire_budget(native: bool) -> None:
     transport = RecordingTransport()
     model = client(transport, native=native)
-    request = ModelRequest(ModelRole.DIRECTION, "deepseek-v4-flash", "Classify", None)
+    request = ModelRequest(ModelRole.DIRECTION, "deepseek-v4-flash", "x" * 800_000, None)
     schema = {"type": "object", "description": "Описание 🙂" * 1000}
     model.invoke(request)
     model.invoke(replace(request, schema=schema))
@@ -182,7 +182,7 @@ def test_decimal_digit_boundary_has_an_exact_deterministic_wire_budget() -> None
     baseline = model.prepare_request(request)
     # A compact JSON integer changing from 100000 to 99999 loses one byte;
     # the final serialized representation must still satisfy exact accounting.
-    prompt_size = 1_048_576 - 100_000 - (len(baseline.body) - 3)
+    prompt_size = 1_048_576 - 100_000 - (len(baseline.body) - 2)
     boundary = replace(request, prompt="x" * prompt_size)
     budget = model.prepare_request(boundary)
     assert budget.max_tokens == 1_048_576 - len(budget.body)
@@ -197,11 +197,27 @@ def test_one_remaining_token_is_available_without_any_response_preflight() -> No
     model = client(transport)
     request = ModelRequest(ModelRole.CRITIC, "deepseek-v4-flash", "Review", None)
     baseline = model.prepare_request(request)
-    # Replacing a seven-digit max_tokens with one digit releases six bytes.
-    prompt_size = len(request.prompt) + baseline.max_tokens + 6 - 1
+    # Replacing a six-digit max_tokens with one digit releases five bytes.
+    prompt_size = len(request.prompt) + 1_048_576 - len(baseline.body) + 5 - 1
     boundary = replace(request, prompt="x" * prompt_size)
     budget = model.prepare_request(boundary)
     assert budget.max_tokens == 1
     assert budget.input_tokens == 1_048_575
     model.invoke(boundary)
     assert transport.requests[0].body == budget.body
+
+
+@pytest.mark.parametrize("role", list(ModelRole))
+@pytest.mark.parametrize("model_name", [
+    "deepseek-v4-flash", "gpt://folder/deepseek-v4-flash/latest",
+])
+@pytest.mark.parametrize("requested_cap, expected", [(None, 262_144), (800_000, 262_144), (4096, 4096)])
+def test_deepseek_requests_respect_provider_output_limit(role, model_name, requested_cap, expected):
+    transport = RecordingTransport()
+    request = ModelRequest(role, model_name, "Short document", None,
+                           max_output_tokens=requested_cap)
+    result = client(transport).invoke(request)
+    assert result.success
+    payload = json.loads(transport.requests[0].body)
+    assert payload["max_tokens"] == expected
+    assert payload["messages"][-1]["content"] == "Short document"

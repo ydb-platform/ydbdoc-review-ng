@@ -32,3 +32,13 @@
   payload; FSM protocol violations still abort → retry → RED.
 
 `doc_model_probe` не production translate.
+
+## Изменения пар, 2026-10-28
+
+Обязательные регрессии: согласованный двуязычный PR без translator/publication;
+частичный перевод; conflict; need_context с ограниченным расширением; RU-only,
+EN-only и новая страница; целостность таблиц/list/fence; no silent truncation;
+разные направления в одном PR; сохранение решений после continue; mixed verify.
+Для лимитов: большой/малый explicit cap, роли, фактический wire payload,
+корректировка ответа после provider context error, аудит обеих попыток,
+отсутствие retry для input overflow и постороннего HTTP 400.

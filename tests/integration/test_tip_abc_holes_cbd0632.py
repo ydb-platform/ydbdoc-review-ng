@@ -203,7 +203,7 @@ def test_b_full_source_toc_delete_accepts_arbiter_green() -> None:
             if schema is None:
                 return super().model(request)
             props = schema["schema"]["properties"]
-            if "translation_required" in props:
+            if ("translation_required" in props or "action" in props):
                 return super().model(request)
             if "findings" in props:
                 self.roles.append("arbiter")
@@ -261,7 +261,7 @@ def test_c_green_continue_noop_updates_stale_red_qa() -> None:
             props = request_schema(body)["schema"]["properties"]
             role = (
                 "direction"
-                if "translation_required" in props
+                if ("translation_required" in props or "action" in props)
                 else "critic"
                 if "files" in props
                 else "arbiter"

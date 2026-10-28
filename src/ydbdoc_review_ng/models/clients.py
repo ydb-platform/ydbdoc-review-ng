@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import http.client
 import json
+import re
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping
+from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Protocol, cast
@@ -321,6 +323,33 @@ def _provider_cost(document: Mapping[str, object] | None) -> Decimal | None:
     return cost if cost >= 0 else None
 
 
+# The serving API limits generation separately from the 1M-token context window.
+_DEEPSEEK_V4_FLASH_MAX_OUTPUT_TOKENS = 262_144
+
+
+def _context_retry_body(document: Mapping[str, object] | None, body: bytes) -> bytes | None:
+    """Use provider token counts to lower output only; never truncate input."""
+    error = None if document is None else _mapping(document.get("error"))
+    message = None if error is None else error.get("message")
+    if not isinstance(message, str):
+        return None
+    match = re.search(
+        r"maximum context length of (\d{1,9}) tokens.*?"
+        r"(\d{1,9}) tokens from the input messages",
+        message,
+        re.DOTALL,
+    )
+    if match is None:
+        return None
+    available = int(match[1]) - int(match[2])
+    payload = json.loads(body)
+    previous = payload.get("max_tokens")
+    if type(previous) is not int or not 0 < available < previous:
+        return None
+    payload["max_tokens"] = available
+    return serialize_json(payload)
+
+
 class _BaseYandexClient:
     endpoint: str
 
@@ -359,9 +388,15 @@ class _BaseYandexClient:
 
     def prepare_request(self, request: ModelRequest, /) -> ContextBudget:
         model_uri = normalize_model_uri(request.model, self.credentials.folder_id)
+        max_tokens_cap = request.max_output_tokens
+        if "deepseek-v4-flash" in model_uri.split("/"):
+            max_tokens_cap = min(
+                max_tokens_cap if max_tokens_cap is not None else _DEEPSEEK_V4_FLASH_MAX_OUTPUT_TOKENS,
+                _DEEPSEEK_V4_FLASH_MAX_OUTPUT_TOKENS,
+            )
         return calculate_context_budget(
             lambda max_tokens: serialize_json(self._payload(request, model_uri, max_tokens)),
-            max_tokens_cap=request.max_output_tokens,
+            max_tokens_cap=max_tokens_cap,
         )
 
     def invoke(self, request: ModelRequest, /) -> ModelCallResult:
@@ -461,6 +496,12 @@ class _BaseYandexClient:
                 return ModelCallResult(
                     parsed.text, None, tuple(attempts), parsed.tool_calls
                 )
+            if response.status_code == 400 and attempt_number < max_attempts:
+                retry_body = _context_retry_body(document, body)
+                if retry_body is not None:
+                    body = retry_body
+                    wire_request = replace(wire_request, body=body)
+                    continue
             if error is AttemptError.CONTENT_FILTER and attempt_number < max_attempts:
                 continue
             return ModelCallResult(None, error, tuple(attempts))

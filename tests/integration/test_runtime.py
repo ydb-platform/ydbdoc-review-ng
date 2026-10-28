@@ -1503,7 +1503,7 @@ class _T017N04Services(RuntimeServices):
             )
         schema = schema_wrapper["schema"]
         properties = tuple(schema["properties"])
-        if "translation_required" in properties:
+        if ("translation_required" in properties or "action" in properties):
             return super().model(request)
         self.events.append(("MODEL", properties))
         if properties == ("page.md",):
@@ -1682,8 +1682,9 @@ def test_t017_n05_truncated_http_response_is_audited_once_with_unknown_cost() ->
     assert all(attempt["error"] == "transport" for attempt in attempts)
     assert all(attempt["response"] == partial for attempt in attempts)
     assert all(attempt["cost_rub"] is None for attempt in attempts)
-    assert services.audit[-1]["status"] == "failed"
-    assert services.audit[-1]["error"] == "prepare_failed"
+    assert [row["status"] for row in services.audit
+            if "finished_at" in row and "attempt_id" not in row][-1] == "failed"
+    assert [row["error"] for row in services.audit if "finished_at" in row and "attempt_id" not in row][-1] == "continuable_direction"
     assert len(services.source_comments) == 1
     assert not any(method in {"POST", "PATCH"} and "/git/" in path
                    for method, path in services.events)
@@ -1753,8 +1754,9 @@ def test_t017_q02_truncated_http_error_body_is_audited_once_with_unknown_cost() 
     assert all(attempt["error"] == "transport" for attempt in attempts)
     assert all(attempt["response"] == partial for attempt in attempts)
     assert all(attempt["cost_rub"] is None for attempt in attempts)
-    assert services.audit[-1]["status"] == "failed"
-    assert services.audit[-1]["error"] == "prepare_failed"
+    assert [row["status"] for row in services.audit
+            if "finished_at" in row and "attempt_id" not in row][-1] == "failed"
+    assert [row["error"] for row in services.audit if "finished_at" in row and "attempt_id" not in row][-1] == "continuable_direction"
     assert len(services.source_comments) == 1
     assert not any(method in {"POST", "PATCH"} and "/git/" in path
                    for method, path in services.events)

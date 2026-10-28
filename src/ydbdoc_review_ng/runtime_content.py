@@ -136,8 +136,8 @@ from ydbdoc_review_ng.translation.document import (
     build_document_prompt,
     verify_document_candidate_with_links,
 )
-from ydbdoc_review_ng.translation.language import validate_translated_prose
 from ydbdoc_review_ng.translation.gates import check_publication_gates, join_soft_wrapped_prose
+from ydbdoc_review_ng.translation.language import validate_translated_prose
 from ydbdoc_review_ng.translation.split_backtick import (
     count_split_backtick_identifiers,
     normalize_split_backtick_identifiers,
@@ -155,6 +155,7 @@ from ydbdoc_review_ng.translation.thin import (
 from ydbdoc_review_ng.translation_plan import (
     PathKind,
     PlanAction,
+    PlannedInput,
     TranslationPlan,
     TranslationPlanError,
     build_translation_plan,
@@ -688,14 +689,22 @@ class RuntimeContent:
             if plans.manifest.direction is Direction.RU_TO_EN
             else (self.roots.en, self.roots.ru)
         )
-        source_locale = "ru" if plans.manifest.direction is Direction.RU_TO_EN else "en"
         candidate_files = unpack(candidate.content)
         source_files: dict[str, bytes] = {}
         translated_files: dict[str, bytes | None] = {}
+        active_sources = {entry.pair.source_path for entry in plans.manifest.entries} | {
+            item.change.path for item in plans.translation_plan.inputs if item.outputs
+        }
         for change in preparation.inventory.files:
             classified = classify_path(self.roots, change.path)
+            target_root = self.roots.en if classified.locale == "ru" else self.roots.ru
             if (
-                classified.locale != source_locale
+                (bool(preparation.inventory.pair_decisions) and change.path not in active_sources)
+                or (
+                    not preparation.inventory.pair_decisions
+                    and classified.locale
+                    != ("ru" if plans.manifest.direction is Direction.RU_TO_EN else "en")
+                )
                 or classified.kind not in {PathKind.MARKDOWN, PathKind.TOC}
                 or change.status == "removed"
             ):
@@ -734,17 +743,19 @@ class RuntimeContent:
         for change in preparation.inventory.files:
             classified = classify_path(self.roots, change.path)
             if (
-                classified.locale == source_locale
+                change.path in active_sources
                 and classified.kind is PathKind.TOC
                 and change.status == "removed"
                 and classified.relative is not None
             ):
-                intentional_toc_deletes.add(f"{target_root.value}/{classified.relative}")
+                opposite_root = self.roots.en if classified.locale == "ru" else self.roots.ru
+                intentional_toc_deletes.add(f"{opposite_root.value}/{classified.relative}")
         toc_snapshots: dict[str, dict[str, str | None]] = {}
         for path, value in plans.fixed_files:
             classified = classify_path(self.roots, RepoPath(path))
             if classified.kind is not PathKind.TOC or classified.relative is None:
                 continue
+            source_root = self.roots.ru if classified.locale == "en" else self.roots.en
             # Prefer the candidate/published TOC when present so continue replay
             # does not overwrite critic-corrected wording with a fresh delta draft.
             if path in intentional_toc_deletes:
@@ -827,9 +838,11 @@ class RuntimeContent:
             binary_manifest[path] = {"action": "copy", "source_path": source_peer}
 
         glossary_files: dict[str, bytes] = {}
+        glossary_source = self.roots.en if plans.manifest.direction is Direction.EN_TO_RU else self.roots.ru
+        glossary_target = self.roots.ru if glossary_source == self.roots.en else self.roots.en
         for root, snapshot in (
-            (source_root, source_snapshot),
-            (target_root, preparation.metadata_snapshot),
+            (glossary_source, source_snapshot),
+            (glossary_target, preparation.metadata_snapshot),
         ):
             path = RepoPath(f"{root.value}/concepts/glossary.md")
             glossary = self.source.github.read_bytes(snapshot, path)
@@ -1058,6 +1071,274 @@ class RuntimeContent:
         del preparation, target_paths
         return InventoryClassification(True, direction, "Frozen selection")
 
+    def _select_pairs(
+        self,
+        preparation: FrozenPreparation,
+        *,
+        review_documents: bool = False,
+        operator_context: str | None = None,
+    ) -> FrozenSourcePlans:
+        """Plan each immutable pair in its own direction, then reconcile one output set."""
+        decisions = preparation.inventory.pair_decisions
+        if operator_context and any(
+            action in {"need_context", "conflict"} for _, action, _ in decisions
+        ):
+            from ydbdoc_review_ng.pair_classification import classify_pairs
+
+            pending = {
+                key for key, action, _ in decisions if action in {"need_context", "conflict"}
+            }
+            updates = classify_pairs(
+                self.source.classifier_files(self.roots),
+                tuple(
+                    pair
+                    for pair in preparation.inventories
+                    if pair.key.relative_path.value in pending
+                ),
+                self.source.source_base_snapshot,
+                self.source.source_change_snapshot,
+                self.model,
+                self.models.invoke,
+                operator_context,
+            )
+            changed = {item.key: (item.key, item.action, item.reason) for item in updates}
+            decisions = tuple(
+                changed.get(key, (key, action, reason)) for key, action, reason in decisions
+            )
+            preparation = replace(
+                preparation, inventory=replace(preparation.inventory, pair_decisions=decisions)
+            )
+        expected = {pair.key.relative_path.value for pair in preparation.inventories}
+        if {key for key, _, _ in decisions} != expected:
+            raise RuntimeBoundaryError("pair_decisions_inventory_mismatch")
+        unresolved = [
+            (key, action, reason)
+            for key, action, reason in decisions
+            if action in {"need_context", "conflict"}
+        ]
+        actions = tuple(
+            SourceSemanticAction(item.path, item.operation, "none", None)
+            for item in preparation.inventory.files
+        )
+        preparation = replace(
+            preparation, inventory=replace(preparation.inventory, semantic_actions=actions)
+        )
+        if unresolved:
+            from ydbdoc_review_ng.reporting import CLASSIFICATION_MARKER
+            body = "\n".join(f"{key}: {action}: {reason}" for key, action, reason in unresolved)
+            body += "\n" + DIRECTION_UNDETERMINED_ACTION + "\n" + CLASSIFICATION_MARKER
+            existing = next((comment for comment in self.source.github.list_comments(self.source.source_pr)
+                if comment.authored_by_publisher and CLASSIFICATION_MARKER in comment.body), None)
+            if existing is None:
+                self.source.github.create_comment(self.source.source_pr, body)
+            else:
+                self.source.github.update_comment(self.source.source_pr, existing.id, body)
+            state = ContinuationState(
+                STATE_VERSION, ContinuationStage.DIRECTION, None, None, None, (), ()
+            )
+            raise SemanticCheckpointStop(self._capture(preparation, state))
+        groups = []
+        chosen = {key: action for key, action, _ in decisions}
+        for selected in (Direction.RU_TO_EN, Direction.EN_TO_RU):
+            locale = "ru" if selected is Direction.RU_TO_EN else "en"
+            pairs = tuple(
+                pair
+                for pair in preparation.inventories
+                if chosen[pair.key.relative_path.value] == selected.value
+            )
+            rows = []
+            for raw in preparation.inventory.files:
+                path = classify_path(self.roots, raw.path)
+                if path.locale != locale:
+                    continue
+                if not preparation.for_translation:
+                    opposite_prefix = "/docs/en/" if locale == "ru" else "/docs/ru/"
+                    target_path = RepoPath(raw.path.value.replace(f"/docs/{locale}/", opposite_prefix, 1))
+                    if target_path not in self.source.verification_target_paths:
+                        continue
+                if path.kind is PathKind.MARKDOWN:
+                    if path.relative is None or chosen.get(path.relative) != selected.value:
+                        continue
+                elif path.kind is PathKind.OUTSIDE_LOCALES:
+                    continue
+                else:
+                    # Bilingual metadata retains deterministic complete-pair semantics.
+                    opposite = "en" if locale == "ru" else "ru"
+                    if any(
+                        classify_path(self.roots, other.path).locale == opposite
+                        and classify_path(self.roots, other.path).relative == path.relative
+                        for other in preparation.inventory.files
+                    ):
+                        continue
+                rows.append(raw)
+            if not rows and not pairs:
+                continue
+            redirects = RedirectCatalog(
+                preparation.snapshots.scope_snapshot,
+                self.roots,
+                read_redirects(
+                    self.source.github, preparation.snapshots.scope_snapshot, "ydb/docs/ru"
+                )
+                + read_redirects(
+                    self.source.github, preparation.snapshots.scope_snapshot, "ydb/docs/en"
+                ),
+            )
+            potential = build_potential_scopes(
+                self.source.github,
+                MarkdownDependencies(),
+                Limits(self.environment),
+                preparation.snapshots,
+                pairs,
+                redirects,
+            )
+            group_inventory = replace(
+                preparation.inventory, files=tuple(rows), semantic_actions=(), pair_decisions=()
+            )
+            mirrored = mirror_classified_files(group_inventory, self.roots, selected)
+            group_inventory = replace(group_inventory, semantic_actions=tuple(
+                SourceSemanticAction(item.change.path, item.change.operation, item.action, item.toc_delta)
+                for item in mirrored
+            ))
+            group_preparation = replace(
+                preparation, inventory=group_inventory, inventories=pairs, potential=potential
+            )
+            selection = DirectionSelectionResult(
+                DirectionSelectionState.SELECTED,
+                selected,
+                tuple(
+                    DirectionPairDecision(pair, DirectionPairVerdict(selected.value))
+                    for pair in pairs
+                ),
+                None,
+            )
+            groups.append(
+                self.select_source(
+                    group_preparation,
+                    direction=selection,
+                    classification=InventoryClassification(True, selected, "Per-pair decisions"),
+                    review_documents=review_documents,
+                    operator_context=operator_context,
+                )
+            )
+        if not groups:
+            if preparation.for_translation:
+                report_classification(
+                    self.source.github,
+                    self.source.source_pr,
+                    reason="; ".join(f"{key}: {reason}" for key, _, reason in decisions)
+                    or "Нет изменений для перевода.",
+                )
+            self.entries, self.documents = (), ()
+            self.plans = FrozenSourcePlans(
+                preparation,
+                None,
+                (),
+                (),
+                build_translation_plan(
+                    preparation.inventory,
+                    self.roots,
+                    None,
+                    classification=InventoryClassification(False, None, "No translation required"),
+                ),
+            )
+            return self.plans
+        manifests = tuple(group.manifest for group in groups if group.manifest is not None)
+        entries = tuple(
+            sorted(
+                (entry for item in manifests for entry in item.entries),
+                key=lambda entry: (
+                    entry.pair.target_path.value,
+                    entry.pair.source_path.value,
+                    entry.operation.value,
+                    entry.origin.value,
+                ),
+            )
+        )
+        if len({entry.pair.target_path for entry in entries}) != len(entries):
+            raise RuntimeBoundaryError("pair_output_collision")
+        selected_directions = {item.direction for item in manifests}
+        aggregate_direction = (
+            next(iter(selected_directions)) if len(selected_directions) == 1 else Direction.MIXED
+        )
+        manifest = ScopeManifest(
+            aggregate_direction,
+            preparation.snapshots.scope_snapshot,
+            self.roots,
+            tuple(
+                sorted(
+                    (outcome for item in manifests for outcome in item.initial_outcomes),
+                    key=lambda outcome: outcome.key.relative_path.value,
+                )
+            ),
+            entries,
+            sum(item.dependency_file_count for item in manifests),
+            sum(item.source_character_count for item in manifests),
+        )
+        inputs = {
+            item.change.path: item for group in groups for item in group.translation_plan.inputs
+        }
+        semantic = {
+            item.path: item
+            for group in groups
+            for item in group.preparation.inventory.semantic_actions
+        }
+        for raw in preparation.inventory.files:
+            inputs.setdefault(
+                raw.path,
+                PlannedInput(
+                    raw, classify_path(self.roots, raw.path).kind, PlanAction.NO_ACTION, None, ()
+                ),
+            )
+        inventory = replace(
+            preparation.inventory,
+            semantic_actions=tuple(
+                semantic.get(
+                    item.path, SourceSemanticAction(item.path, item.operation, "none", None)
+                )
+                for item in preparation.inventory.files
+            ),
+        )
+        plan = TranslationPlan(
+            aggregate_direction,
+            tuple(inputs[path] for path in sorted(inputs, key=lambda path: path.value)),
+            tuple(
+                sorted(
+                    {path for group in groups for path in group.translation_plan.outputs},
+                    key=lambda path: path.value,
+                )
+            ),
+        )
+        fixed: dict[str, bytes | None] = {}
+        for group in groups:
+            for fixed_path, value in group.fixed_files:
+                if fixed_path in fixed and fixed[fixed_path] != value:
+                    raise RuntimeBoundaryError("pair_metadata_collision")
+                fixed[fixed_path] = value
+        # Skipped source pairs are immutable even if selected articles link to them.
+        protected = {
+            side.path
+            for pair in preparation.inventories
+            if chosen[pair.key.relative_path.value] == "no_translation"
+            for side in (pair.ru, pair.en)
+        }
+        if protected.intersection(plan.outputs):
+            raise RuntimeBoundaryError("pair_skipped_output_collision")
+        self.entries = entries
+        self.documents = tuple(
+            sorted(
+                (doc for group in groups for doc in group.documents),
+                key=lambda doc: doc.entry.pair.target_path.value,
+            )
+        )
+        self.plans = FrozenSourcePlans(
+            replace(preparation, inventory=inventory),
+            manifest,
+            self.documents,
+            tuple(sorted(fixed.items())),
+            plan,
+        )
+        return self.plans
+
     def select_source(
         self,
         preparation: FrozenPreparation,
@@ -1069,6 +1350,89 @@ class RuntimeContent:
         classification: InventoryClassification | None = None,
     ) -> FrozenSourcePlans:
         """Freeze source plans, optionally using an already restored direction decision."""
+        if preparation.for_translation:
+            from ydbdoc_review_ng.runtime_metadata import _toc
+            for raw in preparation.inventory.files:
+                if classify_path(self.roots, raw.path).kind is PathKind.TOC:
+                    content = self.source.github.read_bytes(self.source.source_change_snapshot, raw.path)
+                    if content is not None:
+                        _toc(content, "unsupported_source_toc")
+        if (
+            direction is None
+            and not preparation.for_translation
+            and not preparation.inventory.pair_decisions
+            and self.source.verification_direction is Direction.MIXED
+        ):
+            targets = set(self.source.verification_target_paths)
+            verification_decisions = []
+            for pair in preparation.inventories:
+                ru, en = pair.ru.path in targets, pair.en.path in targets
+                action = (
+                    "conflict"
+                    if ru and en
+                    else "en_to_ru"
+                    if ru
+                    else "ru_to_en"
+                    if en
+                    else "no_translation"
+                )
+                verification_decisions.append(
+                    (pair.key.relative_path.value, action, "Frozen verification target paths")
+                )
+            preparation = replace(
+                preparation,
+                inventory=replace(preparation.inventory, pair_decisions=tuple(verification_decisions)),
+            )
+            return self._select_pairs(preparation, review_documents=review_documents, operator_context=operator_context)
+        if preparation.inventory.pair_decisions:
+            return self._select_pairs(
+                preparation, review_documents=review_documents, operator_context=operator_context
+            )
+        if (
+            direction is None
+            and classification is None
+            and preparation.for_translation
+            and preparation.inventories
+        ):
+            pull = self.source.github.request("GET", f"/pulls/{self.source.source_pr}")
+            body = "" if not isinstance(pull, dict) else str(pull.get("body") or "")
+            if not re.search(r"<!-- ydbdoc-source-pr:[1-9][0-9]* -->", body):
+                from ydbdoc_review_ng.pair_classification import PairDecision, classify_pairs
+
+                structural = []
+                semantic_pairs = []
+                for pair in preparation.inventories:
+                    changes = pair.changes
+                    structural_only = all(change.kind is ChangedFileKind.DELETED or (
+                        change.kind is ChangedFileKind.RENAMED
+                        and change.rename_content_state is RenameContentState.UNCHANGED
+                    ) for change in changes)
+                    if structural_only:
+                        locales = {change.locale for change in changes}
+                        action = "no_translation" if len(locales) == 2 else "ru_to_en" if Locale.RU in locales else "en_to_ru"
+                        structural.append(PairDecision(pair.key.relative_path.value, action, "Deterministic Git delete/rename mirror"))
+                    else:
+                        semantic_pairs.append(pair)
+                classified_pairs = tuple(structural) + (classify_pairs(
+                    self.source.classifier_files(self.roots), tuple(semantic_pairs),
+                    self.source.source_base_snapshot, self.source.source_change_snapshot,
+                    self.model, self.models.invoke, operator_context,
+                ) if semantic_pairs else ())
+                classified_pairs = tuple(sorted(classified_pairs, key=lambda item: item.key))
+                preparation = replace(
+                    preparation,
+                    inventory=replace(
+                        preparation.inventory,
+                        pair_decisions=tuple(
+                            (item.key, item.action, item.reason) for item in classified_pairs
+                        ),
+                    ),
+                )
+                return self._select_pairs(
+                    preparation,
+                    review_documents=review_documents,
+                    operator_context=None,
+                )
         snapshots = preparation.snapshots
         translate = preparation.for_translation
         if translate:
@@ -1141,9 +1505,7 @@ class RuntimeContent:
                 self.roots,
                 classification.direction,
                 only_targets=(
-                    None
-                    if translate
-                    else frozenset(self.source.verification_target_paths)
+                    None if translate else frozenset(self.source.verification_target_paths)
                 ),
             )
             preparation = replace(
@@ -1180,9 +1542,7 @@ class RuntimeContent:
                     preparation.inventory, self.roots
                 ):
                     raise TranslationPlanError("translation_plan_direction_missing")
-                already_bilingual = complete_markdown_relatives(
-                    preparation.inventory, self.roots
-                )
+                already_bilingual = complete_markdown_relatives(preparation.inventory, self.roots)
 
                 def _pair_verdict(pair: LocalePairInventory) -> DirectionPairVerdict:
                     if pair.key.relative_path.value in already_bilingual:
@@ -1196,12 +1556,9 @@ class RuntimeContent:
                 if (
                     decisions
                     and all(
-                        item.verdict is DirectionPairVerdict.COMPLETE_PAIR
-                        for item in decisions
+                        item.verdict is DirectionPairVerdict.COMPLETE_PAIR for item in decisions
                     )
-                    and not _non_markdown_inventory_work(
-                        preparation.inventory, self.roots
-                    )
+                    and not _non_markdown_inventory_work(preparation.inventory, self.roots)
                 ):
                     if translate:
                         report_classification(
@@ -1337,9 +1694,7 @@ class RuntimeContent:
                     else self.source.github.read_bytes(base_snapshot, target_path)
                 )
                 try:
-                    draft = apply_toc_delta(
-                        source_before, source_after, current, toc_path=raw.path
-                    )
+                    draft = apply_toc_delta(source_before, source_after, current, toc_path=raw.path)
                 except TocDeltaError as error:
                     # §7 / §5.2: malformed existing target TOC is not a load gate.
                     # Keep the UTF-8 bytes (or null) so critic can repair them.
@@ -1349,11 +1704,7 @@ class RuntimeContent:
                         continue
                     raise TranslationPlanError(str(error)) from None
                 content = draft.content
-                if (
-                    content is None
-                    and current is None
-                    and not draft.string_changes
-                ):
+                if content is None and current is None and not draft.string_changes:
                     # §3.4: delete-only with no target TOC → do not create / require.
                     toc_postconditions[target_path] = None
                     continue
@@ -1369,9 +1720,7 @@ class RuntimeContent:
                             target_path,
                             source_locale=source_locale,
                             target_locale=(
-                                "en"
-                                if selection.manifest.direction is Direction.RU_TO_EN
-                                else "ru"
+                                "en" if selection.manifest.direction is Direction.RU_TO_EN else "ru"
                             ),
                         )
                         content = apply_toc_delta(
@@ -1393,11 +1742,7 @@ class RuntimeContent:
                 path = RepoPath(metadata_path)
                 actual = self.source.github.read_bytes(preparation.metadata_snapshot, path)
                 kind = classify_path(self.roots, path).kind
-                if (
-                    expected is not None
-                    and actual is not None
-                    and kind is PathKind.TOC
-                ):
+                if expected is not None and actual is not None and kind is PathKind.TOC:
                     self._validate_toc_correction(snapshots.source_snapshot, path, expected, actual)
                 elif actual != expected:
                     # §4.1 / §5.2: missing required TOC reaches critic as JSON null.
@@ -1632,18 +1977,21 @@ class RuntimeContent:
     def translation_already_satisfied(
         self, snapshot: ImmutableRunSnapshot, candidate: WorkflowCandidate, /
     ) -> bool:
-        """True when direction wanted work but Python mirror has nothing left to publish."""
-        if self.plans is None or self.plans.manifest is None:
+        """Recognize explicit semantic no-op before the publication boundary."""
+        if self.plans is None:
             return False
         files = unpack(candidate.content)
+        if self.plans.manifest is None:
+            return not files and not self.plans.translation_plan.outputs
         if any(value is None for value in files.values()):
             return False
         return not self.publication_plan(snapshot, candidate).changed
 
     def report_translation_not_required(self, reason: str, /) -> None:
-        report_classification(
-            self.source.github, self.source.source_pr, reason=reason
-        )
+        # select_source has already reported the exact per-pair reasons for a no-op.
+        if self.plans is not None and self.plans.manifest is None:
+            return
+        report_classification(self.source.github, self.source.source_pr, reason=reason)
 
     def replay_continuation(self, checkpoint: ContinuationCheckpoint, /) -> ContinueReplay:
         from ydbdoc_review_ng.runtime_continue import replay_continue
@@ -2248,7 +2596,34 @@ class RuntimeContent:
             _read_source_snapshot(self.source, "source_change_snapshot", entry.pair.source_path)
             or document.source
         )
-        if target_reference_bytes is not None and source_before is not None:
+        changed_paths = (
+            {item.path for item in self.plans.preparation.inventory.files}
+            if self.plans is not None and self.plans.preparation.inventory.pair_decisions
+            else set()
+        )
+        partial_bilingual = (
+            entry.pair.source_path in changed_paths
+            and entry.pair.target_path in changed_paths
+            and target_reference_bytes is not None
+        )
+        if partial_bilingual:
+            from ydbdoc_review_ng.translation.partial import PartialUpdateError, translate_partial
+
+            assert target_reference_bytes is not None
+            try:
+                surgical_candidate = translate_partial(
+                    source_before or b"",
+                    source_after,
+                    target_reference_bytes,
+                    source_locale=entry.pair.source_locale.value,
+                    target_path=entry.pair.target_path,
+                    model=self.model,
+                    invoke=self.models.invoke,
+                )
+            except PartialUpdateError:
+                # Do not fall back to append-only or unanchored-deletion heuristics.
+                raise InvalidTranslationResponse("partial_translation_patch_invalid") from None
+        elif target_reference_bytes is not None and source_before is not None:
             surgical = plan_surgical_update(
                 source_before, source_after, target_reference_bytes
             )
@@ -2348,7 +2723,7 @@ class RuntimeContent:
         if surgical_candidate is not None:
             candidate = surgical_candidate
             mangled = count_split_backtick_identifiers(candidate)
-            if mangled:
+            if mangled and not partial_bilingual:
                 candidate = normalize_split_backtick_identifiers(candidate)
             gate_failures = check_publication_gates(
                 candidate,
@@ -2840,8 +3215,15 @@ class RuntimeContent:
         files = unpack(candidate.content)
         empty = CriticResult(Verdict.GREEN, ())
         unchanged = QualityReviewResult(
-            candidate.content, None, candidate.content, empty, empty,
-            False, False, None, self.accepted_maps,
+            candidate.content,
+            None,
+            candidate.content,
+            empty,
+            empty,
+            False,
+            False,
+            None,
+            self.accepted_maps,
         )
         if self.plans is None or self.plans.manifest is None:
             return unchanged
@@ -2851,11 +3233,6 @@ class RuntimeContent:
         )
         assert self.plans is not None and self.plans.manifest is not None
         source_snapshot = self.plans.preparation.snapshots.source_snapshot
-        direction = self.plans.manifest.direction
-        source_locale, target_locale = (
-            (Locale.RU, Locale.EN) if direction is Direction.RU_TO_EN else (Locale.EN, Locale.RU)
-        )
-        source_root = self.roots.ru if direction is Direction.RU_TO_EN else self.roots.en
         documents = {doc.entry.pair.target_path.value: doc for doc in self.documents}
         accepted = {item.target_path: item for item in self.accepted_maps}
         toc_postconditions = {
@@ -2880,10 +3257,9 @@ class RuntimeContent:
                 if kind is PathKind.TOC:
                     classified = classify_path(self.roots, path)
                     assert classified.relative is not None
-                    source_toc_path = f"{source_root.value}/{classified.relative}"
-                    source_after_text = (toc_snapshots.get(source_toc_path) or {}).get(
-                        "after"
-                    )
+                    source_toc_root = self.roots.ru if classified.locale == "en" else self.roots.en
+                    source_toc_path = f"{source_toc_root.value}/{classified.relative}"
+                    source_after_text = (toc_snapshots.get(source_toc_path) or {}).get("after")
                     baseline = translated_files.get(name)
                     if baseline is None:
                         baseline = toc_postconditions.get(path, b"")
@@ -2893,9 +3269,7 @@ class RuntimeContent:
                         baseline,
                         target,
                         source_after=(
-                            None
-                            if source_after_text is None
-                            else source_after_text.encode("utf-8")
+                            None if source_after_text is None else source_after_text.encode("utf-8")
                         ),
                     )
                     continue
@@ -2909,7 +3283,12 @@ class RuntimeContent:
                     classified = classify_path(self.roots, path)
                     assert classified.relative is not None
                     entry = ScopeEntry(
-                        FilePair(source_locale, target_locale, source_path, path),
+                        FilePair(
+                            Locale.RU if classified.locale == "en" else Locale.EN,
+                            Locale.EN if classified.locale == "en" else Locale.RU,
+                            source_path,
+                            path,
+                        ),
                         source,
                         translated_files.get(name),
                         ScopeOrigin.INITIAL,
@@ -2932,7 +3311,13 @@ class RuntimeContent:
                         target_plan,
                         self._link_resolver(document, translated_files.get(name)),
                     )
-                except (DocumentTranslationError, ValueError, TypeError, UnicodeError, yaml.YAMLError):
+                except (
+                    DocumentTranslationError,
+                    ValueError,
+                    TypeError,
+                    UnicodeError,
+                    yaml.YAMLError,
+                ):
                     # §2 / §4.1: critic UTF-8 corrections still publish with diagnostics.
                     pass
                 try:

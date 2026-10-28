@@ -69,6 +69,7 @@ def _key_value(key: PairKey) -> str:
 
 
 class Direction(str, Enum):
+    MIXED = "mixed"
     RU_TO_EN = "ru_to_en"
     EN_TO_RU = "en_to_ru"
 
@@ -377,6 +378,8 @@ def parse_inventory_response(raw: str, inventory: SourceChangeInventory) -> Inve
             direction = None
         else:
             direction = Direction(raw_direction)
+            if direction is Direction.MIXED:
+                raise ValueError("Mixed is an aggregate, not a model direction")
         if not required and direction is not None:
             raise ValueError
         return InventoryClassification(required, direction, reason)

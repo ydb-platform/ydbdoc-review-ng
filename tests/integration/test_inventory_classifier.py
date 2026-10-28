@@ -84,6 +84,17 @@ class ClassifierServices(RuntimeServices):
         answer = self.answers.pop(0)
         if type(answer) is int:
             return HttpResponse(answer, b"{}", None)
+        schema = request_schema(body)
+        if schema is not None and "action" in schema["schema"]["properties"]:
+            try:
+                scripted = json.loads(answer)
+            except ValueError:
+                scripted = None
+            if isinstance(scripted, dict) and set(scripted) == {"translation_required", "direction", "reason"}:
+                pair = json.loads(request_prompt(body).split("\nPair evidence: ", 1)[1])
+                answer = json.dumps({"key": pair["key"],
+                    "action": (scripted["direction"] or "conflict") if scripted["translation_required"] else "no_translation",
+                    "reason": scripted["reason"]})
         return HttpResponse(
             200,
             json.dumps(
@@ -154,20 +165,18 @@ def test_every_inventory_is_classified_once_and_noop_is_reported_idempotently(ro
     )
 
 
-def test_bilingual_inventory_skips_translate_even_when_classifier_says_required():
-    """#55240/#55243: author already changed RU and EN; do not re-translate."""
-    rows = [
-        {"filename": PAGE, "status": "modified"},
-        {"filename": TARGET, "status": "modified"},
-    ]
-    services = ClassifierServices(rows, [answer(rows, required=True, direction="ru_to_en")])
+def test_bilingual_inventory_requires_explicit_synchronized_semantic_decision():
+    """Both changed locales are still sent to the semantic classifier."""
+    rows = [{"filename": PAGE, "status": "modified"},
+            {"filename": TARGET, "status": "modified"}]
+    services = ClassifierServices(rows, [answer(rows)])
     runtime(services).doc_translate(
-        TranslateWorkflowInput(42, GitSha(services.source), Decimal(10))
-    )
+        TranslateWorkflowInput(42, GitSha(services.source), Decimal(10)))
     assert len(services.requests) == 1
-    assert "translation_required" in request_schema(json.loads(services.requests[0].body))["schema"][
-        "properties"
-    ]
+    body = json.loads(services.requests[0].body)
+    assert set(request_schema(body)["schema"]["properties"]) == {"key", "action", "reason"}
+    pair = json.loads(request_prompt(body).split("\nPair evidence: ", 1)[1])
+    assert pair["ru"]["changed"] and pair["en"]["changed"]
     assert "перевод не требуется" in services.source_comments[0]["body"].lower()
     assert not services.pr_exists and services.branch_head is None
 
@@ -193,56 +202,48 @@ def test_classifier_reads_complete_pinned_before_after_and_binary_metadata():
         {"filename": PAGE, "status": "modified"},
         {"filename": IMAGE, "status": "renamed", "previous_filename": OLD_IMAGE, "changes": 2},
     ]
-    services = ClassifierServices(rows, [answer(rows)])
+    services = ClassifierServices(rows, [answer(rows), json.dumps({"verdict": "GREEN", "findings": []})])
     runtime(services).doc_translate(
         TranslateWorkflowInput(42, GitSha(services.source), Decimal(10))
     )
     body = json.loads(services.requests[0].body)
     prompt = request_prompt(body)
-    payload = json.loads(prompt.split("\nInventory: ", 1)[1].split("\n\n", 1)[0])
-    files = {row["path"]: row for row in payload["files"]}
-    assert len(payload["files"]) == 2
-    assert files[PAGE]["operation"] == "modify"
-    assert files[PAGE]["before"]["text"] == "# Before\n\nComplete old text.\n"
-    assert files[PAGE]["after"]["text"] == "# After\n\nComplete new text.\n"
-    assert files[IMAGE]["old_path"] == OLD_IMAGE and files[IMAGE]["new_path"] == IMAGE
-    assert files[IMAGE]["before"] == {
-        "kind": "binary",
-        "size": 8,
-        "sha256": "04542ebe95646d84b002474c94faaa8ccadb316de0e25082bdb11c75e123b400",
-    }
-    assert files[IMAGE]["after"]["kind"] == "binary"
-    assert files[IMAGE]["mapping"]["ru_to_en"] == "ydb/docs/en/core/new.png"
+    payload = json.loads(prompt.split("\nPair evidence: ", 1)[1])
+    assert payload["ru"]["path"] == PAGE
+    assert [b["text"] for b in payload["ru"]["before_blocks"]] == ["# Before", "Complete old text."]
+    assert [b["text"] for b in payload["ru"]["after_blocks"]] == ["# After", "Complete new text."]
+    assert payload["en"]["path"] == TARGET
+    assert "PNG" not in prompt
     assert payload["before_sha"] == services.base and payload["after_sha"] == services.source
     assert request_schema(body)["schema"]["additionalProperties"] is False
 
 
 @pytest.mark.parametrize("responses", [[503, 503], ["not JSON", "{}"], [503, "{}"]])
-def test_classifier_exhaustion_retries_same_request_once_and_updates_one_comment(responses):
+def test_classifier_failure_checkpoints_without_arbitrary_direction_and_updates_one_comment(responses):
     rows = [{"filename": PAGE, "status": "modified"}]
     services = ClassifierServices(rows, list(responses) * 2)
     for _ in range(2):
-        with pytest.raises(WorkflowError, match="inventory_classifier_failed"):
+        with pytest.raises(WorkflowError, match="prepare"):
             runtime(services).doc_translate(
                 TranslateWorkflowInput(42, GitSha(services.source), Decimal(10))
             )
     assert len(services.requests) == 4
     assert len({request.body for request in services.requests}) == 1
     assert len(services.source_comments) == 1
-    assert "классифика" in services.source_comments[0]["body"].lower()
+    assert "/ydbdoc continue" in services.source_comments[0]["body"]
     assert not services.pr_exists and services.branch_head is None
-    assert services.audit[-1]["status"] == "failed"
+    assert [row["status"] for row in services.audit if "finished_at" in row and "attempt_id" not in row][-1] == "failed"
 
 
 def test_classifier_malformed_response_retries_identically_and_recovers():
     rows = [{"filename": PAGE, "status": "modified"}]
     services = ClassifierServices(rows, ["{}", answer(rows)])
     runtime(services).doc_translate(
-        TranslateWorkflowInput(42, GitSha(services.source), Decimal(10))
-    )
+        TranslateWorkflowInput(42, GitSha(services.source), Decimal(10)))
     assert len(services.requests) == 2
     assert services.requests[0].body == services.requests[1].body
     assert "перевод не требуется" in services.source_comments[0]["body"].lower()
+    assert not services.pr_exists and services.branch_head is None
 
 
 def test_classifier_includes_added_and_deleted_non_markdown_paths():

@@ -15,6 +15,8 @@ _ALLOWED_STATUSES = frozenset({"start", "ok", "fail", "retry"})
 _ALLOWED_DETAILS = frozenset(
     {
         "accepted_total",
+        "action",
+        "request_bytes",
         "article",
         "attempt",
         "attempts_total",

@@ -419,9 +419,10 @@ class RuntimeSource:
             for locale in ("ru", "en")
             if item["filename"].startswith(f"ydb/docs/{locale}/")
         }
-        if len(target_locales) != 1:
+        if not target_locales:
             raise RuntimeBoundaryError("verification_direction_missing")
         self.verification_direction = (
+            Direction.MIXED if len(target_locales) == 2 else
             Direction.RU_TO_EN if target_locales == {"en"} else Direction.EN_TO_RU
         )
         self.verification_target_paths = tuple(item.path for item in target_inventory.files)

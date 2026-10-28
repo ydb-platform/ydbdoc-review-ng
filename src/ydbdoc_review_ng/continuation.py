@@ -158,6 +158,7 @@ class SourceChangeInventory:
     source_base_sha: GitSha | None = None
     source_head_sha: GitSha | None = None
     semantic_actions: tuple[SourceSemanticAction, ...] = ()
+    pair_decisions: tuple[tuple[str, str, str], ...] = ()
 
     def __post_init__(self) -> None:
         _exact(self.files, tuple)
@@ -173,6 +174,20 @@ class SourceChangeInventory:
             raise _fail()
         _exact(self.semantic_actions, tuple)
         if any(type(item) is not SourceSemanticAction for item in self.semantic_actions):
+            raise _fail()
+        _exact(self.pair_decisions, tuple)
+        keys = []
+        for decision in self.pair_decisions:
+            if type(decision) is not tuple or len(decision) != 3:
+                raise _fail()
+            key, action, _reason = decision
+            if any(type(value) is not str or not value.strip() for value in decision):
+                raise _fail()
+            _path(key)
+            if action not in {"no_translation", "ru_to_en", "en_to_ru", "need_context", "conflict"}:
+                raise _fail()
+            keys.append(key)
+        if keys != sorted(set(keys)):
             raise _fail()
         if self.semantic_actions:
             self.require_semantic_actions()
@@ -208,6 +223,7 @@ def encode_source_inventory(inventory: SourceChangeInventory, /) -> str:
         raise _fail()
     return json.dumps(
         {
+            **({"pair_decisions": inventory.pair_decisions} if inventory.pair_decisions else {}),
             "source_base_sha": inventory.source_base_sha.value,
             "source_head_sha": inventory.source_head_sha.value,
             "files": [
@@ -243,7 +259,12 @@ def decode_source_inventory(raw: str | bytes, /) -> SourceChangeInventory:
     try:
         parsed = json.loads(raw, object_pairs_hook=_ObjectPairs)
         envelope = dict(_pairs(parsed))
-        if set(envelope) != {"files", "source_base_sha", "source_head_sha", "semantic_actions"}:
+        if set(envelope) - {"pair_decisions"} != {
+            "files",
+            "source_base_sha",
+            "source_head_sha",
+            "semantic_actions",
+        }:
             raise _fail()
         rows = envelope["files"]
         _exact(rows, list)
@@ -280,6 +301,7 @@ def decode_source_inventory(raw: str | bytes, /) -> SourceChangeInventory:
             GitSha(envelope["source_base_sha"]),
             GitSha(envelope["source_head_sha"]),
             tuple(semantic_actions),
+            tuple(cast(tuple[str, str, str], tuple(row)) for row in cast(list[list[str]], envelope.get("pair_decisions", []))),
         )
         inventory.require_semantic_actions()
         return inventory
@@ -398,19 +420,10 @@ class ContinuationState:
             ):
                 raise _fail()
         elif self.stage is ContinuationStage.TRANSLATION:
-            if (
-                self.direction is None
-                or self.scope_sha256 is None
-                or not pending
-                or review
-            ):
+            if self.direction is None or self.scope_sha256 is None or not pending or review:
                 raise _fail()
         elif self.stage is ContinuationStage.REVIEW:
-            if (
-                self.direction is None
-                or self.scope_sha256 is None
-                or not review
-            ):
+            if self.direction is None or self.scope_sha256 is None or not review:
                 raise _fail()
             # pending_paths may list soft-publish translator holes to retry first (§5.3).
             # target_sha may be null when RED with zero commits (§4.2).
@@ -583,9 +596,7 @@ def checkpoint_scope_sha256(
             "scope_sha256": scope_sha256(manifest).value,
             "source_inventory": json.loads(encode_source_inventory(inventory)),
             "translation_plan_sha256": (
-                None
-                if translation_plan_sha256 is None
-                else translation_plan_sha256.value
+                None if translation_plan_sha256 is None else translation_plan_sha256.value
             ),
         },
         ensure_ascii=False,

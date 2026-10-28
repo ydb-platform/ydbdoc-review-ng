@@ -374,7 +374,7 @@ def test_production_models_ignore_legacy_model_overrides(role) -> None:
             assert payload["max_tokens"] == call.max_output_tokens
             assert payload["max_tokens"] < 1_048_576 - len(budget.body)
         else:
-            assert payload["max_tokens"] == 1_048_576 - len(budget.body)
+            assert payload["max_tokens"] == min(262_144, 1_048_576 - len(budget.body))
 
 
 def test_translation_context_overflow_stops_before_transport_without_splitting() -> None:

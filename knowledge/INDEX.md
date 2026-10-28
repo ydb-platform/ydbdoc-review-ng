@@ -19,3 +19,9 @@
 Не хранить секреты, полные transcripts, черновики агентов.
 
 - [doc-review/INDEX.md](doc-review/INDEX.md) — проект проверки правил, исследованные источники и открытые решения.
+
+- [pair-classification-plan.md](pair-classification-plan.md): согласованный план исправления классификации пар и лимитов, 2026-10-28.
+
+- [pair-classification.md](pair-classification.md): решения пар, компактный контекст, смешанные направления и continue.
+
+- [release-2026-10-28.md](release-2026-10-28.md): проверки, baseline и результат повторного CI.

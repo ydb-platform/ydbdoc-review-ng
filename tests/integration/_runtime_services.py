@@ -77,6 +77,14 @@ def toc_string_translations(prompt, schema):
 
 def classification_response(prompt, *, direction="ru_to_en", decisions=None):
     """Direction-only model payload. Python mirrors Git ops separately."""
+    if "\nPair evidence: " in prompt:
+        pair = json.loads(prompt.split("\nPair evidence: ", 1)[1])
+        verdict = None if decisions is None else decisions.get(pair["key"])
+        action = verdict if verdict is not None else direction
+        if action == "complete_pair":
+            action = "no_translation"
+        return {"key": pair["key"], "action": action or "conflict",
+                "reason": "Scripted semantic decision for this pair."}
     inventory = json.loads(prompt.split("\nInventory: ", 1)[1].split("\n\n", 1)[0])
     actions = []
     chosen = direction
@@ -394,10 +402,10 @@ class RuntimeServices:
                 text = translated_markdown(prompt)
         else:
             properties = schema["schema"]["properties"]
-            self.events.append(("CLASSIFIER" if "translation_required" in properties else "MODEL",
+            self.events.append(("CLASSIFIER" if ("translation_required" in properties or "action" in properties) else "MODEL",
                                 tuple(properties)))
             prompt = request_prompt(body)
-            if "translation_required" in properties:
+            if ("translation_required" in properties or "action" in properties):
                 values = classification_response(prompt)
             elif "strings" in properties and type(properties["strings"]) is dict:
                 values = toc_string_translations(prompt, schema["schema"])

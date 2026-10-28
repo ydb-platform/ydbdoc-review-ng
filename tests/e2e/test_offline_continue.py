@@ -35,7 +35,7 @@ def test_direction_continuation_retries_only_direction_and_preserves_expiry():
     following = services.checkpoint()
     assert services.roles == ["direction"]
     assert following.expires_at == old.expires_at
-    assert CONTEXT in services.prompts[0][1]
+    assert json.loads(services.prompts[0][1].split("\nPair evidence: ", 1)[1])["operator_context"] == CONTEXT
     services.stop = None
     services.direction_values = {"a.md": "complete_pair"}
     assert invoke(services) == 0
@@ -58,7 +58,7 @@ def test_pending_cli_continuation_reuses_green_map_and_source_only_protected_byt
     assert b"DROP TABLE" not in services.files[EN + "a.md"]
     assert services.files[EN + "b.md"].startswith(b"# Resumed")
     assert services.rows[old.continuation_id]["status"] == "closed"
-    assert CONTEXT in services.prompts[0][1]
+    assert json.loads(services.prompts[0][1].split("\nPair evidence: ", 1)[1])["operator_context"] == CONTEXT
     assert all(
         CONTEXT in prompt for role, prompt in services.prompts if role in {"critic", "arbiter"}
     )

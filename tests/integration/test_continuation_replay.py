@@ -163,7 +163,7 @@ class ReplayServices(RuntimeServices):
         body = json.loads(request.body)
         properties = request_schema(body)["schema"]["properties"]
         self.events.append(("MODEL", tuple(properties)))
-        if "translation_required" in properties:
+        if ("translation_required" in properties or "action" in properties):
             direction = "en_to_ru" if all(item["filename"].startswith(EN)
                                            for item in self.inventory) else "ru_to_en"
             values = classification_response(request_prompt(body), direction=direction,
@@ -511,7 +511,7 @@ def test_mixed_direction_fixture_translates_all_markdown_pairs_without_repeating
         "pending.md": "ru_to_en",
     }
     source, _, _, plans = frozen(services)
-    assert [method for method, _ in services.events].count("MODEL") == 1
+    assert [method for method, _ in services.events].count("MODEL") == 3
     saved = checkpoint(source, plans)
     _, content, _ = runtime(services)
     services.events.clear()
@@ -744,10 +744,11 @@ def test_renamed_complete_pair_restores_exact_excluded_or_selected_noop(verdict,
         "pending.md": "ru_to_en",
     }
     source, _, store, plans = frozen(services)
-    # Bilateral renames stay in scope as already-renamed no-ops. Direction-only
-    # inventory classification cannot exclude them via a per-pair complete verdict.
-    expected_paths = (EN + "complete.md", EN + "page.md", EN + "pending.md")
-    assert plans.manifest.entries[0].operation is FileOperation.NOOP_TARGET_ALREADY_RENAMED
+    # Matching bilateral pure renames are deterministic no-ops. They need no
+    # semantic call and are excluded regardless of a scripted model answer.
+    expected_paths = (EN + "page.md", EN + "pending.md")
+    assert all(key != "complete.md" or action == "no_translation"
+               for key, action, _ in source.inventory.pair_decisions)
     assert tuple(entry.pair.target_path.value for entry in plans.manifest.entries) == expected_paths
     page = next(
         document
@@ -772,7 +773,7 @@ def test_renamed_complete_pair_restores_exact_excluded_or_selected_noop(verdict,
                 content,
                 replace(
                     saved,
-                    scope_target_paths=(RepoPath(EN + "page.md"), RepoPath(EN + "pending.md")),
+                    scope_target_paths=(*saved.scope_target_paths, RepoPath(EN + "unknown.md")),
                 ),
             )
     else:

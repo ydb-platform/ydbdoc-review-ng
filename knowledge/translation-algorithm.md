@@ -3,9 +3,11 @@
 ## Scope
 
 1. Immutable inventory source PR.
-2. Один direction call: `translation_required`, `direction`, `reason`.
+2. Отдельная классификация каждой пары по изменениям и контексту блоков;
+   см. [pair-classification.md](pair-classification.md).
 3. Python зеркалит Git: translate / delete / rename / resource / TOC.
-   Если RU и EN одной Markdown-страницы оба в inventory, пару не переводим.
+   Пара пропускается только при подтверждённой согласованности изменений,
+   а не по наличию обоих путей в inventory. Смешанные направления допустимы.
 4. Рекурсия по внутренним ссылкам: нет target у A1 → A1 в группу, даже если
    A1 не менялся в PR. Есть target-файл → стоп, в review не входит.
 5. Glossary: нет EN-файла → как missing-target. EN-файл есть, точного anchor

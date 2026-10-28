@@ -146,7 +146,7 @@ def test_repeated_verify_red_keeps_continue_unambiguous(continue_pr: int) -> Non
             if schema is None:
                 return super().model(request)
             props = schema["schema"]["properties"]
-            if "translation_required" in props:
+            if ("translation_required" in props or "action" in props):
                 return super().model(request)
             if "files" in props:
                 self.roles.append("critic")

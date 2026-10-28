@@ -242,10 +242,18 @@ class CaptureServices(RuntimeServices):
                     text = "[[YDBDOC_PROTECTED_9999]]"
                 if self.stop == "translation_assembly" and self.translations >= 2:
                     text = "[[YDBDOC_PROTECTED_9999]]"
-        elif "translation_required" in (schema := schema_wrapper["schema"])["properties"]:
+        elif "translation_required" in (schema := schema_wrapper["schema"])["properties"] or "action" in schema["properties"]:
             role = "direction"
             values = classification_response(
                 prompt, direction=None if self.stop == "direction" else "ru_to_en")
+        elif set(schema["properties"]) == {"replacements"}:
+            role = "translate"
+            self.translations += 1
+            evidence = json.loads(prompt.split("\nEvidence: ", 1)[1])
+            # These checkpoint fixtures have identical immutable pre/post source
+            # content. A partially edited target needs no change for an empty delta.
+            assert evidence["source_delta"] == ""
+            values = {"replacements": []}
         elif "strings" in schema["properties"]:
             role = "translate"
             self.translations += 1
@@ -419,7 +427,7 @@ def test_direction_stop_is_strict_and_warns_before_saving():
     assert len(checkpoint.source_inventory.files) == 4
     assert checkpoint.source_sha == GitSha(services.source)
     assert checkpoint.base_sha == GitSha(services.base)
-    assert services.saved_after_comment and services.roles == ["direction"]
+    assert services.saved_after_comment and services.roles == ["direction"] * len(services.names)
     assert services.audit[-1]["status"] == "failed"
 
 
@@ -743,7 +751,7 @@ def test_lost_terminal_ack_and_failed_close_cannot_be_resumed():
     services = LostTerminalAck(stop="direction")
     with pytest.raises((WorkflowError, PersistenceError)):
         services.translate()
-    assert services.roles == ["direction"]
+    assert services.roles == ["direction"] * len(services.names)
     assert services.rows  # The real checkpoint write reached storage.
     with pytest.raises(PersistenceError):
         services.checkpoint()

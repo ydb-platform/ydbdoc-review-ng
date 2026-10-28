@@ -37,7 +37,7 @@ def _model_role(body: dict) -> str:
     if schema is None:
         return "translate"
     props = schema["schema"]["properties"]
-    if "translation_required" in props:
+    if ("translation_required" in props or "action" in props):
         return "direction"
     if "files" in props:
         return "critic"
@@ -420,8 +420,8 @@ def test_direction_retry_alone_hands_off_new_job_without_extending_expiry():
     with pytest.raises(application.WorkflowError):
         services.resume()
     following = services.checkpoint()
-    assert services.roles == ["direction"]
-    assert CONTEXT in services.prompts[0][1]
+    assert services.roles == ["direction"] * len(services.names)
+    assert json.loads(services.prompts[0][1].split("\nPair evidence: ", 1)[1])["operator_context"] == CONTEXT
     assert following.state.stage is ContinuationStage.DIRECTION
     assert following.continuation_id != saved.continuation_id
     assert following.job_id == following.continuation_id
@@ -561,7 +561,7 @@ def test_direction_continuation_keeps_original_diff_snapshots_after_pr_moves(mer
     services.direction_values = {"a.md": "complete_pair"}
     services.resume()
     prompt = services.prompts[0][1]
-    data = json.loads(prompt.split("\nInventory: ", 1)[1].split("\n\n", 1)[0])
+    data = json.loads(prompt.split("\nPair evidence: ", 1)[1])
     assert data["before_sha"] == "b" * 40
     assert data["after_sha"] == "a" * 40
     assert services.roles == ["direction"]

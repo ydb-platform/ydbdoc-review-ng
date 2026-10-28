@@ -5,7 +5,8 @@
 Semantic flow в `REQUIREMENTS_RU.md`:
 
 1. Файлы PR + дотянутые missing-target зависимости.
-2. Direction: только «нужен перевод?» + направление (Python владеет Git-ops).
+2. Direction: решения каждой пары по изменениям (Python владеет Git-ops);
+   актуальное изменение контракта описано в разделе 2026-10-28 ниже.
 3. Thin whole-file DeepSeek (или unique string replacements без модели).
 4. Publication gates fail-closed: source-locale echo, split-backtick, missing
    includes, ATX heading blank lines, unlabeled fence openers. Один retry;
@@ -91,3 +92,11 @@ boundaries, not a bare-token `str.replace`.
 Workflow `ydbdoc-review.yml` uses
 `ydb-platform/ydbdoc-review-ng/.github/actions/doc-review@v1.0.1`.
 Move `v1.0.1` with the current tip after push.
+
+## Классификация пар, 2026-10-28
+
+Согласованная замена глобального direction и автоматического bilingual skip:
+[pair-classification.md](pair-classification.md). Разные направления одного PR
+и решения continue сохраняются отдельно. PR #52478 является регрессией
+согласованных изменений RU/EN, ожидается успешный no-op без translation PR.
+Проверки и результат реального CI записываются в release report этой задачи.

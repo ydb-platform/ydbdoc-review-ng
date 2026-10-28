@@ -120,7 +120,7 @@ def replay_continue(
     ]
     # TOC-only / resource-only PRs freeze an empty Markdown scope; potential.scopes
     # may be empty while direction is still selected (§1 / §5.3).
-    if matching_scopes:
+    if matching_scopes or preparation.inventory.pair_decisions:
         pass
     elif preparation.potential.scopes or state.direction is None:
         raise ContinuationStateError()
@@ -133,10 +133,11 @@ def replay_continue(
             classification=classification,
             review_documents=state.stage is ContinuationStage.REVIEW,
         )
-    except TranslationPlanError:
+    except (TranslationPlanError, RuntimeBoundaryError):
         raise ContinuationStateError() from None
     if (
         plans.manifest is None
+        or plans.manifest.direction is not state.direction
         or tuple(entry.pair.target_path for entry in plans.manifest.entries)
         != checkpoint.scope_target_paths
         or checkpoint_scope_sha256(

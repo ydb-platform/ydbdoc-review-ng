@@ -126,7 +126,7 @@ def test_verify_already_absent_intentional_toc_delete_keeps_green() -> None:
             if schema is None:
                 return super().model(request)
             props = schema["schema"]["properties"]
-            if "translation_required" in props:
+            if ("translation_required" in props or "action" in props):
                 return super().model(request)
             if "findings" in props:
                 self.roles.append("arbiter")
@@ -209,7 +209,7 @@ def test_verify_already_absent_intentional_toc_delete_yellow_no_checkpoint() -> 
             if schema is None:
                 return super().model(request)
             props = schema["schema"]["properties"]
-            if "translation_required" in props:
+            if ("translation_required" in props or "action" in props):
                 return super().model(request)
             if "findings" in props:
                 self.roles.append("arbiter")

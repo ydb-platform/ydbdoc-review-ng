@@ -197,7 +197,7 @@ def test_openai_payload_headers_and_full_model_uri_are_exact() -> None:
         "model": model,
         "stream": False,
         "temperature": 0,
-        "max_tokens": 1_048_576 - len(sent.body),
+        "max_tokens": 262_144,
         "reasoning_effort": "none",
         "messages": [{"role": "user", "content": "translate secret-free prompt"}],
         "response_format": {
@@ -805,3 +805,34 @@ def test_openai_translator_payload_has_no_tools_by_default() -> None:
     payload = json.loads(transport.requests[0].body.decode())
     assert "tools" not in payload
     assert payload["messages"][-1]["role"] == "user"
+
+
+def test_context_limit_retry_reduces_only_completion_and_audits_both_payloads():
+    failure = HttpResponse(400, json.dumps({"error": {"message":
+        "Requested token count exceeds the model's maximum context length of 262144 tokens. "
+        "You requested a total of 310241 tokens: 48097 tokens from the input messages "
+        "and 262144 tokens for the completion. Please reduce the number of tokens."
+    }}).encode())
+    transport = FakeTransport(failure, openai_response())
+    recorded = []
+    result = openai_client(transport, recorded).invoke(request("deepseek-v4-flash"))
+    assert result.success
+    before, after = [json.loads(item.body) for item in transport.requests]
+    assert before.pop("max_tokens") == 262_144
+    assert after.pop("max_tokens") == 214_047
+    assert before == after
+    assert [item.http_status for item in recorded] == [400, 200]
+    assert recorded[0].request_payload != recorded[1].request_payload
+
+
+@pytest.mark.parametrize("message", [
+    ("Requested token count exceeds the model's maximum context length of 262144 tokens. "
+     "You requested a total of 562144 tokens: 300000 tokens from the input messages "
+     "and 262144 tokens for the completion."),
+    "Other invalid request",
+])
+def test_impossible_input_or_unrelated_400_is_not_retried(message):
+    transport = FakeTransport(HttpResponse(400, json.dumps({"error": {"message": message}}).encode()))
+    result = openai_client(transport, []).invoke(request("deepseek-v4-flash"))
+    assert not result.success
+    assert len(transport.requests) == 1
