@@ -186,6 +186,21 @@ def _anchors(text: str) -> set[str]:
     }
 
 
+def _anchor_candidates(blocks: list[_Block], groups: list[set[str]]) -> set[int]:
+    """Prefer rare anchors per changed line; keep every equally specific match."""
+    index: dict[str, set[int]] = {}
+    for i, block in enumerate(blocks):
+        for anchor in _anchors(block.text):
+            index.setdefault(anchor, set()).add(i)
+    candidates: set[int] = set()
+    for group in groups:
+        matches = [index[anchor] for anchor in group if anchor in index]
+        if matches:
+            rarest = min(map(len, matches))
+            candidates.update(i for match in matches if len(match) == rarest for i in match)
+    return candidates
+
+
 def _delta(old: str, new: str) -> list[dict[str, object]]:
     before, after = old.splitlines(), new.splitlines()
     return [
@@ -212,6 +227,7 @@ def pair_request(
     parsed: dict[str, tuple[list[_Block], list[_Block]]] = {}
     affected: dict[str, tuple[set[int], set[int]]] = {}
     delta_locales: set[str] = set()
+    anchor_groups: dict[str, list[tuple[set[str], list[set[str]]]]] = {}
     for locale, side in sides.items():
         item = next((f for f in files if side.path in (f.change.old_path, f.change.new_path)), None)
         old = side.content if item is None else item.before
@@ -234,6 +250,17 @@ def pair_request(
             changes = [op for i, op in enumerate(changes) if (locale, i) in focus]
         if changes:
             delta_locales.add(locale)
+        old_lines, new_lines = old_text.splitlines(), new_text.splitlines()
+        anchor_groups[locale] = []
+        for _, a, b, c, d in changes:
+            surrounding = [
+                _anchors(blocks[i].text)
+                for blocks, span in ((old_blocks, (a, b)), (new_blocks, (c, d)))
+                for i in _affected(blocks, [span])
+            ]
+            anchor_groups[locale].extend(
+                (_anchors(line), surrounding) for line in old_lines[a:b] + new_lines[c:d]
+            )
         affected[locale] = (
             _affected(old_blocks, [(a, b) for _, a, b, _, _ in changes]),
             _affected(new_blocks, [(a, b) for _, _, _, a, b in changes]),
@@ -256,15 +283,13 @@ def pair_request(
         # Deletions may leave no after block: use their before positions too.
         seeds = other_indices or affected[other][0]
         candidates = {j for i in seeds for j in range(max(0, i - 2), min(len(new_blocks), i + 3))}
-        anchor_values = {
-            anchor
-            for version in (0, 1)
-            for i in affected[other][version]
-            for anchor in _anchors(parsed[other][version][i].text)
-        }
-        candidates |= {
-            i for i, block in enumerate(new_blocks) if anchor_values & _anchors(block.text)
-        }
+        for anchors, surrounding in anchor_groups[other]:
+            matches = _anchor_candidates(new_blocks, [anchors])
+            if not matches:
+                # Each prose-only change gets its own fallback, even when a
+                # different change already found a specific counterpart.
+                matches = _anchor_candidates(new_blocks, surrounding)
+            candidates |= matches
         selected = new_indices | candidates
         if is_new:
             selected = set(range(len(new_blocks)))

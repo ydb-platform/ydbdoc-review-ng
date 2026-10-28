@@ -408,3 +408,62 @@ def test_balanced_batches_keep_both_locales_changes_when_they_fit(monkeypatch):
     assert result[0].action == "no_translation"
     assert len(seen) > 1
     assert all(locales == ["en", "ru"] for locales in seen)
+
+
+def test_pr52520_keeps_both_metric_deltas_without_unrelated_tables():
+    from pathlib import Path
+
+    root = Path(__file__).parents[1] / "fixtures" / "pr52520"
+    contents = [(root / f"{locale}-{version}.md").read_bytes()
+                for locale in ("ru", "en") for version in ("before", "after")]
+    files, pair = fixture(*contents)
+    request = pc.pair_request(files, pair, BEFORE, AFTER, "model")
+    payload = json.loads(request.prompt.split("Pair evidence: ")[1])
+    assert len(request.prompt.encode()) < 30000
+    assert payload["focused_delta_locales"] == ["en", "ru"]
+    for locale in ("ru", "en"):
+        side = payload[locale]
+        assert len(side["delta"]) == 1
+        assert "topic.read.lag_messages" in side["delta"][0]["added"][0]
+        assert "GAUGE" in side["delta"][0]["added"][0]
+        assert "RATE" in side["delta"][0]["removed"][0]
+        assert side["after_blocks"][0]["line_start"] == 161
+        assert side["after_blocks"][0]["line_end"] == 175
+        assert not any(block["line_start"] < 150 for block in side["current_blocks"])
+
+
+def test_reordered_counterpart_prefers_specific_delta_anchor_over_common_types():
+    old = b"# Source\n\n`metric.target` `RATE` old\n`metric.neighbor` `RATE` neighbor\n"
+    new = old.replace(b"old", b"new")
+    other = (b"# Other\n\nIntro\n\n" + b"Padding\n\n" * 6
+             + b"`metric.target` `GAUGE` translated\n\n"
+             + b"`metric.neighbor` `RATE` unrelated neighbor\n\n"
+             + b"`unrelated` `RATE` unrelated type\n")
+    files, pair = fixture(old, new, other, other)
+    payload = json.loads(pc.pair_request(files, pair, BEFORE, AFTER, "model").prompt.split("Pair evidence: ")[1])
+    context = str(payload["en"]["current_blocks"])
+    assert "translated" in context
+    assert "unrelated neighbor" not in context
+    assert "unrelated type" not in context
+
+
+def test_equally_specific_matches_remain_candidates():
+    old = b"# Source\n\n`metric.target` old\n"
+    new = old.replace(b"old", b"new")
+    other = (b"# Target\n\n" + b"Padding\n\n" * 6
+             + b"`metric.target` first meaning\n\n`metric.target` second meaning\n")
+    files, pair = fixture(old, new, other, other)
+    payload = json.loads(pc.pair_request(files, pair, BEFORE, AFTER, "model").prompt.split("Pair evidence: ")[1])
+    context = str(payload["en"]["current_blocks"])
+    assert "first meaning" in context and "second meaning" in context
+
+
+def test_each_prose_delta_keeps_its_own_fallback_anchor():
+    old = b"# Source\n\n`first` old\n\n`second`\nOld prose\n"
+    new = old.replace(b"old", b"new").replace(b"Old prose", b"New prose")
+    other = (b"# Target\n\n" + b"Padding\n\n" * 6
+             + b"`first` translated first\n\n`second` translated second\n")
+    files, pair = fixture(old, new, other, other)
+    payload = json.loads(pc.pair_request(files, pair, BEFORE, AFTER, "model").prompt.split("Pair evidence: ")[1])
+    context = str(payload["en"]["current_blocks"])
+    assert "translated first" in context and "translated second" in context
