@@ -348,6 +348,7 @@ def inventory_request(
                 "additionalProperties": False,
             },
         ),
+        max_output_tokens=4096,
     )
 
 

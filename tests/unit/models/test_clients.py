@@ -836,3 +836,61 @@ def test_impossible_input_or_unrelated_400_is_not_retried(message):
     result = openai_client(transport, []).invoke(request("deepseek-v4-flash"))
     assert not result.success
     assert len(transport.requests) == 1
+
+
+@pytest.mark.parametrize("succeed", [True, False])
+def test_direction_outer_retry_reuses_context_correction_with_two_http_attempts(succeed):
+    from ydbdoc_review_ng.continuation import normalize_source_inventory
+    from ydbdoc_review_ng.runtime_content import DirectionClient
+    from ydbdoc_review_ng.runtime_github import RuntimeBoundaryError
+
+    failure = HttpResponse(400, json.dumps({"error": {"message":
+        "maximum context length of 8192 tokens: 6000 tokens from the input messages"
+    }}).encode())
+    success = openai_response(text=json.dumps({
+        "translation_required": False, "direction": None, "reason": "No localized change"
+    }))
+    transport = FakeTransport(failure, success if succeed else failure)
+    audited = []
+    models = RecordedModels(
+        {"YANDEX_API_KEY": SECRET, "YANDEX_FOLDER_ID": FOLDER},
+        lambda attempt, **kwargs: audited.append(attempt), transport,
+    )
+    models.bind_job("job")
+    req = ModelRequest(ModelRole.DIRECTION, "deepseek-v4-flash", "classify", None,
+                       max_output_tokens=4096)
+    client = DirectionClient(models, "deepseek-v4-flash")
+    if succeed:
+        assert not client.invoke(req, normalize_source_inventory([])).translation_required
+    else:
+        with pytest.raises(RuntimeBoundaryError, match="inventory_classifier_failed"):
+            client.invoke(req, normalize_source_inventory([]))
+    assert len(transport.requests) == len(audited) == 2
+    first, second = [json.loads(r.body) for r in transport.requests]
+    assert first.pop("max_tokens") == 4096
+    assert second.pop("max_tokens") == 2192
+    assert first == second
+
+
+def test_direction_context_correction_is_request_specific_and_reset_for_new_job():
+    failure = HttpResponse(400, json.dumps({"error": {"message":
+        "maximum context length of 8192 tokens: 6000 tokens from the input messages"
+    }}).encode())
+    transport = FakeTransport(failure, openai_response(), openai_response(), openai_response())
+    models = RecordedModels(
+        {"YANDEX_API_KEY": SECRET, "YANDEX_FOLDER_ID": FOLDER},
+        lambda attempt, **kwargs: None, transport,
+    )
+    models.bind_job("first")
+    req = ModelRequest(ModelRole.DIRECTION, "deepseek-v4-flash", "original", None,
+                       max_output_tokens=4096)
+    assert not models.invoke(req).success
+    other = ModelRequest(ModelRole.DIRECTION, "deepseek-v4-flash", "different", None,
+                         max_output_tokens=4096)
+    assert models.invoke(other).success
+    assert models.invoke(req).success
+    models.bind_job("second")
+    assert models.invoke(req).success
+    assert [json.loads(r.body)["max_tokens"] for r in transport.requests] == [4096,4096,2192,4096]
+    assert req.max_output_tokens == 4096
+    assert models._direction_context_caps == {}

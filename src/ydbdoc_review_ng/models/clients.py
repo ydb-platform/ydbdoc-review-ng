@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import http.client
 import json
 import re
@@ -363,6 +364,7 @@ class _BaseYandexClient:
         execution: ExecutionConfig | None = None,
         now: Callable[[], datetime] | None = None,
         timeout_seconds: float = 600.0,
+        context_output_caps: dict[str, int] | None = None,
     ) -> None:
         self.credentials = credentials
         self._transport = transport
@@ -371,6 +373,7 @@ class _BaseYandexClient:
         self._execution = execution or ExecutionConfig()
         self._now = now or (lambda: datetime.now(UTC))
         self._timeout_seconds = timeout_seconds
+        self._context_output_caps = context_output_caps
 
     def __repr__(self) -> str:
         return f"{type(self).__name__}(credentials=<redacted>)"
@@ -403,6 +406,13 @@ class _BaseYandexClient:
         if request.role is ModelRole.TRANSLATE and "gpt-oss" in request.model.lower():
             return ModelCallResult(None, AttemptError.UNSUPPORTED_MODEL, ())
         body = self.prepare_request(request).body
+        original_body_key = hashlib.sha256(body).hexdigest()
+        if self._context_output_caps is not None:
+            cap = self._context_output_caps.get(original_body_key)
+            payload = json.loads(body)
+            if cap is not None and type(payload.get("max_tokens")) is int:
+                payload["max_tokens"] = min(payload["max_tokens"], cap)
+                body = serialize_json(payload)
         wire_request = HttpRequest(
             self.endpoint,
             self._headers(),
@@ -496,12 +506,17 @@ class _BaseYandexClient:
                 return ModelCallResult(
                     parsed.text, None, tuple(attempts), parsed.tool_calls
                 )
-            if response.status_code == 400 and attempt_number < max_attempts:
+            if response.status_code == 400:
                 retry_body = _context_retry_body(document, body)
                 if retry_body is not None:
-                    body = retry_body
-                    wire_request = replace(wire_request, body=body)
-                    continue
+                    # Preserve the correction for an outer retry even when this
+                    # invocation owns only one HTTP attempt. No prompt is cached.
+                    if self._context_output_caps is not None:
+                        self._context_output_caps[original_body_key] = json.loads(retry_body)["max_tokens"]
+                    if attempt_number < max_attempts:
+                        body = retry_body
+                        wire_request = replace(wire_request, body=body)
+                        continue
             if error is AttemptError.CONTENT_FILTER and attempt_number < max_attempts:
                 continue
             return ModelCallResult(None, error, tuple(attempts))

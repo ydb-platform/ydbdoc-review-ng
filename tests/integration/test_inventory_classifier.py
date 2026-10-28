@@ -252,11 +252,11 @@ def test_classifier_malformed_response_retries_identically_and_recovers():
 def test_classifier_includes_added_and_deleted_non_markdown_paths():
     rows = [
         {"filename": "README.txt", "status": "added"},
-        {"filename": "shared/manual.pdf", "status": "removed"},
+        {"filename": "ydb/docs/ru/core/manual.pdf", "status": "removed"},
     ]
     services = ClassifierServices(rows, [answer(rows)])
     services.after["README.txt"] = b"Complete added text.\n"
-    services.before["shared/manual.pdf"] = b"\x00binary-pdf"
+    services.before["ydb/docs/ru/core/manual.pdf"] = b"\x00binary-pdf"
     runtime(services).doc_translate(
         TranslateWorkflowInput(42, GitSha(services.source), Decimal(10))
     )
@@ -271,10 +271,10 @@ def test_classifier_includes_added_and_deleted_non_markdown_paths():
 
 
 def test_ascii_pdf_is_binary_metadata_not_model_text():
-    rows = [{"filename": "shared/manual.pdf", "status": "modified"}]
+    rows = [{"filename": "ydb/docs/ru/core/manual.pdf", "status": "modified"}]
     services = ClassifierServices(rows, [answer(rows)])
-    services.before["shared/manual.pdf"] = b"%PDF-1.4\nOld PDF body.\n"
-    services.after["shared/manual.pdf"] = b"%PDF-1.4\nNew PDF body.\n"
+    services.before["ydb/docs/ru/core/manual.pdf"] = b"%PDF-1.4\nOld PDF body.\n"
+    services.after["ydb/docs/ru/core/manual.pdf"] = b"%PDF-1.4\nNew PDF body.\n"
     runtime(services).doc_translate(
         TranslateWorkflowInput(42, GitSha(services.source), Decimal(10))
     )
@@ -342,11 +342,10 @@ def test_complete_inventory_paginates_and_rejects_inconsistent_pages_before_mode
         assert services.requests == [] and services.source_comments == []
         return
     runtime(services).doc_translate(request)
-    prompt = request_prompt(json.loads(services.requests[0].body))
-    files = json.loads(prompt.split("\nInventory: ", 1)[1])["files"]
-    assert len(files) == 101 and files[-1]["path"] == "shared/file-100.txt"
-    assert files[-1]["before"]["text"] == "Before text"
-    assert files[-1]["after"]["text"] == "After text"
+    assert services.requests == []
+    assert len(services.source_comments) == 1
+    assert "перевод не требуется" in services.source_comments[0]["body"].lower()
+    assert not services.pr_exists and services.branch_head is None
 
 
 def test_budget_rejection_precedes_classifier():
@@ -432,3 +431,52 @@ def test_verify_rejects_duplicate_target_inventory_before_models():
     assert not any(
         event[0] in {"CLASSIFIER", "MODEL", "POST", "PATCH"} for event in services.events
     )
+
+
+def test_pr55307_tools_only_leaves_fresh_noop_comments_without_models():
+    paths = [
+        '.github/workflows/docs_build.yaml', '.github/workflows/docs_release.yaml',
+        'ydb/docs/build.sh', 'ydb/docs/tools/feature_flags/README.md',
+        'ydb/docs/tools/feature_flags/generate.py',
+        'ydb/docs/tools/feature_flags/requirements.txt',
+        'ydb/docs/tools/feature_flags/sources.json',
+        'ydb/docs/tools/feature_flags/test_generate.py',
+    ]
+    rows = [{'filename': path, 'status': 'modified'} for path in paths]
+    services = ClassifierServices(rows, [])
+    services.before.update({path: b'old tool content' for path in paths})
+    services.after.update({path: b'new tool content' for path in paths})
+    for _ in range(2):
+        runtime(services).doc_translate(
+            TranslateWorkflowInput(42, GitSha(services.source), Decimal(10)))
+    assert services.requests == []
+    assert len(services.source_comments) == 2
+    assert all(c['body'].startswith('Перевод не требуется.') for c in services.source_comments)
+    assert not services.pr_exists and services.branch_head is None
+    assert [row['status'] for row in services.audit
+            if 'finished_at' in row and 'attempt_id' not in row][-1] == 'succeeded'
+
+
+@pytest.mark.parametrize('localized', [PAGE, IMAGE])
+def test_external_files_do_not_hide_localized_pages_or_assets(localized):
+    rows = [{'filename': 'ydb/docs/build.sh', 'status': 'modified'},
+            {'filename': localized, 'status': 'added' if localized == IMAGE else 'modified'}]
+    services = ClassifierServices(rows, [answer(rows)])
+    services.before['ydb/docs/build.sh'] = b'old'
+    services.after['ydb/docs/build.sh'] = b'new'
+    runtime(services).doc_translate(
+        TranslateWorkflowInput(42, GitSha(services.source), Decimal(10)))
+    assert len(services.requests) == 1
+
+
+def test_rename_out_of_locale_is_not_an_external_only_noop():
+    rows = [{'filename': 'tools/old.png', 'previous_filename': OLD_IMAGE,
+             'status': 'renamed', 'changes': 0}]
+    services = ClassifierServices(rows, [answer(rows)])
+    services.after['tools/old.png'] = services.before[OLD_IMAGE]
+    try:
+        runtime(services).doc_translate(
+            TranslateWorkflowInput(42, GitSha(services.source), Decimal(10)))
+    except WorkflowError:
+        pass  # The planner may reject a cross-locale move after classification.
+    assert len(services.requests) == 1

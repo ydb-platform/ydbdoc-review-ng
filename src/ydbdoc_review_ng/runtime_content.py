@@ -1350,6 +1350,22 @@ class RuntimeContent:
         classification: InventoryClassification | None = None,
     ) -> FrozenSourcePlans:
         """Freeze source plans, optionally using an already restored direction decision."""
+        if (
+            preparation.for_translation
+            and direction is None
+            and classification is None
+            and not preparation.inventory.pair_decisions
+            and all(
+                classify_path(self.roots, path).kind is PathKind.OUTSIDE_LOCALES
+                for change in preparation.inventory.files
+                for path in (change.path, change.previous_path)
+                if path is not None
+            )
+        ):
+            classification = InventoryClassification(
+                False, None,
+                "В PR нет изменений файлов RU/EN: перевод не требуется.",
+            )
         if preparation.for_translation:
             from ydbdoc_review_ng.runtime_metadata import _toc
             for raw in preparation.inventory.files:

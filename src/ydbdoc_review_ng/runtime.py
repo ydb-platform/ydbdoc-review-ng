@@ -87,11 +87,13 @@ class RecordedModels:
         self.environment, self.persistence, self.transport = environment, persistence, transport
         self.cost: Decimal | None = Decimal(0)
         self.job_id: str | None = None
+        self._direction_context_caps: dict[str, int] = {}
 
     def bind_job(self, job_id: str) -> None:
         if not job_id:
             raise RuntimeBoundaryError("model_job_missing")
         self.job_id = job_id
+        self._direction_context_caps.clear()
         self.cost = Decimal(0)
 
     def record(self, attempt: AttemptResult) -> None:
@@ -119,6 +121,9 @@ class RecordedModels:
             pricing=_PRODUCTION_PRICING,
             execution=ExecutionConfig(max_attempts=1 if request.role is ModelRole.DIRECTION else 2),
             timeout_seconds=_model_http_timeout_seconds(self.environment),
+            context_output_caps=(
+                self._direction_context_caps if request.role is ModelRole.DIRECTION else None
+            ),
         )
         return client.prepare_request(request)
 
@@ -140,6 +145,9 @@ class RecordedModels:
             pricing=_PRODUCTION_PRICING,
             execution=ExecutionConfig(max_attempts=1 if request.role is ModelRole.DIRECTION else 2),
             timeout_seconds=_model_http_timeout_seconds(self.environment),
+            context_output_caps=(
+                self._direction_context_caps if request.role is ModelRole.DIRECTION else None
+            ),
         )
         details: dict[str, object] = {
             "model_role": request.role.value,

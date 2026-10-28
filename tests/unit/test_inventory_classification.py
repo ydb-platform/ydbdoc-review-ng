@@ -113,3 +113,14 @@ def test_inventory_request_schema_has_no_files_array():
         "direction",
         "reason",
     }
+
+
+def test_inventory_classifier_limits_its_short_response():
+    from ydbdoc_review_ng.models import YandexOpenAIClient, YandexCredentials
+    request = inventory_request((),
+        SnapshotRef(RepositoryId('ydb-platform/ydb'), GitSha('a' * 40)),
+        SnapshotRef(RepositoryId('ydb-platform/ydb'), GitSha('b' * 40)), (),
+        'deepseek-v4-flash')
+    client = YandexOpenAIClient(YandexCredentials('key', 'folder'), lambda _: None, lambda _: None)
+    body = json.loads(client.prepare_request(request).body)
+    assert 0 < body['max_tokens'] <= 4096
