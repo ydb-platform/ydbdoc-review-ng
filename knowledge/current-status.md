@@ -100,3 +100,5 @@ Move `v1.0.1` with the current tip after push.
 и решения continue сохраняются отдельно. PR #52478 является регрессией
 согласованных изменений RU/EN, ожидается успешный no-op без translation PR.
 Проверки и результат реального CI записываются в release report этой задачи.
+
+Релиз кода `fb6ba6f` опубликован как v1.0.1. Реальный [CI #52478](https://github.com/ydb-platform/ydb/actions/runs/40706505547) завершён success, no_translation, без нового PR перевода. Полные результаты: [release-2026-10-28.md](release-2026-10-28.md).
