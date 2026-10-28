@@ -97,3 +97,5 @@ EN-only batch получил ru_to_en, хотя reason прямо утвержд
 невалидное направление повторяется один раз, затем conflict.
 4новые регрессии сначала упали; после исправления47focused tests passed,
 mypy module clean. Реальный CI результат записывается после повторного запуска.
+
+Полный прогон после строгой проверки направления выявил некорректные test fixtures: modified source имел identical before/after, либо EN-only classifier отвечал ru_to_en. Исправлены три общие/локальные тестовые заготовки, сохранены проверки актуального target и порядка TOC validation. Итог272failed2341passed7deselected; множество272падений точно совпадает с предыдущим baseline. Новых ошибок нет. Production-проверка не ослаблена.

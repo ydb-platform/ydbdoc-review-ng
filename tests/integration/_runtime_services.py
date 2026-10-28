@@ -113,7 +113,14 @@ def seed_inventory_preimages(rows, before, after):
     for row in rows:
         if row["status"] != "added":
             old_path = row.get("previous_filename", row["filename"])
-            before.setdefault(old_path, after.get(row["filename"], b"# Removed source preimage\n"))
+            preimage = after.get(row["filename"], b"# Removed source preimage\n")
+            if row["status"] == "modified" and row["filename"].endswith(".md"):
+                preimage = b"# Previous source revision\n"
+            if (row["status"] == "modified" and row["filename"].endswith(".md")
+                    and before.get(old_path) == after.get(row["filename"])):
+                before[old_path] = preimage
+            else:
+                before.setdefault(old_path, preimage)
 
 
 def replace_response_text(response_body, text):
@@ -290,6 +297,8 @@ class RuntimeServices:
         if path.startswith("/contents/"):
             name = path[10:].split("?")[0]
             content = self.files.get(name)
+            if name == "ydb/docs/ru/core/page.md" and path.endswith("?ref=" + self.base):
+                content = b"# Previous source revision\n"
             return (
                 None
                 if content is None

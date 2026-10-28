@@ -451,6 +451,11 @@ def test_source_toc_preflight_precedes_every_model_and_github_mutation(source_to
 
 
 def test_mixed_direction_model_is_also_after_source_toc_preflight():
+    import base64
+    import json
+    from dataclasses import replace
+    from _runtime_services import request_prompt, replace_response_text
+
     class Services(RuntimeServices):
         def github(self, method, path, payload):
             if path.endswith("/pulls/42/files?per_page=100"):
@@ -458,9 +463,24 @@ def test_mixed_direction_model_is_also_after_source_toc_preflight():
                     {"status": "added", "filename": "ydb/docs/ru/core/page.md"},
                     {"status": "modified", "filename": "ydb/docs/en/core/other.md"},
                 ]
+            if path.endswith("/contents/ydb/docs/en/core/other.md?ref=" + self.base):
+                return {"type": "file", "encoding": "base64",
+                        "content": base64.b64encode(b"# Previous other\n").decode()}
             result = super().github(method, path, payload)
             if path.endswith("/pulls/42"):
                 result["changed_files"] = 2
+            return result
+
+        def model(self, request):
+            result = super().model(request)
+            prompt = request_prompt(json.loads(request.body))
+            if "\nPair evidence: " in prompt:
+                evidence = json.loads(prompt.split("\nPair evidence: ", 1)[1])
+                if evidence["key"] == "other.md":
+                    assert evidence["focused_delta_locales"] == ["en"]
+                    result = replace(result, body=replace_response_text(result.body, json.dumps({
+                        "key": "other.md", "action": "en_to_ru", "reason": "Changed EN heading"
+                    })))
             return result
 
     services = Services()

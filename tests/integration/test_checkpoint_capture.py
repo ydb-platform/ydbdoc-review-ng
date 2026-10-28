@@ -250,10 +250,16 @@ class CaptureServices(RuntimeServices):
             role = "translate"
             self.translations += 1
             evidence = json.loads(prompt.split("\nEvidence: ", 1)[1])
-            # These checkpoint fixtures have identical immutable pre/post source
-            # content. A partially edited target needs no change for an empty delta.
-            assert evidence["source_delta"] == ""
-            values = {"replacements": []}
+            # The source heading changed; an already translated target needs no edit.
+            assert "-# Previous source revision\n" in evidence["source_delta"]
+            assert evidence["source_current"].startswith("# Source ")
+            assert "+" + evidence["source_current"].strip() in evidence["source_delta"]
+            target = evidence["current_target"]
+            assert target.startswith("# ")
+            replacements = [] if target == "# Translated\n" else [
+                {"old": target[2:].strip(), "new": "Translated"}
+            ]
+            values = {"replacements": replacements}
         elif "strings" in schema["properties"]:
             role = "translate"
             self.translations += 1
