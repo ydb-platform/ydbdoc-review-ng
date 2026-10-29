@@ -18,5 +18,17 @@ Action задаёт `YDBDOC_PUBLICATION_REPOSITORY=sintjuri/ydb` во всех �
 review не нашло blockers в action path. Новые tests покрывают Git writes,
 base/target reads, fork identity, PR head, reset, verify и continue.
 
-Публикация main/tag и повторный запуск #53925 пока не выполнены:
-api.github.com не разрешается по DNS, включая запрос вне sandbox.
+Код 2094e43 опубликован в main и v1.0.1. Перезапуск #53925:
+https://github.com/ydb-platform/ydb/actions/runs/40821783094 (in_progress).
+
+В consumer обнаружены дополнительные зависимости: github.token ограничен
+upstream, поиск translation PR использует upstream owner. Исправление:
+https://github.com/ydb-platform/ydb/pull/57400, ветка только в sintjuri/ydb.
+Workflow использует существующий секрет YDBDOC_PUSH_PAT. Его фактические права
+нельзя прочитать через API: нужны Contents write в fork и PR/issues write
+upstream. До слияния consumer PR label-workflow не сможет писать в fork.
+
+Системный DNS зависает, dig возвращает корректный адрес. Для доставки
+использован curl --resolve с обычной проверкой TLS, без изменения DNS системы.
+Ruff/mypy не полностью чистые: оставшиеся диагностические сообщения в runtime
+требуют отдельного сравнения с baseline; полный suite не объявлен зелёным.
