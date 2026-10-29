@@ -196,7 +196,7 @@ def test_existing_translation_pr_skips_without_direction_call():
     )
     assert services.requests == []
     assert "перевод не требуется" in services.source_comments[0]["body"].lower()
-    assert "уже является переводом" in services.source_comments[0]["body"].lower()
+    assert services.source_comments[0]["body"].split("\n", 1)[0] == "Перевод не требуется."
     assert not services.pr_exists and services.branch_head is None
 
 

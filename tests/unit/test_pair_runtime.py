@@ -276,7 +276,8 @@ def test_workflow_synchronized_pair_never_invokes_publication_or_translator():
     result = workflows.doc_translate(TranslateWorkflowInput(42, SOURCE_SHA, Decimal(100)))
     assert result.verdict.value == "GREEN"
     assert len(comments) == 1
-    assert "Both versions already state the new limit" in comments[0]
+    assert comments[0].split("\n", 1)[0] == "Перевод не требуется."
+    assert "Both versions already state the new limit" not in comments[0]
 
 
 def test_delete_is_mirrored_without_semantic_classifier():

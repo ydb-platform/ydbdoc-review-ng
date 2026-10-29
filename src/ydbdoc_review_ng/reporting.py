@@ -236,7 +236,7 @@ def report_classification(
     """Append visible no-op results; retain upsert behavior for technical failures."""
     body = (
         (
-            "Перевод не требуется.\n\nПричина: " + _line(reason)
+            "Перевод не требуется."
             if reason is not None
             else "🔴 Перевод PR не запущен: классификация изменений не удалась.\n\n"
             "После двух попыток сервис модели недоступен или ответ не соответствует "

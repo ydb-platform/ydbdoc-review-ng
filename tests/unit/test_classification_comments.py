@@ -30,8 +30,7 @@ def test_each_no_translation_run_creates_new_comment_and_preserves_history():
     assert backend.comments[0] == original
     assert backend.updates == []
     for comment in backend.comments[1:]:
-        assert comment.body.startswith("Перевод не требуется.")
-        assert "Обе версии согласованы." in comment.body
+        assert comment.body == "Перевод не требуется.\n" + CLASSIFICATION_MARKER
 
 
 def test_technical_failure_keeps_existing_update_behavior():
