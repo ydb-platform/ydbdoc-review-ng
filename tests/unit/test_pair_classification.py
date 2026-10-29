@@ -115,7 +115,7 @@ def test_need_context_retries_once_then_preserves_checkpoint():
 
 
 def test_oversized_indivisible_block_is_checkpoint_not_truncated_model_input():
-    files, pair = fixture(b"old", b"x" * 70000, b"EN", b"EN")
+    files, pair = fixture(b"old", b"x" * 300000, b"EN", b"EN")
 
     def forbidden(request):
         pytest.fail("Oversized incomplete context must not be sent")
@@ -280,13 +280,13 @@ def batching_fixture():
 
 
 def test_batches_cover_every_delta_once_including_insert_and_delete(monkeypatch):
-    monkeypatch.setattr(pc, "MAX_REQUEST_BYTES", 14000)
+    monkeypatch.setattr(pc, "CLASSIFIER_CONTEXT_TOKENS", 21000)
     files, pair = batching_fixture()
     requests = []
 
     def invoke(request):
         requests.append(request)
-        assert len(request.prompt.encode()) <= pc.MAX_REQUEST_BYTES
+        assert pc._default_request_budget(request).input_tokens + pc.CLASSIFIER_OUTPUT_TOKENS <= pc.CLASSIFIER_CONTEXT_TOKENS
         return response("no_translation")
 
     decisions = pc.classify_pairs(files, (pair,), BEFORE, AFTER, "model", invoke)
@@ -325,7 +325,7 @@ def test_batches_cover_every_delta_once_including_insert_and_delete(monkeypatch)
     ],
 )
 def test_batch_decisions_are_aggregated_conservatively(monkeypatch, actions, expected):
-    monkeypatch.setattr(pc, "MAX_REQUEST_BYTES", 14000)
+    monkeypatch.setattr(pc, "CLASSIFIER_CONTEXT_TOKENS", 21000)
     files, pair = batching_fixture()
     calls = []
 
@@ -364,7 +364,7 @@ def test_one_sided_delta_retries_direction_from_unchanged_locale(locale, invalid
     result = pc.classify_pairs(files, (pair,), BEFORE, AFTER, "model", invoke)
     assert result[0].action == "no_translation"
     assert len(requests) == 2 and requests[0] == requests[1]
-    assert invalid not in requests[0].schema["properties"]["action"]["enum"]
+    assert invalid not in requests[0].schema["properties"]["translation_action"]["enum"]
 
 
 def test_repeated_direction_from_unchanged_locale_is_conflict():
@@ -378,7 +378,7 @@ def test_repeated_direction_from_unchanged_locale_is_conflict():
 def test_batch_directions_follow_focus_not_whole_pr():
     files, pair = fixture(b"Old RU", b"New RU", b"Old EN", b"New EN")
     request = pc.pair_request(files, pair, BEFORE, AFTER, "model", focus=frozenset({("en", 0)}))
-    assert tuple(request.schema["properties"]["action"]["enum"]) == (
+    assert tuple(request.schema["properties"]["translation_action"]["enum"]) == (
         "no_translation",
         "en_to_ru",
         "need_context",
@@ -395,7 +395,7 @@ def test_new_page_can_be_translation_source_without_explicit_delta():
 
 
 def test_balanced_batches_keep_both_locales_changes_when_they_fit(monkeypatch):
-    monkeypatch.setattr(pc, "MAX_REQUEST_BYTES", 20000)
+    monkeypatch.setattr(pc, "CLASSIFIER_CONTEXT_TOKENS", 27000)
     files, pair = batching_fixture()
     seen = []
 
@@ -467,3 +467,63 @@ def test_each_prose_delta_keeps_its_own_fallback_anchor():
     payload = json.loads(pc.pair_request(files, pair, BEFORE, AFTER, "model").prompt.split("Pair evidence: ")[1])
     context = str(payload["en"]["current_blocks"])
     assert "translated first" in context and "translated second" in context
+
+
+def test_pr53925_whole_tables_fit_model_window_in_one_request():
+    from pathlib import Path
+    root = Path(__file__).parents[1] / "fixtures" / "pr53925"
+    files, pair = fixture(*[(root / f"{locale}-{version}.md").read_bytes()
+        for locale in ("ru", "en") for version in ("before", "after")])
+    requests = []
+    def invoke(request):
+        requests.append(request)
+        return response("no_translation")
+    result = pc.classify_pairs(files, (pair,), BEFORE, AFTER, "deepseek-v4-flash", invoke)
+    assert result[0].action == "no_translation"
+    assert len(requests) == 1
+    payload = json.loads(requests[0].prompt.split("Pair evidence: ")[1])
+    for locale in ("ru", "en"):
+        for name in ("before_blocks", "after_blocks"):
+            blocks = payload[locale][name]
+            assert any(b["line_start"] == 23 and b["line_end"] >= 184 for b in blocks)
+    assert len(requests[0].prompt.encode()) > 100000
+
+
+def test_pair_decision_follows_explanation_in_wire_schema():
+    from ydbdoc_review_ng.models import YandexCredentials, YandexOpenAIClient
+    files, pair = fixture(b"Old", b"New", b"EN", b"EN")
+    request = pc.pair_request(files, pair, BEFORE, AFTER, "deepseek-v4-flash")
+    client = YandexOpenAIClient(YandexCredentials("unused", "folder"), lambda _: None, lambda _: None)
+    schema = json.loads(client.prepare_request(request).body)["response_format"]["json_schema"]["schema"]
+    assert list(schema["properties"]) == ["key", "reason", "translation_action"]
+    assert schema["required"] == ["key", "reason", "translation_action"]
+
+
+@pytest.mark.parametrize("spare,allowed", [(4095, False), (4096, True), (4097, True)])
+def test_pair_budget_reserves_full_reply_and_accounts_for_wire_overhead(spare, allowed):
+    from ydbdoc_review_ng.models.context import ContextBudget
+    files, pair = fixture(b"old", b"new", b"EN", b"EN")
+    def budget(request):
+        return ContextBudget(b"wire-with-schema", pc.CLASSIFIER_CONTEXT_TOKENS - spare, 4096)
+    if allowed:
+        pc.pair_request(files, pair, BEFORE, AFTER, "model", request_budget=budget)
+    else:
+        with pytest.raises(pc.ContextBoundExceeded):
+            pc.pair_request(files, pair, BEFORE, AFTER, "model", request_budget=budget)
+
+
+def test_pair_budget_rejects_provider_reduced_reply_reserve():
+    from ydbdoc_review_ng.models.context import ContextBudget
+    files, pair = fixture(b"old", b"new", b"EN", b"EN")
+    with pytest.raises(pc.ContextBoundExceeded):
+        pc.pair_request(files, pair, BEFORE, AFTER, "model",
+            request_budget=lambda _: ContextBudget(b"wire", 100, 1))
+
+
+def test_new_reason_first_response_preserves_semantic_decision():
+    result = pc.parse_pair_response(
+        '{"key":"page.md","reason":"Already synchronized","translation_action":"no_translation"}',
+        "page.md",
+    )
+    assert result.action == "no_translation"
+    assert result.reason == "Already synchronized"

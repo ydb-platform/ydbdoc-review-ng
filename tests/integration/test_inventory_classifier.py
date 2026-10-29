@@ -85,7 +85,7 @@ class ClassifierServices(RuntimeServices):
         if type(answer) is int:
             return HttpResponse(answer, b"{}", None)
         schema = request_schema(body)
-        if schema is not None and "action" in schema["schema"]["properties"]:
+        if schema is not None and "translation_action" in schema["schema"]["properties"]:
             try:
                 scripted = json.loads(answer)
             except ValueError:
@@ -177,7 +177,7 @@ def test_bilingual_inventory_requires_explicit_synchronized_semantic_decision():
         TranslateWorkflowInput(42, GitSha(services.source), Decimal(10)))
     assert len(services.requests) == 1
     body = json.loads(services.requests[0].body)
-    assert set(request_schema(body)["schema"]["properties"]) == {"key", "action", "reason"}
+    assert set(request_schema(body)["schema"]["properties"]) == {"key", "translation_action", "reason"}
     pair = json.loads(request_prompt(body).split("\nPair evidence: ", 1)[1])
     assert pair["ru"]["changed"] and pair["en"]["changed"]
     assert "перевод не требуется" in services.source_comments[0]["body"].lower()

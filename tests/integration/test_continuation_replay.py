@@ -163,7 +163,7 @@ class ReplayServices(RuntimeServices):
         body = json.loads(request.body)
         properties = request_schema(body)["schema"]["properties"]
         self.events.append(("MODEL", tuple(properties)))
-        if ("translation_required" in properties or "action" in properties):
+        if ("translation_required" in properties or "translation_action" in properties):
             direction = "en_to_ru" if all(item["filename"].startswith(EN)
                                            for item in self.inventory) else "ru_to_en"
             values = classification_response(request_prompt(body), direction=direction,

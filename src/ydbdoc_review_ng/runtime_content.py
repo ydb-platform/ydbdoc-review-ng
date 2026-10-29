@@ -1100,6 +1100,7 @@ class RuntimeContent:
                 self.model,
                 self.models.invoke,
                 operator_context,
+                **({"request_budget": self.models.prepare_request} if hasattr(self.models, "prepare_request") else {}),
             )
             changed = {item.key: (item.key, item.action, item.reason) for item in updates}
             decisions = tuple(
@@ -1433,6 +1434,7 @@ class RuntimeContent:
                     self.source.classifier_files(self.roots), tuple(semantic_pairs),
                     self.source.source_base_snapshot, self.source.source_change_snapshot,
                     self.model, self.models.invoke, operator_context,
+                    **({"request_budget": self.models.prepare_request} if hasattr(self.models, "prepare_request") else {}),
                 ) if semantic_pairs else ())
                 classified_pairs = tuple(sorted(classified_pairs, key=lambda item: item.key))
                 preparation = replace(

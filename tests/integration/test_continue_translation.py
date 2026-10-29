@@ -37,7 +37,7 @@ def _model_role(body: dict) -> str:
     if schema is None:
         return "translate"
     props = schema["schema"]["properties"]
-    if ("translation_required" in props or "action" in props):
+    if ("translation_required" in props or "translation_action" in props):
         return "direction"
     if "files" in props:
         return "critic"

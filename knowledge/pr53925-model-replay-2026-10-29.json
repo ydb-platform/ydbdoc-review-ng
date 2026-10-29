@@ -1,0 +1,444 @@
+{
+  "replay": [
+    {
+      "key": "_includes/do-not-create-users-in-ldap.md",
+      "old_action": "en_to_ru",
+      "raw_fields": [
+        "key",
+        "reason",
+        "translation_action"
+      ],
+      "new": {
+        "key": "_includes/do-not-create-users-in-ldap.md",
+        "reason": "EN changes the anchor link from #ldap-auth-provider to #ldap. RU already uses #ldap in its corresponding text. Both locales now reference the same section, so the change is already synchronized in RU.",
+        "action": "no_translation"
+      },
+      "usage": {
+        "prompt_tokens": 1610,
+        "total_tokens": 1683,
+        "completion_tokens": 73,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      }
+    },
+    {
+      "key": "contributor/datashard-locks-and-change-visibility.md",
+      "old_action": "en_to_ru",
+      "raw_fields": [
+        "key",
+        "reason",
+        "translation_action"
+      ],
+      "new": {
+        "key": "contributor/datashard-locks-and-change-visibility.md",
+        "reason": "The EN delta adds two new subsection headings ('### Broken locks {#broken-locks}' and '### Whole-shard locks {#whole-shard-locks}') that are not present in the RU current text. The RU text does not contain these headings, and the added headings introduce new structural meaning (subsections) that are missing from RU. Therefore, the EN changes need to be translated into RU.",
+        "action": "en_to_ru"
+      },
+      "usage": {
+        "prompt_tokens": 2506,
+        "total_tokens": 2629,
+        "completion_tokens": 123,
+        "prompt_tokens_details": {
+          "cached_tokens": 256
+        }
+      }
+    },
+    {
+      "key": "dev/optimization/layout.md",
+      "old_action": "en_to_ru",
+      "raw_fields": [
+        "key",
+        "reason",
+        "translation_action"
+      ],
+      "new": {
+        "key": "dev/optimization/layout.md",
+        "reason": "The EN delta removes links to CLI/UI documentation and replaces glossary links with internal section links. The RU current text still contains the CLI/UI links and glossary links, so the EN changes are not reflected in RU. The changes are not formatting-only and alter the meaning by removing references and changing link targets. Since the EN changes are missing from RU, translation is needed from EN to RU.",
+        "action": "en_to_ru"
+      },
+      "usage": {
+        "prompt_tokens": 8010,
+        "total_tokens": 8113,
+        "completion_tokens": 103,
+        "prompt_tokens_details": {
+          "cached_tokens": 256
+        }
+      }
+    },
+    {
+      "key": "dev/optimization/metrics.md",
+      "old_action": "en_to_ru",
+      "raw_fields": [
+        "key",
+        "reason",
+        "translation_action"
+      ],
+      "new": {
+        "key": "dev/optimization/metrics.md",
+        "reason": "The EN delta changes internal links from glossary references to specific section anchors (e.g., `layout.md#progress`, `structure.md#stages`, `structure.md#connections`) and updates the EXPLAIN link to `../../reference/ydb-cli/sql.md#options`. The RU current text still uses the old glossary links (`../../concepts/glossary.md#task`, `#processing-stage`, `#channels`) and the old EXPLAIN link (`plans.md#explain-cli`). These are meaningful link changes that are not reflected in RU, so the EN changes need to be translated to RU.",
+        "action": "en_to_ru"
+      },
+      "usage": {
+        "prompt_tokens": 15739,
+        "total_tokens": 15890,
+        "completion_tokens": 151,
+        "prompt_tokens_details": {
+          "cached_tokens": 256
+        }
+      }
+    },
+    {
+      "key": "dev/optimization/structure.md",
+      "old_action": "en_to_ru",
+      "raw_fields": [
+        "key",
+        "reason",
+        "translation_action"
+      ],
+      "new": {
+        "key": "dev/optimization/structure.md",
+        "reason": "The EN delta changes links from glossary.md#task to layout.md#progress and removes some glossary links for operator/channel. The RU current text still uses glossary.md#task and glossary.md#operator/channels links. The EN changes are not reflected in RU, so the RU text needs to be updated to match the new link references.",
+        "action": "en_to_ru"
+      },
+      "usage": {
+        "prompt_tokens": 10412,
+        "total_tokens": 10504,
+        "completion_tokens": 92,
+        "prompt_tokens_details": {
+          "cached_tokens": 256
+        }
+      }
+    },
+    {
+      "key": "devops/configuration-management/configuration-v1/dynamic-config.md",
+      "old_action": "en_to_ru",
+      "raw_fields": [
+        "key",
+        "reason",
+        "translation_action"
+      ],
+      "new": {
+        "key": "devops/configuration-management/configuration-v1/dynamic-config.md",
+        "reason": "EN changes a link anchor from #selectors-intro to #labels. RU currently uses #selectors-intro in the corresponding passage. The change is a link correction in EN that is not reflected in RU, and the RU counterpart still has the old anchor. Since the change is a meaningful link correction and RU does not contain the updated reference, translation is needed.",
+        "action": "en_to_ru"
+      },
+      "usage": {
+        "prompt_tokens": 1705,
+        "total_tokens": 1809,
+        "completion_tokens": 104,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      }
+    },
+    {
+      "key": "devops/observability/monitoring.md",
+      "old_action": "en_to_ru",
+      "raw_fields": [
+        "key",
+        "reason",
+        "translation_action"
+      ],
+      "new": {
+        "key": "devops/observability/monitoring.md",
+        "reason": "The EN change only updates the anchor for 'dynamic nodes' from `#dynamic-node` to `#dynamic`. The RU text already uses `#dynamic` in its corresponding passage, so the change is already synchronized in the other locale.",
+        "action": "no_translation"
+      },
+      "usage": {
+        "prompt_tokens": 2804,
+        "total_tokens": 2881,
+        "completion_tokens": 77,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      }
+    },
+    {
+      "key": "integrations/orm/linq2db.md",
+      "old_action": "ru_to_en",
+      "raw_fields": [
+        "key",
+        "reason",
+        "translation_action"
+      ],
+      "new": {
+        "key": "integrations/orm/linq2db.md",
+        "reason": "The RU delta changes internal anchor links from Cyrillic transliterations (#пример-кастомного-decimal) to Latin transliterations (#primer-kastomnogo-decimal, #primer-kastomnogo-dbtype) and adds explicit anchor IDs to the corresponding headings. The EN counterpart already uses English anchor IDs (#custom-precision-scale-example, #dbtype-override-example) for the same sections. These are locale-specific anchor references, and the EN version already correctly points to its own corresponding sections. The changes are formatting/link-only and do not alter meaning or content. No translation is needed as the EN already has the correct references for its locale.",
+        "action": "no_translation"
+      },
+      "usage": {
+        "prompt_tokens": 6801,
+        "total_tokens": 6966,
+        "completion_tokens": 165,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      }
+    },
+    {
+      "key": "recipes/ydb-cli/benchmarks.md",
+      "old_action": "ru_to_en",
+      "raw_fields": [
+        "key",
+        "reason",
+        "translation_action"
+      ],
+      "new": {
+        "key": "recipes/ydb-cli/benchmarks.md",
+        "reason": "RU changes anchor references from #cleanup to #clean for kv, topic, transfer, and removes the link for stock. EN current blocks are empty, so we cannot verify whether EN already contains these changes. Insufficient counterpart evidence.",
+        "action": "need_context"
+      },
+      "usage": {
+        "prompt_tokens": 2906,
+        "total_tokens": 2986,
+        "completion_tokens": 80,
+        "prompt_tokens_details": {
+          "cached_tokens": 256
+        }
+      }
+    },
+    {
+      "key": "reference/configuration/cms_config.md",
+      "old_action": "en_to_ru",
+      "raw_fields": [
+        "key",
+        "reason",
+        "translation_action"
+      ],
+      "new": {
+        "key": "reference/configuration/cms_config.md",
+        "reason": "EN delta removes a link from the `disable_maintenance` row description; RU current text still contains the corresponding link. This is a formatting/link-only change that does not alter the meaning of the description. The RU text already conveys the same meaning with the link, so no translation is needed.",
+        "action": "no_translation"
+      },
+      "usage": {
+        "prompt_tokens": 2041,
+        "total_tokens": 2124,
+        "completion_tokens": 83,
+        "prompt_tokens_details": {
+          "cached_tokens": 256
+        }
+      }
+    },
+    {
+      "key": "reference/configuration/hive_config.md",
+      "old_action": "en_to_ru",
+      "raw_fields": [
+        "key",
+        "reason",
+        "translation_action"
+      ],
+      "new": {
+        "key": "reference/configuration/hive_config.md",
+        "reason": "The EN delta changes a link anchor from #counter to #resources in the description of `min_counter_scatter_to_balance`. The RU current text for the same parameter still uses #counter. The change is a link correction in EN that is not reflected in RU. Since the focused delta locale is EN and the change is missing from RU, this is an en_to_ru translation need. However, the RU text is not shown as changed, and the change is a link anchor correction. The RU counterpart currently has #counter, which is the old anchor. The EN change to #resources is a correction that should be propagated to RU. Therefore, translation_action is en_to_ru.",
+        "action": "en_to_ru"
+      },
+      "usage": {
+        "prompt_tokens": 3542,
+        "total_tokens": 3705,
+        "completion_tokens": 163,
+        "prompt_tokens_details": {
+          "cached_tokens": 256
+        }
+      }
+    },
+    {
+      "key": "reference/docker/configuration.md",
+      "old_action": "en_to_ru",
+      "raw_fields": [
+        "key",
+        "reason",
+        "translation_action"
+      ],
+      "new": {
+        "key": "reference/docker/configuration.md",
+        "reason": "The EN delta changes the anchor in the IC_PORT row from #interconnect to #actor-system-interconnect. The RU current text for the corresponding IC_PORT row uses 'Порт интерконнекта' without any link, so it does not contain the corrected anchor reference. The change is a link correction in EN that is not reflected in RU, requiring translation of the updated link reference to RU.",
+        "action": "en_to_ru"
+      },
+      "usage": {
+        "prompt_tokens": 6901,
+        "total_tokens": 7004,
+        "completion_tokens": 103,
+        "prompt_tokens_details": {
+          "cached_tokens": 512
+        }
+      }
+    },
+    {
+      "key": "reference/ydb-cli/commands/explain-plan.md",
+      "old_action": "en_to_ru",
+      "raw_fields": [
+        "key",
+        "reason",
+        "translation_action"
+      ],
+      "new": {
+        "key": "reference/ydb-cli/commands/explain-plan.md",
+        "reason": "The EN delta adds a new heading '### AST {#ast}' to the section about AST. The RU current text does not have this heading, but it contains the corresponding content about AST without a separate heading. The added heading is a structural change that is not present in RU, so it needs translation.",
+        "action": "en_to_ru"
+      },
+      "usage": {
+        "prompt_tokens": 1709,
+        "total_tokens": 1809,
+        "completion_tokens": 100,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      }
+    },
+    {
+      "key": "reference/ydb-cli/interactive-cli.md",
+      "old_action": "en_to_ru",
+      "raw_fields": [
+        "key",
+        "reason",
+        "translation_action"
+      ],
+      "new": {
+        "key": "reference/ydb-cli/interactive-cli.md",
+        "reason": "The EN delta changes an anchor link from #explain-plan to #query-execution-plans in the EXPLAIN command description. The RU counterpart text for the same command links to [ydb sql --explain](sql.md) and does not reference the changed anchor, so the change is not present in RU. The change is a meaningful link correction that should be reflected in RU.",
+        "action": "en_to_ru"
+      },
+      "usage": {
+        "prompt_tokens": 2022,
+        "total_tokens": 2136,
+        "completion_tokens": 114,
+        "prompt_tokens_details": {
+          "cached_tokens": 512
+        }
+      }
+    },
+    {
+      "key": "reference/ydb-cli/workload-topic.md",
+      "old_action": "ru_to_en",
+      "raw_fields": [
+        "key",
+        "reason",
+        "translation_action"
+      ],
+      "new": {
+        "key": "reference/ydb-cli/workload-topic.md",
+        "reason": "RU changed heading levels from ## to ### for write/read/full load sections, adding a new parent heading '## Запуск нагрузки {#run}'. EN already has the corresponding sections as ## headings without the parent '## Запуск нагрузки' heading. The RU change introduces a new structural heading that is absent in EN, and the section levels differ. This is a structural change that needs translation to EN.",
+        "action": "ru_to_en"
+      },
+      "usage": {
+        "prompt_tokens": 2519,
+        "total_tokens": 2639,
+        "completion_tokens": 120,
+        "prompt_tokens_details": {
+          "cached_tokens": 256
+        }
+      }
+    },
+    {
+      "key": "reference/ydb-ui/hive.md",
+      "old_action": "ru_to_en",
+      "raw_fields": [
+        "key",
+        "reason",
+        "translation_action"
+      ],
+      "new": {
+        "key": "reference/ydb-ui/hive.md",
+        "reason": "RU changes a link from ../configuration/index.md#security to ../configuration/security_config.md#security-access-levels. EN's current text does not contain this link or the new target, and EN's delta is only an anchor placement change unrelated to the RU link update. The RU change is a new link reference missing from EN, so translation is needed from RU to EN.",
+        "action": "ru_to_en"
+      },
+      "usage": {
+        "prompt_tokens": 2046,
+        "total_tokens": 2145,
+        "completion_tokens": 99,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      }
+    },
+    {
+      "key": "security/builtin-security.md",
+      "old_action": "en_to_ru",
+      "raw_fields": [
+        "key",
+        "reason",
+        "translation_action"
+      ],
+      "new": {
+        "key": "security/builtin-security.md",
+        "reason": "EN changes a link reference from domains_config.md#domains-config to security_config.md#built-in-security-configuration. RU already links to security_config.md (without the anchor) in its corresponding passage, so the corrected destination is already reflected in RU. The anchor spelling difference is acceptable as links may legitimately differ between locales.",
+        "action": "no_translation"
+      },
+      "usage": {
+        "prompt_tokens": 1565,
+        "total_tokens": 1653,
+        "completion_tokens": 88,
+        "prompt_tokens_details": {
+          "cached_tokens": 512
+        }
+      }
+    },
+    {
+      "key": "troubleshooting/examples/schemas/overloaded-shard-insufficient-cpu.md",
+      "old_action": "ru_to_en",
+      "raw_fields": [
+        "key",
+        "reason",
+        "translation_action"
+      ],
+      "new": {
+        "key": "troubleshooting/examples/schemas/overloaded-shard-insufficient-cpu.md",
+        "reason": "The RU delta changes a link from the glossary anchor to a configuration reference anchor. The EN file does not exist (new_page: true, exists: false), so there is no counterpart text to compare against. The change is a link correction in RU, but without the EN file content, we cannot determine if the EN version already contains the corresponding corrected link or if the EN file needs to be created with this change. The evidence is insufficient to establish the EN counterpart's equivalence or absence of the change.",
+        "action": "need_context"
+      },
+      "usage": {
+        "prompt_tokens": 1342,
+        "total_tokens": 1477,
+        "completion_tokens": 135,
+        "prompt_tokens_details": {
+          "cached_tokens": 256
+        }
+      }
+    },
+    {
+      "key": "yql/reference/syntax/batch-delete.md",
+      "old_action": "en_to_ru",
+      "raw_fields": [
+        "key",
+        "reason",
+        "translation_action"
+      ],
+      "new": {
+        "key": "yql/reference/syntax/batch-delete.md",
+        "reason": "EN changed the anchor from #partitioning to #partitioning_row_table. RU already uses #partitioning_row_table in its corresponding text. The change is already synchronized in RU, so no translation is needed.",
+        "action": "no_translation"
+      },
+      "usage": {
+        "prompt_tokens": 1740,
+        "total_tokens": 1818,
+        "completion_tokens": 78,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      }
+    }
+  ],
+  "whole_table": {
+    "key": "reference/ydb-cli/_includes/commands.md",
+    "old_action": "need_context",
+    "raw_fields": [
+      "key",
+      "reason",
+      "translation_action"
+    ],
+    "new": {
+      "key": "reference/ydb-cli/_includes/commands.md",
+      "reason": "Both RU and EN deltas make the same change: removing the markdown link from the 'workload stock clean' command, leaving it as plain text. The change is already synchronized in both locales, so no translation is needed.",
+      "action": "no_translation"
+    },
+    "usage": {
+      "prompt_tokens": 25302,
+      "total_tokens": 25375,
+      "completion_tokens": 73,
+      "prompt_tokens_details": {
+        "cached_tokens": 512
+      }
+    }
+  }
+}

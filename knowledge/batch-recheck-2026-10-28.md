@@ -317,3 +317,33 @@ need_context, не исправляется regex по свободному reas
 Сохранять промежуточные решения пар, чтобы повтор обработки проблемной пары
 не требовал новой классификации всех111. Итог no-op только при подтверждении
 всех пар; незавершённость показывать краткой сводкой счётчиков и проблемных путей.
+
+
+## Реализация согласованного упрощённого решения #53925
+
+User выбрал один classifier call, reason перед решением, без отдельного judge,
+и целые таблицы при достаточном окне. Реализованы shared wire budget callback,
+4096reserved output и262144effective endpoint window;64KiB удалён.
+Schema key/reason/translation_action обеспечивает порядок реального provider
+(он сортировал прежние поля action/key/reason вопреки insertion order).
+Parser принимает legacy action, не меняя смысл решения.
+
+Live replay всех19спорных пар:6no_translation,11translation directions,
+2need_context (нет EN у recipes/ydb-cli/benchmarks.md и
+troubleshooting/examples/schemas/overloaded-shard-insufficient-cpu.md).
+Все4прежних action/reason противоречия стали no_translation.
+Полная commands.md таблица: HTTP200,25302input+73output, no_translation.
+Наблюдения с причинами и usage: pr53925-model-replay-2026-10-29.json.
+Не утверждаем, что11направлений уже вручную подтверждены или что весь PR no-op.
+
+Предыдущая правка коротких комментариев также подтверждена: run40817949709
+success, comment6487965185 (https://github.com/ydb-platform/ydb/pull/56914#issuecomment-6487965185)
+содержит только «Перевод не требуется.» и скрытый marker.
+
+Финальные проверки:46classifier tests passed, полный suite272failed2361passed
+7deselected. Множество272failed идентично baseline. Независимое review без blockers;
+Ruff изменённых classifier/client/unit-test и mypy classifier clean.
+Полный CI53925 не запускался: среди решений есть translation directions,
+а GitHubBackend.push создаёт refs в upstream ydb-platform/ydb, что запрещено
+действующим ограничением среды (новые ветки только sintjuri/ydb). Требуется
+поддержка публикации в fork перед безопасным end-to-end запуском.

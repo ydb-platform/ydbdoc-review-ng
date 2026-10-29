@@ -242,7 +242,7 @@ class CaptureServices(RuntimeServices):
                     text = "[[YDBDOC_PROTECTED_9999]]"
                 if self.stop == "translation_assembly" and self.translations >= 2:
                     text = "[[YDBDOC_PROTECTED_9999]]"
-        elif "translation_required" in (schema := schema_wrapper["schema"])["properties"] or "action" in schema["properties"]:
+        elif "translation_required" in (schema := schema_wrapper["schema"])["properties"] or "translation_action" in schema["properties"]:
             role = "direction"
             values = classification_response(
                 prompt, direction=None if self.stop == "direction" else "ru_to_en")

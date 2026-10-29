@@ -554,44 +554,50 @@ class NativeYandexClient(_BaseYandexClient):
         return _parse_native(document, role)
 
 
+def openai_payload(
+    request: ModelRequest, model_uri: str, max_tokens: int
+) -> dict[str, object]:
+    if request.messages is not None:
+        messages = mutable_json(request.messages)
+    else:
+        messages = []
+        if request.developer_prompt is not None:
+            messages.append({"role": "developer", "content": request.developer_prompt})
+        messages.append({"role": "user", "content": request.prompt})
+    payload: dict[str, object] = {
+        "model": model_uri,
+        "stream": False,
+        "temperature": 0,
+        "max_tokens": max_tokens,
+        "reasoning_effort": {
+            ModelRole.CRITIC: "medium",
+            ModelRole.ARBITER: "none",
+        }.get(request.role, "none"),
+        "messages": messages,
+    }
+    if request.tools is not None:
+        payload["tools"] = mutable_json(request.tools)
+        if request.tool_choice is not None:
+            payload["tool_choice"] = request.tool_choice
+    if request.schema is not None:
+        payload["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "model_response",
+                "strict": True,
+                "schema": mutable_json(request.schema),
+            },
+        }
+    return payload
+
+
 class YandexOpenAIClient(_BaseYandexClient):
     endpoint = OPENAI_ENDPOINT
 
     def _payload(
         self, request: ModelRequest, model_uri: str, max_tokens: int
     ) -> dict[str, object]:
-        if request.messages is not None:
-            messages = mutable_json(request.messages)
-        else:
-            messages = []
-            if request.developer_prompt is not None:
-                messages.append({"role": "developer", "content": request.developer_prompt})
-            messages.append({"role": "user", "content": request.prompt})
-        payload: dict[str, object] = {
-            "model": model_uri,
-            "stream": False,
-            "temperature": 0,
-            "max_tokens": max_tokens,
-            "reasoning_effort": {
-                ModelRole.CRITIC: "medium",
-                ModelRole.ARBITER: "none",
-            }.get(request.role, "none"),
-            "messages": messages,
-        }
-        if request.tools is not None:
-            payload["tools"] = mutable_json(request.tools)
-            if request.tool_choice is not None:
-                payload["tool_choice"] = request.tool_choice
-        if request.schema is not None:
-            payload["response_format"] = {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "model_response",
-                    "strict": True,
-                    "schema": mutable_json(request.schema),
-                },
-            }
-        return payload
+        return openai_payload(request, model_uri, max_tokens)
 
     def _headers(self) -> dict[str, str]:
         return {

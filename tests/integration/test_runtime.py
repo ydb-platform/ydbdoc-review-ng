@@ -1503,7 +1503,7 @@ class _T017N04Services(RuntimeServices):
             )
         schema = schema_wrapper["schema"]
         properties = tuple(schema["properties"])
-        if ("translation_required" in properties or "action" in properties):
+        if ("translation_required" in properties or "translation_action" in properties):
             return super().model(request)
         self.events.append(("MODEL", properties))
         if properties == ("page.md",):

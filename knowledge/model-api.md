@@ -31,3 +31,9 @@ Publication gates: один retry translator, затем null.
 
 Attempts аудируются с cost; unknown = `NULL`. Секреты только из env/GitHub
 secrets.
+
+
+Classifier preflight (29 октября): общий лимит1M не используется как доказательство
+фактического окна endpoint. В парном классификаторе полный wire input upper-bound
+плюс4096output сравнивается с наблюдавшимся окном262144. Произвольный64KiB
+порог удалён. Таблица #53925 принята целиком: реальный usage25302input+73output.
