@@ -145,6 +145,7 @@ from ydbdoc_review_ng.translation.document import (
     build_document_prompt,
     verify_document_candidate_with_links,
 )
+from ydbdoc_review_ng.translation.formatting import normalize_heading_spacing
 from ydbdoc_review_ng.translation.gates import check_publication_gates
 from ydbdoc_review_ng.translation.language import validate_translated_prose
 from ydbdoc_review_ng.translation.surgical import (
@@ -2763,6 +2764,8 @@ class RuntimeContent:
         else:
             # Thin whole-file path: no placeholders, no soft-publish of gate failures.
             candidate = thin_translate_document()
+        if candidate != target_reference_bytes:
+            candidate = normalize_heading_spacing(candidate)
         try:
             candidate_plan = build_markdown_plan(
                 document.plan.source_snapshot, entry.pair.target_path, candidate

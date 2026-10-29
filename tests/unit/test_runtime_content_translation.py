@@ -1700,5 +1700,18 @@ def test_thin_translation_preserves_technical_examples_without_style_rewrites():
             '~~~text\nalpha\nbeta\nType `log`_`config` literally.\n~~~\n')
     models = ScriptedModels([body, body])
     _, result = content_with(models)._translate_document(document_for(body.encode(), target=None))
-    assert result.translated_markdown == body
+    assert result.translated_markdown == body.replace(
+        "---\n# sentence case\n", "---\n\n# sentence case\n\n"
+    )
+    assert len(models.calls) == 1
+
+
+def test_thin_translation_separates_adjacent_headings_without_model_retry():
+    source = '### Broken locks {#broken-locks}\n\n### Whole-shard locks {#whole-shard-locks}\n'
+    draft = '### Сломанные блокировки {#broken-locks}\n### Блокировки всего шарда {#whole-shard-locks}\n'
+    models = ScriptedModels([draft])
+    _, result = content_with(models)._translate_document(
+        document_for(source.encode(), source_locale=Locale.EN, target=None)
+    )
+    assert result.translated_markdown == draft.replace('\n### ', '\n\n### ')
     assert len(models.calls) == 1

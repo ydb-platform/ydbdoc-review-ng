@@ -30,7 +30,11 @@ Placeholders нет.
 считается зависимостью. Регистр, кириллица, пустые строки и fence без языка
 не блокируют файл. Глобальных split-backtick/soft-wrap исправлений нет:
 ответ сохраняется без изменений кода, YAML и переносов Markdown.
-При сборке отдельных chunks/hunks сохраняется граница блоков.
+При сборке отдельных chunks/hunks сохраняется граница блоков. После сборки
+изменённого документа добавляются недостающие пустые строки вокруг top-level
+ATX-заголовков для MD022, без model retry и без hard gate. CommonMark parser
+исключает code/HTML/containers; YAML front matter маскируется. Noop сохраняет
+прежние bytes. См. [аудит и исправление MD022](publication-gate-audit-2026-10-29.md).
 Dependency/new page TOC: structural `apply_toc_delta` от source TOC (секции и
 соседи), не flat basename-append; затем TOC string translate.
 Один retry при техническом провале; повторный провал → файл null.

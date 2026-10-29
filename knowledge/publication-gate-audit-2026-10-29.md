@@ -89,3 +89,23 @@ benchmarks.md классифицирован no_translation (08:40:32, document_
 GREEN arbiter не означает merge-ready. Следующий вариант исправления:
 узкая нормализация границ заголовков вне кода, без возвращения отбрасывания
 всего файла и без глобальной склейки строк. Пока не реализовано.
+
+### Исправление MD022
+
+Пользователь одобрил узкую автоматическую нормализацию и перезапуск.
+`translation/formatting.py::normalize_heading_spacing` добавляет только
+недостающие пустые строки вокруг top-level ATX-заголовков. CommonMark
+определяет границы блоков, fenced/indented code, HTML и контейнеры не
+переписываются. YAML front matter предварительно маскируется. Регистр,
+anchors, содержимое строк, LF/CRLF/CR и отсутствие финального newline
+сохраняются. Runtime вызывает нормализацию после полной сборки изменённого
+candidate, до structural diagnostics/semantic review. Chunk offsets не
+меняются; noop не переписывается. Hard style gate и model retry не возвращены.
+
+Проверка: runtime regression с двумя русскими заголовками сначала RED, после
+исправления GREEN с одним model call. 20 focused tests passed (включая indented YAML scalar delimiter), Ruff/mypy
+нового модуля чистые. Full: 2409 passed, 269 прежних failed, 7 deselected,
+новых failures нет. Реальный файл PR57422 head b60c02b2 проверен markdownlint
+0.32.1 из локального Diplodoc: MD022 до исправления 2 errors, после 0;
+единственное изменение файла: пустая строка между broken-locks/whole-shard-locks.
+Это локальная проверка конкретного lint rule, не полная сборка документации.
