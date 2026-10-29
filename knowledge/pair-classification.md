@@ -242,3 +242,5 @@ upstream head lookup, поэтому PR57400 больше не нужен. Во�
 и проверяет реальные Git write paths и PR head на fake transport.
 
 Проверка upstream restore:56focused passed, полный suite2380passed272baselinefailed7deselected. Review без blockers. PR57400 закрыт без слияния.
+
+Поставка upstream restore:009a090 в main/v1.0.1. CI53925:https://github.com/ydb-platform/ydb/actions/runs/40835498090, при записи:in_progress.
