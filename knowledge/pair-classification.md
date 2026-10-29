@@ -260,3 +260,5 @@ robots/translation/pr-N. Verify/continue/policy workflows проверены, с
 префикса в них нет.75focused passed,full2380passed272baselinefailed7deselected,
 review без blockers. До принятия consumer PR автоматическое ok-to-test не найдёт
 новую ветку; публикация runtime от этого не зависит.
+
+Поставка robots namespace:ad56276 в main/v1.0.1; перезапуск53925:https://github.com/ydb-platform/ydb/actions/runs/40838344716, при записи:in_progress.
