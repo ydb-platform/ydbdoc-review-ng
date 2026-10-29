@@ -73,3 +73,19 @@ include оставался текстом для существующего из
 На PR53925 заново поставлена метка doc_translate:
 https://github.com/ydb-platform/ydb/actions/runs/40842548202 .
 При записи этой заметки run in_progress; успешный итог ещё не подтверждён.
+
+### Результат CI40842548202
+
+Запуск завершился success 2026-10-29 08:46:28 UTC, action SHA f67e360.
+Создан PR57422, head b60c02b2e22db0389a8555fc30a4c2e7fa19758b, шесть файлов.
+Arbiter GREEN: https://github.com/ydb-platform/ydb/pull/57422#issuecomment-6492131097 .
+benchmarks.md классифицирован no_translation (08:40:32, document_index55),
+поэтому этот run не является live witness принятия перевода benchmarks новым gate.
+
+Следующий PR-check40844568834 упал при сборке документации. MD022 требует
+пустую строку между соседними заголовками в RU contributor/datashard-locks-and-change-visibility.md,
+строки137–138: broken-locks / whole-shard-locks. Удаление нормализации spacing
+не ломает translator job, но допускает результат, отвергаемый downstream build.
+GREEN arbiter не означает merge-ready. Следующий вариант исправления:
+узкая нормализация границ заголовков вне кода, без возвращения отбрасывания
+всего файла и без глобальной склейки строк. Пока не реализовано.
