@@ -181,3 +181,5 @@ benchmarks и overloaded-shard получили no_translation, optimization/ind
 получил en_to_ru. Это снимает прежние need_context, но не доказывает
 корректность всех направлений для полного PR. Live ответы сохранены в
 [pr53925-full-context-replay.json](pr53925-full-context-replay.json).
+
+Поставка:0976184 в main/v1.0.1. Полный suite:2376passed,272failed,7deselected; набор failed совпадает с baseline. Независимое review без blockers. Повторный CI53925:https://github.com/ydb-platform/ydb/actions/runs/40828297343, статус при записи:in_progress. Consumer token/head исправляется отдельным PR57400, пока он не принят, публикация в fork ограничена токеном workflow.
