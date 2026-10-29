@@ -109,3 +109,8 @@ candidate, до structural diagnostics/semantic review. Chunk offsets не
 0.32.1 из локального Diplodoc: MD022 до исправления 2 errors, после 0;
 единственное изменение файла: пустая строка между broken-locks/whole-shard-locks.
 Это локальная проверка конкретного lint rule, не полная сборка документации.
+
+Независимый review подтвердил исправление, 20 tests passed, blockers нет.
+Код f1cbbb8 опубликован main/v1.0.1. PR53925 перезапущен меткой doc_translate:
+https://github.com/ydb-platform/ydb/actions/runs/40847201921 .
+При записи этой заметки run queued, результат удалённого CI ещё не подтверждён.
