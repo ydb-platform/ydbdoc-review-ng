@@ -420,7 +420,7 @@ def test_direction_retry_alone_hands_off_new_job_without_extending_expiry():
     with pytest.raises(application.WorkflowError):
         services.resume()
     following = services.checkpoint()
-    assert services.roles == ["direction"] * len(services.names)
+    assert services.roles == ["direction"] * (2 * len(services.names))
     assert json.loads(services.prompts[0][1].split("\nPair evidence: ", 1)[1])["operator_context"] == CONTEXT
     assert following.state.stage is ContinuationStage.DIRECTION
     assert following.continuation_id != saved.continuation_id

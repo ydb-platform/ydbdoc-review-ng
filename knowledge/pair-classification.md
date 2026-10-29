@@ -18,7 +18,11 @@ need_context без пустого model retry. Разделы не разбив
 неопределённым и выполнение требует пояснения пользователя.
 
 Решения: no_translation, ru_to_en, en_to_ru, need_context, conflict.
-Последние два после исчерпания расширения создают checkpoint с причиной пары.
+По просьбе пользователя оставшиеся semantic need_context/conflict после
+агрегации получают RU → EN, если RU существует и в PR есть русская дельта.
+Правило не меняет однозначный выбор или no_translation. В reason отмечается
+fallback и сохраняется исходное объяснение. Технические сбои и отсутствие
+русского источника/дельты остаются checkpoint, не фиктивным переводом.
 Невалидный ответ не считается разрешением пропустить перевод.
 
 ## Выполнение и продолжение
@@ -183,3 +187,32 @@ benchmarks и overloaded-shard получили no_translation, optimization/ind
 [pr53925-full-context-replay.json](pr53925-full-context-replay.json).
 
 Поставка:0976184 в main/v1.0.1. Полный suite:2376passed,272failed,7deselected; набор failed совпадает с baseline. Независимое review без blockers. Повторный CI53925:https://github.com/ydb-platform/ydb/actions/runs/40828297343, статус при записи:in_progress. Consumer token/head исправляется отдельным PR57400, пока он не принят, публикация в fork ограничена токеном workflow.
+
+### Результат CI40828297343
+
+Завершился failure 2026-10-29 06:31:13UTC, audit
+0c5774c9-b961-4a6a-a897-675bf4a82fab:error=continuable_direction.
+111пар:106no_translation,2ru_to_en,2en_to_ru,1conflict,0need_context.
+Публикация не запускалась. Единственный blocker reference/ydb-ui/hive.md:
+RU исправляет ссылку configuration/index.md#security на
+configuration/security_config.md#security-access-levels; EN переносит
+`{#settings}` с середины пункта Settings в конец того же пункта.
+Модель на первом affected_blocks запросе объявила необходимость обоих
+направлений. Такой conflict не запускает expanded retry. Перенос EN-якоря
+назван отдельным неперенесённым изменением, хотя переводимого текста в нём
+нет. Это кандидат на ложный semantic conflict, требует разбора классификации
+изменений разметки; не проблема размера контекста или fork permissions.
+Решения optimization/index и benchmarks в CI ru_to_en отличаются от live
+replay; не считать направления подтверждёнными автоматически.
+
+### RU → EN при неопределённом направлении
+
+По запросу пользователя classifier после агрегации выбирает ru_to_en для
+semantic conflict/need_context, если RU существует и есть русская дельта.
+Оригинальная причина остаётся в audit вместе с отметкой fallback. Это не
+новый model call. Технические failures остаются checkpoint. Старые сохранённые
+решения не переписываются автоматически; для нового правила нужен свежий запуск.
+57 unit tests passed; полный suite2380passed272baselinefailed7deselected,
+новых failures нет. Ruff/mypy clean для classifier. Independent review без
+blockers. Checkpoint fixtures теперь используют invalid model response, а не
+semantic ambiguity, которая больше не должна останавливать перевод.

@@ -43,7 +43,8 @@ def fixture(ru_old, ru_new, en_old, en_new, key="page.md"):
         SnapshotLocaleFile(roots, Locale.RU, pair_key, RepoPath(f"ru/{key}"), AFTER, ru_new),
         SnapshotLocaleFile(roots, Locale.EN, pair_key, RepoPath(f"en/{key}"), AFTER, en_new),
         (),
-        PairFileState.BOTH_PRESENT if en_new is not None else PairFileState.RU_ONLY,
+        (PairFileState.EN_ONLY if ru_new is None else PairFileState.BOTH_PRESENT)
+        if en_new is not None else PairFileState.RU_ONLY,
     )
     return tuple(files), pair
 
@@ -100,7 +101,7 @@ def test_bilingual_changes_are_classified_and_can_already_be_synchronized():
     assert "already synchronized" in requests[0].prompt
 
 
-def test_need_context_retries_once_then_preserves_checkpoint():
+def test_need_context_retries_once_then_defaults_to_russian():
     files, pair = fixture(b"# H\n\nOld\n\nOther", b"# H\n\nNew\n\nOther", b"EN", b"EN")
     requests = []
 
@@ -109,7 +110,7 @@ def test_need_context_retries_once_then_preserves_checkpoint():
         return response("need_context")
 
     result = pc.classify_pairs(files, (pair,), BEFORE, AFTER, "model", invoke)
-    assert result[0].action == "need_context"
+    assert result[0].action == "ru_to_en"
     assert len(requests) == 2
     assert "expanded_articles" in requests[1].prompt
 
@@ -319,8 +320,8 @@ def test_batches_cover_every_delta_once_including_insert_and_delete(monkeypatch)
     [
         (["no_translation"], "no_translation"),
         (["en_to_ru", "no_translation"], "en_to_ru"),
-        (["en_to_ru", "ru_to_en"], "conflict"),
-        (["no_translation", "conflict"], "conflict"),
+        (["en_to_ru", "ru_to_en"], "ru_to_en"),
+        (["no_translation", "conflict"], "ru_to_en"),
         (["need_context"], "need_context"),
     ],
 )
@@ -572,7 +573,7 @@ def test_no_matching_section_does_not_send_empty_context_retry():
 
     result = pc.classify_pairs(files, (pair,), BEFORE, AFTER, 'model', invoke)
     assert len(requests) == 1
-    assert result[0].action == 'need_context'
+    assert result[0].action == 'ru_to_en'
     assert 'section' in result[0].reason.lower()
 
 
@@ -613,3 +614,26 @@ def test_matching_parent_section_keeps_nested_subsections():
     req = pc.pair_request(files, pair, BEFORE, AFTER, 'model', expanded=True)
     evidence = json.loads(req.prompt.split('Pair evidence: ', 1)[1])
     assert any(b['text'] == 'Important child condition.' for b in evidence['en']['current_blocks'])
+
+
+@pytest.mark.parametrize('action', ['conflict', 'need_context'])
+def test_uncertain_semantic_direction_defaults_to_russian_source(action):
+    files, pair = fixture(b'RU old', b'RU new', b'EN old', b'EN new')
+    result = pc.classify_pairs(files, (pair,), BEFORE, AFTER, 'model',
+                               lambda _: response(action))
+    assert result[0].action == 'ru_to_en'
+    assert 'fallback' in result[0].reason
+
+
+def test_uncertainty_without_russian_source_cannot_default_to_translation():
+    files, pair = fixture(None, None, b'EN old', b'EN new')
+    result = pc.classify_pairs(files, (pair,), BEFORE, AFTER, 'model',
+                               lambda _: response('conflict'))
+    assert result[0].action == 'conflict'
+
+
+def test_provider_failure_does_not_become_russian_direction():
+    files, pair = fixture(b'Old', b'New', b'EN', b'EN')
+    result = pc.classify_pairs(files, (pair,), BEFORE, AFTER, 'model',
+                               lambda _: ModelCallResult(None, 'Unavailable', ()))
+    assert result[0].action == 'conflict'

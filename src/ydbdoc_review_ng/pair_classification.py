@@ -522,10 +522,12 @@ def classify_pairs(
                     pass
         pending: list[frozenset[tuple[str, int]] | None] = [None]
         parts: list[PairDecision] = []
+        technical_failures: list[bool] = []
         while pending:
             focus = pending.pop(0)
             expanded = False
             for attempt in (1, 2):
+                technical_failure = False
                 try:
                     request = pair_request(
                         files,
@@ -542,6 +544,7 @@ def classify_pairs(
                     decision = PairDecision(key, "need_context", str(error))
                     break
                 except ContextBoundExceeded:
+                    technical_failure = True
                     # Interleave locales so batching does not separate all RU
                     # evidence from all EN evidence. Ordinals are packing hints,
                     # never a claim that two changes are translations.
@@ -560,6 +563,7 @@ def classify_pairs(
                         )
                     break
                 except (UnicodeDecodeError, ValueError):
+                    technical_failure = True
                     decision = PairDecision(key, "conflict", "Pair evidence is not valid text")
                     break
                 write_trace(
@@ -583,6 +587,7 @@ def classify_pairs(
                     ):
                         raise ValueError("Direction has no source delta in this batch")
                 except (ValueError, TypeError):
+                    technical_failure = True
                     decision = PairDecision(
                         key,
                         "conflict",
@@ -594,6 +599,7 @@ def classify_pairs(
                 expanded = True
             if decision is not None:
                 parts.append(decision)
+                technical_failures.append(technical_failure)
         actions = {part.action for part in parts}
         if "conflict" in actions or {"ru_to_en", "en_to_ru"} <= actions:
             action = "conflict"
@@ -601,7 +607,14 @@ def classify_pairs(
             action = "need_context"
         else:
             action = next(iter(actions - {"no_translation"}), "no_translation")
-        decision = PairDecision(key, action, "; ".join(dict.fromkeys(p.reason for p in parts)))
+        reason = "; ".join(dict.fromkeys(p.reason for p in parts))
+        # The configured tie-breaker applies to semantic uncertainty, not failed
+        # model calls or invalid evidence. Delta translation needs a RU change.
+        if (action in {"conflict", "need_context"} and not any(technical_failures)
+                and pair.ru.exists and any(locale == "ru" for locale, _ in units)):
+            action = "ru_to_en"
+            reason = "RU to EN fallback for uncertain direction. " + reason
+        decision = PairDecision(key, action, reason)
         write_trace(
             "direction",
             "pair_decision",

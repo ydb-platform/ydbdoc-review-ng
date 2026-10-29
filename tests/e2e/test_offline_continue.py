@@ -33,13 +33,13 @@ def test_direction_continuation_retries_only_direction_and_preserves_expiry():
     old = services.checkpoint()
     assert invoke(services) == 1
     following = services.checkpoint()
-    assert services.roles == ["direction"]
+    assert services.roles == ["direction", "direction"]
     assert following.expires_at == old.expires_at
     assert json.loads(services.prompts[0][1].split("\nPair evidence: ", 1)[1])["operator_context"] == CONTEXT
     services.stop = None
     services.direction_values = {"a.md": "complete_pair"}
     assert invoke(services) == 0
-    assert services.roles == ["direction", "direction"]
+    assert services.roles == ["direction", "direction", "direction"]
     assert services.rows[following.continuation_id]["status"] == "closed"
     assert services.commits == 0
 

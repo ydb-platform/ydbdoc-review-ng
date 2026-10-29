@@ -244,8 +244,10 @@ class CaptureServices(RuntimeServices):
                     text = "[[YDBDOC_PROTECTED_9999]]"
         elif "translation_required" in (schema := schema_wrapper["schema"])["properties"] or "translation_action" in schema["properties"]:
             role = "direction"
-            values = classification_response(
-                prompt, direction=None if self.stop == "direction" else "ru_to_en")
+            # Semantic ambiguity now defaults to RU -> EN. An invalid response
+            # still creates the recoverable direction checkpoint tested here.
+            values = {} if self.stop == "direction" else classification_response(
+                prompt, direction="ru_to_en")
         elif set(schema["properties"]) == {"replacements"}:
             role = "translate"
             self.translations += 1
@@ -433,7 +435,7 @@ def test_direction_stop_is_strict_and_warns_before_saving():
     assert len(checkpoint.source_inventory.files) == 4
     assert checkpoint.source_sha == GitSha(services.source)
     assert checkpoint.base_sha == GitSha(services.base)
-    assert services.saved_after_comment and services.roles == ["direction"] * len(services.names)
+    assert services.saved_after_comment and services.roles == ["direction"] * (2 * len(services.names))
     assert services.audit[-1]["status"] == "failed"
 
 
@@ -757,7 +759,7 @@ def test_lost_terminal_ack_and_failed_close_cannot_be_resumed():
     services = LostTerminalAck(stop="direction")
     with pytest.raises((WorkflowError, PersistenceError)):
         services.translate()
-    assert services.roles == ["direction"] * len(services.names)
+    assert services.roles == ["direction"] * (2 * len(services.names))
     assert services.rows  # The real checkpoint write reached storage.
     with pytest.raises(PersistenceError):
         services.checkpoint()
