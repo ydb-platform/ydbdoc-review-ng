@@ -114,3 +114,18 @@ candidate, до structural diagnostics/semantic review. Chunk offsets не
 Код f1cbbb8 опубликован main/v1.0.1. PR53925 перезапущен меткой doc_translate:
 https://github.com/ydb-platform/ydb/actions/runs/40847201921 .
 При записи этой заметки run queued, результат удалённого CI ещё не подтверждён.
+
+### Итог перезапуска CI40847201921
+
+Run success, action SHA f1cbbb859652dec3d0661657c164ab82c3b24d0a.
+Создан PR57427, head d2596caf73b77960c6f61ee6c5aca1c10fc4435d, четыре файла.
+Arbiter GREEN: https://github.com/ydb-platform/ydb/pull/57427#issuecomment-6492876497 .
+Downstream PR-check40849085118 success, build/tests/checks_integrated SUCCESS.
+Один тест первой попытки упал; автоматический retry завершился успешно,
+31/31 retried tests passed. Build successful 09:32:22 UTC.
+
+Ограничение свидетельства: в этом запуске benchmarks.md и
+contributor/datashard-locks-and-change-visibility.md получили no_translation
+(document_index55 и17). Поэтому проход сборки подтверждает весь текущий PR,
+но не повторный перевод прежнего проблемного файла. Исправление MD022 на
+исходном неудачном ответе подтверждено локальным regression и markdownlint.
