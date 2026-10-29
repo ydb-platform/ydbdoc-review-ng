@@ -25,15 +25,16 @@ Python дописывает в конец EN. Delete-only, если удалён
 EN → **noop** (оставить EN, не whole-file). Иначе **thin whole-file**.
 Placeholders нет.
 После ответа: снять только обёртку ` ```markdown ` вокруг всего файла, не
-открывающий fence документа; normalize split-backtick, затем publication gates
-(`source_locale_echo`, `split_backtick_identifiers`, `missing_include_target`,
-`heading_blank_lines`, `unlabeled_fence_opener`, `en_heading_title_case`).
-Insert-only: Python добавляет пустую строку перед ATX-заголовком на стыке с
-существующим EN, если модель её съела.
-Thin/hunk output: Python склеивает soft-wrapped prose в один абзац.
+открывающий fence документа; затем технические publication gates
+(`utf8_invalid`, `missing_include_target`). Include внутри примеров кода не
+считается зависимостью. Регистр, кириллица, пустые строки и fence без языка
+не блокируют файл. Глобальных split-backtick/soft-wrap исправлений нет:
+ответ сохраняется без изменений кода, YAML и переносов Markdown.
+При сборке отдельных chunks/hunks сохраняется граница блоков.
 Dependency/new page TOC: structural `apply_toc_delta` от source TOC (секции и
 соседи), не flat basename-append; затем TOC string translate.
-Один retry; провал → файл null, не soft-publish полу-EN.
+Один retry при техническом провале; повторный провал → файл null.
+См. [аудит ограничений](publication-gate-audit-2026-10-29.md).
 
 ## TOC
 

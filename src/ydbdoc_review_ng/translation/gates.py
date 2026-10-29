@@ -1,7 +1,7 @@
-"""Hard publication gates after thin whole-file translation.
+"""Technical publication checks, without style or script-based rejection.
 
-Fail closed: a file that fails these gates is not reader-facing product and must
-not be soft-published for critic to “figure out later”.
+Heading case, whitespace, fence language and natural-language quality are not
+reasons to discard a translation. Semantic review evaluates translation quality.
 """
 
 from __future__ import annotations
@@ -11,125 +11,36 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 
-from ydbdoc_review_ng.translation.split_backtick import count_split_backtick_identifiers
+from markdown_it import MarkdownIt
 
-# Continuous source-locale letters (RU) in an EN target.
-_CYRILLIC_RUN = re.compile(r"[А-Яа-яЁё]{3,}")
 _INCLUDE = re.compile(
     r"\{%\s*include\s+\[[^\]]*\]\(([^)]+)\)\s*%\}",
     re.IGNORECASE,
 )
-_ATX_HEADING = re.compile(r"^(#{1,6})(?:\s+)(.*)$")
 _ATX_HEADING_PREFIX = re.compile(r"^#{1,6}(?:\s|$)")
-_HEADING_ANCHOR = re.compile(r"\s*\{#[^}\s]+\}\s*$")
-# Chicago: lowercase short function words unless first/last. Longer prepositions
-# such as "Without" stay capitalized.
-_TITLE_CASE_MINOR = frozenset(
-    {
-        "a",
-        "an",
-        "the",
-        "and",
-        "or",
-        "but",
-        "for",
-        "nor",
-        "as",
-        "at",
-        "by",
-        "in",
-        "of",
-        "on",
-        "to",
-        "up",
-        "via",
-        "per",
-        "than",
-        "vs",
-    }
-)
-
-
 @dataclass(frozen=True, slots=True)
 class PublicationGateFailure:
     code: str
     detail: str
 
 
-def _heading_visible_text(heading_line: str) -> str:
-    match = _ATX_HEADING.match(heading_line.strip())
-    if match is None:
-        return ""
-    return _HEADING_ANCHOR.sub("", match.group(2)).strip()
-
-
-def _word_needs_title_case(word: str, *, first: bool, last: bool) -> bool:
-    """True when a visible heading word violates the Title Case subset."""
-    if word.startswith(("`", "{{", "{%", "[", "(")) or word.endswith(("`", "}}", "%}")):
-        return False
-    core = re.sub(r"^[^A-Za-z]+|[^A-Za-z]+$", "", word)
-    if not core or not core[0].isalpha():
-        return False
-    if core.isupper() and len(core) > 1:
-        return False
-    if any(character.isupper() for character in core[1:]):
-        return core[0].islower()
-    lowered = core.lower()
-    if not first and not last and lowered in _TITLE_CASE_MINOR:
-        return False
-    return core[0].islower()
-
-
-def en_heading_title_case_problems(
-    text: str, /, *, previous: str | None = None
-) -> tuple[str, ...]:
-    """Return EN ATX headings that violate Title Case (Chicago subset).
-
-    When ``previous`` is set, unchanged heading lines are ignored so surgical
-    unique-replacement / noop publishes do not rewrite historical sentence case.
-    """
-    previous_headings = set()
-    if previous is not None:
-        prev_fence = False
-        for line in previous.splitlines():
-            stripped = line.lstrip()
-            if stripped.startswith("```"):
-                prev_fence = not prev_fence
-                continue
-            if not prev_fence and _ATX_HEADING.match(line):
-                previous_headings.add(line)
-    problems: list[str] = []
-    in_fence = False
-    for line in text.splitlines():
-        stripped = line.lstrip()
-        if stripped.startswith("```"):
-            in_fence = not in_fence
-            continue
-        if in_fence or not _ATX_HEADING.match(line):
-            continue
-        if line in previous_headings:
-            continue
-        visible = _heading_visible_text(line)
-        if not visible:
-            continue
-        words = visible.split()
-        if any(
-            _word_needs_title_case(word, first=index == 0, last=index == len(words) - 1)
-            for index, word in enumerate(words)
-        ):
-            problems.append(line.strip()[:80])
-    return tuple(problems)
-
-
-def leftover_source_locale_runs(text: str, /, *, source_locale: str) -> tuple[str, ...]:
-    """Return leftover source-script runs that must not ship in the target."""
-    if source_locale != "ru":
-        return ()
-    return tuple(sorted(set(_CYRILLIC_RUN.findall(text))))
-
-
 def include_targets(text: str, /) -> tuple[str, ...]:
-    return tuple(_INCLUDE.findall(text))
+    # Parse Markdown containers instead of guessing indentation/fence boundaries.
+    # Leave link syntax as text so the include directive remains intact. Inline
+    # code and escapes still use CommonMark rules, scoped to each paragraph.
+    parser = MarkdownIt("commonmark", {"html": False}).disable(
+        ["link", "image", "autolink", "emphasis", "entity"]
+    )
+    targets: list[str] = []
+    for token in parser.parse(text):
+        if token.type != "inline":
+            continue
+        prose = "".join(
+            child.content if child.type == "text" else "\n"
+            for child in token.children or ()
+        )
+        targets.extend(_INCLUDE.findall(prose))
+    return tuple(targets)
 
 
 def resolved_include_path(target_path: str, destination: str) -> str:
@@ -173,24 +84,6 @@ def missing_relative_includes(
             continue
         missing.append(destination)
     return tuple(missing)
-
-
-def _heading_blank_line_problems(text: str) -> tuple[str, ...]:
-    lines = text.splitlines()
-    problems: list[str] = []
-    in_fence = False
-    for index, line in enumerate(lines):
-        stripped = line.lstrip()
-        if stripped.startswith("```"):
-            in_fence = not in_fence
-            continue
-        if in_fence or not _ATX_HEADING_PREFIX.match(line):
-            continue
-        missing_above = index > 0 and lines[index - 1] != ""
-        missing_below = index + 1 < len(lines) and lines[index + 1] != ""
-        if missing_above or missing_below:
-            problems.append(line.strip()[:80])
-    return tuple(problems)
 
 
 def _is_prose_line(line: str) -> bool:
@@ -245,23 +138,6 @@ def join_soft_wrapped_prose(draft: bytes, /) -> bytes:
     return body.encode("utf-8")
 
 
-def _unlabeled_fence_openers(text: str) -> int:
-    in_fence = False
-    unlabeled = 0
-    for line in text.splitlines():
-        stripped = line.lstrip()
-        if not stripped.startswith("```"):
-            continue
-        if in_fence:
-            in_fence = False
-            continue
-        info = stripped[3:].strip()
-        if not info:
-            unlabeled += 1
-        in_fence = True
-    return unlabeled
-
-
 def check_publication_gates(
     target: bytes,
     /,
@@ -281,23 +157,6 @@ def check_publication_gates(
         return (PublicationGateFailure("utf8_invalid", "target is not valid UTF-8"),)
 
     failures: list[PublicationGateFailure] = []
-    leftover = leftover_source_locale_runs(text, source_locale=source_locale)
-    if leftover:
-        sample = ", ".join(leftover[:5])
-        failures.append(
-            PublicationGateFailure(
-                "source_locale_echo",
-                f"target still contains source-locale prose ({len(leftover)} runs): {sample}",
-            )
-        )
-    mangled = count_split_backtick_identifiers(target)
-    if mangled:
-        failures.append(
-            PublicationGateFailure(
-                "split_backtick_identifiers",
-                f"target still contains {mangled} split-backtick identifier runs",
-            )
-        )
     if available_paths is not None:
         missing = missing_relative_includes(
             text,
@@ -310,37 +169,6 @@ def check_publication_gates(
                 PublicationGateFailure(
                     "missing_include_target",
                     "relative include targets missing: " + ", ".join(missing[:8]),
-                )
-            )
-    headings = _heading_blank_line_problems(text)
-    if headings:
-        failures.append(
-            PublicationGateFailure(
-                "heading_blank_lines",
-                "ATX headings must be surrounded by blank lines: " + headings[0],
-            )
-        )
-    unlabeled = _unlabeled_fence_openers(text)
-    if unlabeled:
-        failures.append(
-            PublicationGateFailure(
-                "unlabeled_fence_opener",
-                f"target has {unlabeled} opening code fences without a language",
-            )
-        )
-    if source_locale == "ru" and "/docs/en/" in target_path:
-        previous_text = None
-        if previous_target is not None:
-            try:
-                previous_text = previous_target.decode("utf-8")
-            except UnicodeDecodeError:
-                previous_text = None
-        title_case = en_heading_title_case_problems(text, previous=previous_text)
-        if title_case:
-            failures.append(
-                PublicationGateFailure(
-                    "en_heading_title_case",
-                    "EN ATX headings must use Title Case (Chicago): " + title_case[0],
                 )
             )
     return tuple(failures)

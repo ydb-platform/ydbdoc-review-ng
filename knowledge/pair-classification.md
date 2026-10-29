@@ -262,3 +262,28 @@ review без blockers. До принятия consumer PR автоматичес
 новую ветку; публикация runtime от этого не зависит.
 
 Поставка robots namespace:ad56276 в main/v1.0.1; перезапуск53925:https://github.com/ydb-platform/ydb/actions/runs/40838344716, при записи:in_progress.
+
+PR57415 merged 2026-10-29 08:06:49UTC, commit4f4e7171c694ee946224a1d75bb1ffa2a5ee1bfb. CI40838344716 успешно создал robots-ветку и translation PR57416, затем RED. benchmarks.md дважды отклонён en_heading_title_case; InvalidTranslationResponse оставил файл без итогового перевода. QA comment6491370500: обязательный итоговый файл отсутствует. Auditac48d31b-6ed5-4e2d-94fe-614c7739af56 continuable_review. Публикационный блокер снят; новый перезапуск не выполнялся.
+
+### Причина отказа benchmarks.md в CI40838344716
+
+Audit ac48d31b-6ed5-4e2d-94fe-614c7739af56 содержит два успешных ответа
+переводчика и два предварительных HTTP400 из-за max_tokens262144, после
+которых provider retry успешно уменьшил output reserve. HTTP400 не финальная причина.
+Первый Markdown: sentence-case headings Conducting load testing, Data
+preparation, Loading data into the tables. Второй исправил их до Title Case,
+но оставил Loading Data into the Tables. Validator _TITLE_CASE_MINOR не
+содержит into, поэтому en_heading_title_case_problems отвергает именно into.
+Замена только into на Into в сохранённом втором ответе даёт пустой результат
+check_publication_gates. Перевод создан, но целиком отброшен из-за регистра.
+
+Ни developer, ни user thin prompt не содержит требования Title Case/Chicago.
+Retry передаёт лишь код en_heading_title_case, игнорируя detail с заголовком.
+Whole-file path вызывает gate с previous_target=None, поэтому старые неизменённые
+sentence-case заголовки также не освобождены от проверки. После двух попыток
+InvalidTranslationResponse исключает файл, QA сообщает об отсутствующем результате.
+Код не менялся. Возможные исправления для обсуждения: согласовать правило
+регистра с требуемым стилем; передавать конкретную диагностику; решить, должен
+ли стиль заголовков быть блокирующей ошибкой публикации.
+
+Решение реализовано: [аудит ограничений публикации](publication-gate-audit-2026-10-29.md).

@@ -30,13 +30,8 @@ _PLACEHOLDER_LIKE = re.compile(
 _PLACEHOLDER_RESIDUE = re.compile(
     r"(?:YDBDOC_PROTECTED_(?:[0-9]+|LINK_[0-9]+_(?:OPEN|CLOSE))|YDBDOC_URL_[0-9]+)"
 )
-_EMPTY_LINK = re.compile(r"\]\(\s*\)")
 _ATX_HEADING = re.compile(r"^ {0,3}#{1,6}(?:\s|$)")
 _TOP_LEVEL_LIST_ITEM = re.compile(r"^(?:[*+-]|[0-9]+[.)])\s+")
-_LIST_ITEM_SPACING = re.compile(
-    r"^(?P<prefix> {0,3}(?:[*+-]|[0-9]+[.)]))(?P<spacing>[ \t]+)(?=\S)"
-)
-_FENCE_LINE = re.compile(r"^ {0,3}(?P<marker>`{3,}|~{3,})(?P<rest>.*)$")
 _OUTER_PROVIDER_FENCE = re.compile(
     r"\A```(?:markdown)?[ \t]*\r?\n(?P<body>.*?)(?:\r\n|\n)```[ \t]*(?:\r?\n)?\Z",
     re.IGNORECASE | re.DOTALL,
@@ -74,54 +69,6 @@ def _normalize_provider_wrapping(value: str, /) -> str:
     normalized = fence.group("body") if fence is not None else value
     wrapper = _OUTER_AUTHORITATIVE_SOURCE.fullmatch(normalized)
     return wrapper.group("body") if wrapper is not None else normalized
-
-
-def _markdown_style_problems(value: bytes, /) -> tuple[tuple[str, int | None], ...]:
-    text = value.decode("utf-8")
-    problems: list[tuple[str, int | None]] = []
-    for match in _EMPTY_LINK.finditer(text):
-        problems.append(("empty_link", text[: match.start()].count("\n") + 1))
-
-    lines = text.splitlines()
-    fence: tuple[str, int] | None = None
-    outside_fence: list[bool] = []
-    fence_starts: list[bool] = []
-    for line in lines:
-        fence_match = _FENCE_LINE.match(line)
-        outside_fence.append(fence is None)
-        starts = False
-        if fence_match is not None:
-            marker = fence_match.group("marker")
-            rest = fence_match.group("rest")
-            if fence is None:
-                if marker[0] != "`" or "`" not in rest:
-                    fence = (marker[0], len(marker))
-                    starts = True
-            elif marker[0] == fence[0] and len(marker) >= fence[1] and not rest.strip():
-                fence = None
-        fence_starts.append(starts)
-
-    for index, line in enumerate(lines):
-        if fence_starts[index] and index and lines[index - 1].strip():
-            problems.append(("blank_before_fence", index + 1))
-        if not outside_fence[index]:
-            continue
-        list_item = _LIST_ITEM_SPACING.match(line)
-        if list_item is not None and list_item.group("spacing") != " ":
-            problems.append(("list_marker_space", index + 1))
-        if _ATX_HEADING.match(line):
-            if index and lines[index - 1].strip():
-                problems.append(("blank_before_heading", index + 1))
-            if index + 1 < len(lines) and lines[index + 1].strip():
-                problems.append(("blank_after_heading", index + 1))
-        if (
-            _TOP_LEVEL_LIST_ITEM.match(line)
-            and (index == 0 or not _TOP_LEVEL_LIST_ITEM.match(lines[index - 1]))
-            and index
-            and lines[index - 1].strip()
-        ):
-            problems.append(("blank_before_list", index + 1))
-    return tuple(problems)
 
 
 def _table_row_columns(line: bytes, /) -> int:
@@ -169,54 +116,11 @@ def _validate_publishable_markdown(source: bytes, target: bytes, /) -> None:
         raise DocumentTranslationError(
             "document_response:markdown_invalid:unrestored_placeholder"
         )
-    allowed = Counter(problem for problem, _line_number in _markdown_style_problems(source))
-    seen: Counter[str] = Counter()
-    for problem, line_number in _markdown_style_problems(target):
-        seen[problem] += 1
-        if seen[problem] > allowed[problem]:
-            line = "" if line_number is None else f":line_{line_number}"
-            raise DocumentTranslationError(
-                f"document_response:markdown_invalid{line}:{problem}"
-            )
 
 
 def _normalize_publishable_markdown(source: bytes, target: bytes, /) -> bytes:
-    """Restore build-critical blank lines only when translation introduced the defect."""
-    allowed = Counter(problem for problem, _line_number in _markdown_style_problems(source))
-    seen: Counter[str] = Counter()
-    before: set[int] = set()
-    after: set[int] = set()
-    list_spacing: set[int] = set()
-    for problem, line_number in _markdown_style_problems(target):
-        seen[problem] += 1
-        if line_number is None or seen[problem] <= allowed[problem]:
-            continue
-        if problem in {"blank_before_fence", "blank_before_heading", "blank_before_list"}:
-            before.add(line_number)
-        elif problem == "blank_after_heading":
-            after.add(line_number)
-        elif problem == "list_marker_space":
-            list_spacing.add(line_number)
-
-    if not before and not after and not list_spacing:
-        return target
-    text = target.decode("utf-8")
-    lines = text.splitlines(keepends=True)
-    newline = "\r\n" if "\r\n" in text else "\n"
-    result: list[str] = []
-    for line_number, line in enumerate(lines, 1):
-        if line_number in before and result and result[-1].strip():
-            result.append(newline)
-        if line_number in list_spacing:
-            line = _LIST_ITEM_SPACING.sub(r"\g<prefix> ", line, count=1)
-        result.append(line)
-        if (
-            line_number in after
-            and line_number < len(lines)
-            and lines[line_number].strip()
-        ):
-            result.append(newline)
-    return "".join(result).encode("utf-8")
+    """Preserve Markdown formatting; spacing is not a publication requirement."""
+    return target
 
 
 def _restore_placeholders(

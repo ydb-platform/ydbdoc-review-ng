@@ -474,27 +474,27 @@ def test_prepare_document_keeps_nested_list_in_whole_document() -> None:
     )
 
 
-def test_missing_blank_line_between_top_level_blocks_is_restored() -> None:
+def test_missing_blank_line_between_top_level_blocks_is_preserved() -> None:
     source = b"* First item.\n\n## Second [guide](guide.md)\n"
     plan, request = prepared(source)
     response = request.chunks[0].text.replace("\n\n", "\n", 1)
 
     candidate = restore_document(source, plan, request, (response,))
 
-    assert candidate == source
+    assert candidate == source.replace(b"\n\n", b"\n", 1)
 
 
-def test_missing_blank_after_heading_is_restored_before_publication() -> None:
+def test_missing_blank_after_heading_is_preserved() -> None:
     source = b"## Heading\n\nRelease date: July 27, 2026.\n"
     plan, request = prepared(source)
     response = "## Translated heading\nRelease date: July 27, 2026.\n"
 
     candidate = restore_document(source, plan, request, (response,))
 
-    assert candidate == b"## Translated heading\n\nRelease date: July 27, 2026.\n"
+    assert candidate == b"## Translated heading\nRelease date: July 27, 2026.\n"
 
 
-def test_extra_list_marker_spaces_are_normalized_before_review_and_build() -> None:
+def test_extra_list_marker_spaces_are_preserved() -> None:
     source = b"- First item\n- Second item\n"
     plan, request = prepared(source)
 
@@ -505,7 +505,7 @@ def test_extra_list_marker_spaces_are_normalized_before_review_and_build() -> No
         ("-   Translated first item\n-   Translated second item\n",),
     )
 
-    assert candidate == b"- Translated first item\n- Translated second item\n"
+    assert candidate == b"-   Translated first item\n-   Translated second item\n"
 
 
 def test_list_like_text_in_fenced_or_indented_code_is_not_normalized() -> None:
@@ -517,14 +517,14 @@ def test_list_like_text_in_fenced_or_indented_code_is_not_normalized() -> None:
     assert candidate == source
 
 
-def test_missing_blank_before_fence_is_restored_before_publication() -> None:
+def test_missing_blank_before_fence_is_preserved() -> None:
     source = b"Before.\n\n```sql\nSELECT 1;\n```\n\nAfter.\n"
     plan, request = prepared(source)
     response = request.chunks[0].text.replace("Before.\n\n```sql", "Before.\n```sql")
 
     candidate = restore_document(source, plan, request, (response,))
 
-    assert candidate == source
+    assert candidate == source.replace(b"Before.\n\n", b"Before.\n")
 
 
 def test_four_backtick_container_does_not_expose_inner_fence_to_normalizer() -> None:
@@ -537,10 +537,10 @@ def test_four_backtick_container_does_not_expose_inner_fence_to_normalizer() -> 
 
     candidate = restore_document(source, plan, request, (response,))
 
-    assert candidate == source
+    assert candidate == source.replace(b"\n\n````markdown", b"\n````markdown")
 
 
-def test_missing_blank_before_second_fence_is_restored_before_publication() -> None:
+def test_missing_blank_before_second_fence_is_preserved() -> None:
     source = (
         b"First.\n\n```sql\nSELECT 1;\n```\n\n"
         b"Before.\n\n```sql\nSELECT 2;\n```\n"
@@ -550,7 +550,7 @@ def test_missing_blank_before_second_fence_is_restored_before_publication() -> N
 
     candidate = restore_document(source, plan, request, (response,))
 
-    assert candidate == source
+    assert candidate == source.replace(b"Before.\n\n", b"Before.\n")
 
 
 def test_missing_blank_after_heading_is_restored_across_adaptive_chunks() -> None:
@@ -574,11 +574,11 @@ def test_missing_blank_after_heading_is_restored_across_adaptive_chunks() -> Non
     assert candidate == b"## Translated heading\n\nRelease date: July 27, 2026.\n"
 
 
-def test_empty_markdown_link_is_rejected_before_publication() -> None:
+def test_invented_empty_markdown_link_is_rejected_as_structure_change() -> None:
     source = b"Read the guide.\n"
     plan, request = prepared(source)
 
-    with pytest.raises(DocumentTranslationError, match="markdown_invalid"):
+    with pytest.raises(DocumentTranslationError, match="structure_mismatch"):
         restore_document(source, plan, request, ("Read the [guide]().\n",))
 
 
@@ -798,3 +798,10 @@ def test_source_owned_opaque_bytes_never_reach_model_and_restore_exactly(
         restore_document(source, plan, request, tuple(chunk.text for chunk in request.chunks))
         == source
     )
+
+
+def test_heading_and_list_spacing_are_not_rewritten_or_rejected():
+    source = b"## Heading\n\nBody.\n\n- Item.\n"
+    plan, request = prepared(source)
+    response = "## Translated heading\nBody.\n-   Item.\n"
+    assert restore_document(source, plan, request, (response,)) == response.encode()

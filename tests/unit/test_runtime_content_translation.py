@@ -1692,3 +1692,13 @@ def test_duplicate_translated_glossary_alias_is_left_to_critic_editor() -> None:
 
     assert result.translated_markdown == draft
     assert len(models.calls) == 1
+
+
+def test_thin_translation_preserves_technical_examples_without_style_rewrites():
+    body = ('---\ntitle: Example\ndescription: Keep separate\n---\n'
+            '# sentence case\nBody with a hard break.  \nNext line.\n'
+            '~~~text\nalpha\nbeta\nType `log`_`config` literally.\n~~~\n')
+    models = ScriptedModels([body, body])
+    _, result = content_with(models)._translate_document(document_for(body.encode(), target=None))
+    assert result.translated_markdown == body
+    assert len(models.calls) == 1

@@ -8,12 +8,10 @@
 1. Техпис ставит label на PR.
 2. Runtime берёт immutable snapshot source PR, при необходимости дотягивает
    зависимости без target-перевода, переводит файлы и публикует translation branch.
-3. Перевод — **тонкий цикл как в чате**: целый source Markdown → один DeepSeek
-   вызов → целый target Markdown. Без opaque placeholders и без soft-publish
-   полуготового мусора. Python **publication gates** (§2.3) — жёсткий quality
-   gate до публикации файла (source-locale echo, split-backtick identifiers,
-   missing include targets). Один retry при провале gate, затем файл не
-   публикуется.
+3. Перевод: целый source Markdown → один DeepSeek вызов → целый target
+   Markdown. Python проверяет техническую целостность (§2.3). Стиль, регистр
+   букв и отдельные слова другого языка не блокируют публикацию. Один retry
+   при техническом провале, затем файл не публикуется.
 4. Tool-using critic (`read`/`grep`/`apply_patch`/`finish`) **снят** с
    production path. Reviewed bytes = draft, прошедший gates.
 5. Arbiter независимо смотрит опубликованный результат (дельта source PR) и
@@ -186,9 +184,8 @@ paths, identifiers, flags, templates (`{{ ydb-short-name }}` и т.п.).
 Thin unwrap снимает только обёртку всего ответа (` ``` ` / ` ```markdown ` /
 ` ```md `). Файл, который сам начинается с ` ```bash ` / ` ```text `, это
 документ, не обёртка: открывающий fence не трогать.
-Запрещён split-backtick underscore mangling (`log`_`config`, `word`_`word`,
-`` `_`path ``). После ответа Python нормализует известные mangling-паттерны,
-затем гоняет publication gates (§2.3).
+Python не переписывает регистр, пробелы, переносы и backtick-последовательности
+ответа. Качество перевода и возможные искажения оценивает semantic review.
 
 Внутренние YDB URL: только `/docs/ru/` ↔ `/docs/en/`. Для `glossary.md`
 fragment ищется в реальном target glossary; иначе fail-open diagnostic.
@@ -198,7 +195,7 @@ arbiter может поставить YELLOW.
 
 JSON segment map от модели → reject + retry, затем fail.
 Файл, не прошедший gates после retry, **не** публикуется (null / дыра → RED).
-Soft-publish полупереведённого UTF-8 с кириллицей в EN **запрещён**.
+Наличие кириллицы само по себе не доказывает ошибку перевода.
 
 ### 2.1 Комментарии в code fence
 
@@ -216,26 +213,24 @@ Soft-publish полупереведённого UTF-8 с кириллицей в
 
 ### 2.2 Source echo (RU→EN)
 
-Непрерывный фрагмент ≥3 русских букв в target EN — publication gate failure
-(§2.3). Один retry translator с указанием gate; повторный провал → файл не
-публикуется.
+Длинное дословное повторение исходной прозы может вызвать одну корректировку
+в путях, использующих проверку source echo. Повторное совпадение остаётся
+диагностикой. Имена, идентификаторы, цитаты и примеры на другом языке не
+являются причиной отбрасывать весь документ.
 
-### 2.3 Publication gates (Python, fail-closed)
-
-После thin translate (и после unique/surgical assemble) Python проверяет:
+### 2.3 Publication gates (Python, техническая целостность)
 
 | Gate | Условие провала |
 |---|---|
-| `source_locale_echo` | в EN остались кириллические runs (≥3 букв); симметрично для EN→RU по мере поддержки |
-| `split_backtick_identifiers` | после normalize остались `` `a`_`b` `` / `a`_`b` / `` `_`x `` |
-| `missing_include_target` | relative `{% include %}` destination нет в результирующем target tree: overlay этого PR **или** уже существующий файл на translation base |
-| `heading_blank_lines` | ATX-заголовок без пустой строки сверху или снизу (кроме начала/конца файла); внутри code fence не считается |
-| `unlabeled_fence_opener` | открывающий ` ``` ` без языка (закрывающий unlabeled допустим) |
-| `en_heading_title_case` | RU→EN: новый/изменённый ATX-заголовок не в Title Case (Chicago subset). Whole-file судит все заголовки; surgical unique/noop/hunks дедуют только строки, отсутствующие в previous EN |
+| `utf8_invalid` | результат не декодируется как UTF-8 |
+| `missing_include_target` | настоящий relative `{% include %}` ссылается на отсутствующий файл в результирующем target tree: overlay PR и translation base |
 
-Insert-only surgical: Python стыкует переведённый hunk с существующим EN. Если hunk начинается с ATX-заголовка, а EN перед стыком не заканчивается пустой строкой, Python вставляет `\n` без модели.
-
-После thin translate Python склеивает soft-wrapped prose (две соседние prose-строки без blank) в один абзац. Не переписывает unique-replacement files целиком.
+Директивы include внутри примеров кода не являются зависимостями.
+Регистр заголовков, пустые строки, число пробелов после маркера списка,
+неуказанный язык fence и кириллица не являются publication gates.
+Python не склеивает строки prose и не исправляет split-backtick глобально:
+это могло менять YAML, переносы Markdown и содержимое примеров кода.
+При сборке отдельных chunks/hunks сохраняется необходимая граница блоков.
 
 Новая страница из source TOC (в т.ч. dependency): Python применяет structural TOC delta от source (parent section + соседи), а не плоский append basename в хвост. Кириллические `name` переводятся через TOC string map.
 
@@ -282,7 +277,8 @@ UTF-8 byte-размер wire request (1 byte ≈ 1 token). `max_tokens` не п�
 
 ### 4.1 Quality gate (вместо tool-using critic)
 
-Production quality gate = Python publication gates §2.3 на выходе translator.
+Python publication gates §2.3 проверяют техническую целостность на выходе translator.
+Смысл и качество перевода оценивает arbiter.
 
 - Tool-using DeepSeek critic (`read` / `grep` / `apply_patch` / `finish`) **не
   вызывается** в `doc_translate` / `doc_verify` / `doc_continue`.
@@ -429,8 +425,8 @@ calls. Иначе job идёт целиком, даже если сама пер
 - CI публикует ветку `robots/translation/pr-N`, Git-объекты и PR в `ydb-platform/ydb`.
   Base = base source PR. Source/base и target читаются из той же репы.
   Verify и continue проверяют head repository.
-- В ветку уходят только файлы, прошедшие publication gates (§2.3). Полу-EN
-  с кириллицей / split-backtick / битыми include **не** публикуется.
+- В ветку уходят только файлы, прошедшие publication gates (§2.3). Невалидный UTF-8
+  и отсутствующие настоящие include блокируют публикацию, стиль не блокирует.
   Success job — arbiter GREEN/YELLOW на этих bytes.
 - Один актуальный QA comment в translation PR (или RED в source PR, если PR
   перевода нет): цвет, краткое резюме, cost job (unknown ≠ 0).
@@ -443,8 +439,8 @@ calls. Иначе job идёт целиком, даже если сама пер
   mypy / `git diff --check` один раз перед release.
 - Fakes для model/YDB/GitHub. Mutation testing и quota-матрицы без отдельной
   просьбы не делать.
-- TOC delta, thin translate, publication gates (echo / split-backtick /
-  missing include) — обязательные witnesses.
+- TOC delta, thin translate, publication gates (UTF-8 / missing include), допустимый стиль и
+  сохранность примеров кода — обязательные witnesses.
 - Работа в `main` без feature branches: частые commits + push.
 - Два параллельных потока только без пересечения production-файлов.
 - При смене требований — переписать на месте, не дублировать старое рядом.

@@ -41,7 +41,7 @@ def test_package_manifest_has_the_fixed_minimal_contract() -> None:
     }
     assert config["project"]["name"] == "ydbdoc-review-ng"
     assert config["project"]["requires-python"] == ">=3.11"
-    assert config["project"]["dependencies"] == ["PyYAML>=6,<7"]
+    assert config["project"]["dependencies"] == ["PyYAML>=6,<7", "markdown-it-py>=3,<5"]
     assert config["project"]["optional-dependencies"] == {
         "runtime": ["ydb[yc]>=3.31,<4"],
         "dev": [

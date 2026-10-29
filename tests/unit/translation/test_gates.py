@@ -1,4 +1,4 @@
-"""Publication gates fail closed on source echo, mangling, missing includes."""
+"""Publication checks protect technical content without enforcing prose style."""
 
 from __future__ import annotations
 
@@ -9,16 +9,16 @@ from ydbdoc_review_ng.translation.gates import (
 )
 
 
-def test_cyrillic_echo_fails_en_target() -> None:
+def test_cyrillic_text_is_left_to_semantic_review() -> None:
     draft = (
         "# Recovery\n\n"
         "Recovering system tablets.\n\n"
         "- При использовании конфигурации V1 необходимо обновить файл.\n"
-    ).encode("utf-8")
+    ).encode()
     failures = check_publication_gates(
         draft, source_locale="ru", target_path="ydb/docs/en/core/x.md"
     )
-    assert any(item.code == "source_locale_echo" for item in failures)
+    assert failures == ()
 
 
 def test_clean_english_passes() -> None:
@@ -31,12 +31,12 @@ def test_clean_english_passes() -> None:
     )
 
 
-def test_en_sentence_case_heading_fails_title_case_gate() -> None:
+def test_en_sentence_case_heading_is_publishable() -> None:
     draft = b"# Cluster maintenance without downtime\n\nBody.\n"
     failures = check_publication_gates(
         draft, source_locale="ru", target_path="ydb/docs/en/core/x.md"
     )
-    assert any(item.code == "en_heading_title_case" for item in failures)
+    assert failures == ()
 
 
 def test_en_title_case_heading_passes() -> None:
@@ -63,7 +63,7 @@ def test_unchanged_sentence_case_heading_vs_previous_is_not_gated() -> None:
     )
 
 
-def test_changed_sentence_case_heading_vs_previous_is_gated() -> None:
+def test_changed_sentence_case_heading_is_publishable() -> None:
     previous = b"# Maintenance without downtime\n\nBody.\n"
     draft = b"# Cluster maintenance without downtime\n\nBody.\n"
     failures = check_publication_gates(
@@ -72,15 +72,15 @@ def test_changed_sentence_case_heading_vs_previous_is_gated() -> None:
         target_path="ydb/docs/en/core/x.md",
         previous_target=previous,
     )
-    assert any(item.code == "en_heading_title_case" for item in failures)
+    assert failures == ()
 
 
-def test_split_backtick_after_normalize_still_fails_when_present() -> None:
+def test_split_backtick_spelling_is_left_to_semantic_review() -> None:
     draft = b"See `log`_`config` now.\n"
     failures = check_publication_gates(
         draft, source_locale="ru", target_path="ydb/docs/en/core/x.md"
     )
-    assert any(item.code == "split_backtick_identifiers" for item in failures)
+    assert failures == ()
 
 
 def test_missing_relative_include_is_reported() -> None:
@@ -100,7 +100,7 @@ def test_missing_relative_include_is_reported() -> None:
     assert any(item.code == "missing_include_target" for item in failures)
 
 
-def test_heading_without_blank_line_above_fails() -> None:
+def test_heading_without_blank_line_above_is_publishable() -> None:
     draft = (
         b"**KiKiMR** is the legacy name, and so on.\n"
         b"### Tablet recovery mode {#tablet-recovery-mode}\n\n"
@@ -109,7 +109,7 @@ def test_heading_without_blank_line_above_fails() -> None:
     failures = check_publication_gates(
         draft, source_locale="ru", target_path="ydb/docs/en/core/concepts/glossary.md"
     )
-    assert any(item.code == "heading_blank_lines" for item in failures)
+    assert failures == ()
 
 
 def test_heading_at_start_of_file_does_not_need_blank_above() -> None:
@@ -122,7 +122,7 @@ def test_heading_at_start_of_file_does_not_need_blank_above() -> None:
     )
 
 
-def test_unlabeled_opening_fence_fails() -> None:
+def test_unlabeled_opening_fence_is_publishable() -> None:
     draft = (
         b"ls /path/to/backup/snapshot/\n"
         b"```\n"
@@ -134,7 +134,7 @@ def test_unlabeled_opening_fence_fails() -> None:
         source_locale="ru",
         target_path="ydb/docs/en/core/recipes/backup/_includes/check-backup.md",
     )
-    assert any(item.code == "unlabeled_fence_opener" for item in failures)
+    assert failures == ()
 
 
 def test_labeled_fences_pass() -> None:
@@ -156,7 +156,7 @@ def test_labeled_fences_pass() -> None:
     )
 
 
-def test_dropped_opening_bash_fence_from_check_backup_fails() -> None:
+def test_fence_layout_is_left_to_document_review() -> None:
     draft = (
         b"ls /path/to/backup/directory/hive/72057594037968897/"
         b"backup_20251007T193502_g214_s1222/snapshot/\n"
@@ -170,7 +170,7 @@ def test_dropped_opening_bash_fence_from_check_backup_fails() -> None:
         source_locale="ru",
         target_path="ydb/docs/en/core/recipes/backup/_includes/check-backup.md",
     )
-    assert any(item.code == "unlabeled_fence_opener" for item in failures)
+    assert failures == ()
 
 
 def test_join_soft_wrapped_prose_merges_adjacent_paragraph_lines() -> None:
@@ -220,3 +220,56 @@ def test_existing_target_include_is_not_missing() -> None:
         exists=lambda path: path == note,
     )
     assert failures == ()
+
+
+def test_cyrillic_identifier_and_code_example_are_publishable():
+    draft = '# Example\n\nUser: Иван.\n\n```\nSELECT "Привет";\n```\n'.encode()
+    assert check_publication_gates(draft, source_locale="ru",
+        target_path="ydb/docs/en/core/example.md") == ()
+
+
+def test_recorded_benchmarks_translation_is_publishable_without_rewriting():
+    from pathlib import Path
+    draft = (Path(__file__).parents[2] / "fixtures/pr53925/benchmarks-translated.md").read_bytes()
+    assert check_publication_gates(draft, source_locale="ru",
+        target_path="ydb/docs/en/core/recipes/ydb-cli/benchmarks.md") == ()
+
+
+def test_include_examples_in_code_are_not_dependencies():
+    draft = (b'```markdown\n{% include [example](missing.md) %}\n```\n\n'
+             b'~~~text\n{% include [example](missing2.md) %}\n~~~\n\n'
+             b'Use `{% include [example](missing3.md) %}`.\n')
+    assert check_publication_gates(draft, source_locale='ru',
+        target_path='ydb/docs/en/core/example.md', available_paths=set()) == ()
+
+
+def test_real_includes_survive_escaped_ticks_paragraphs_and_list_indentation() -> None:
+    include = '{% include [actual](missing.md) %}'
+    for text in (
+        'Use \\` literally.\n\n' + include + '\n\nUse \\` literally.',
+        'Unmatched ` tick.\n\n' + include + '\n\nAnother ` tick.',
+        '- Item\n\n    ' + include + '\n',
+    ):
+        assert missing_relative_includes(
+            text, target_path='docs/page.md', available_paths=set()
+        ) == ('missing.md',)
+
+
+def test_include_examples_inside_containers_are_not_dependencies() -> None:
+    include = '{% include [example](missing.md) %}'
+    for text in (
+        '> ```markdown\n> ' + include + '\n> ```\n',
+        '- Item\n\n    ```markdown\n    ' + include + '\n    ```\n',
+        '    ' + include + '\n',
+        '````markdown\n```\n' + include + '\n```\n````\n',
+    ):
+        assert missing_relative_includes(
+            text, target_path='docs/page.md', available_paths=set()
+        ) == ()
+
+
+def test_invalid_utf8_still_blocks_publication() -> None:
+    failures = check_publication_gates(
+        b'\xff', source_locale='ru', target_path='docs/page.md'
+    )
+    assert [failure.code for failure in failures] == ['utf8_invalid']

@@ -46,7 +46,16 @@ from ydbdoc_review_ng.direction import (
     inventory_request,
     parse_inventory_response,
 )
-from ydbdoc_review_ng.domain import FilePair, GitSha, Locale, Mode, ModelRole, RepoPath, RepositoryId, SnapshotRef
+from ydbdoc_review_ng.domain import (
+    FilePair,
+    GitSha,
+    Locale,
+    Mode,
+    ModelRole,
+    RepoPath,
+    RepositoryId,
+    SnapshotRef,
+)
 from ydbdoc_review_ng.links import (
     LinkDestinationResolver,
     WikipediaLanglinks,
@@ -136,12 +145,8 @@ from ydbdoc_review_ng.translation.document import (
     build_document_prompt,
     verify_document_candidate_with_links,
 )
-from ydbdoc_review_ng.translation.gates import check_publication_gates, join_soft_wrapped_prose
+from ydbdoc_review_ng.translation.gates import check_publication_gates
 from ydbdoc_review_ng.translation.language import validate_translated_prose
-from ydbdoc_review_ng.translation.split_backtick import (
-    count_split_backtick_identifiers,
-    normalize_split_backtick_identifiers,
-)
 from ydbdoc_review_ng.translation.surgical import (
     SurgicalMode,
     join_insert_hunk,
@@ -2576,16 +2581,11 @@ class RuntimeContent:
                     previous = ""
                     continue
                 body = unwrap_thin_response(_normalize_provider_wrapping(result.text))
-                draft = join_soft_wrapped_prose(
-                    normalize_split_backtick_identifiers(body.encode("utf-8"))
-                )
+                draft = body.encode("utf-8")
                 failures = check_publication_gates(
                     draft,
                     source_locale=entry.pair.source_locale.value,
                     target_path=entry.pair.target_path.value,
-                    # Whole-file drafts are judged without grandfathering old
-                    # sentence-case headings from the previous EN page.
-                    previous_target=None,
                 )
                 if not failures:
                     write_trace(
@@ -2724,7 +2724,7 @@ class RuntimeContent:
                     for span, restored in sorted(
                         translated_hunks, key=lambda item: item[0][0], reverse=True
                     ):
-                        piece = join_soft_wrapped_prose(restored)
+                        piece = restored
                         if span[0] == span[1]:
                             piece = join_insert_hunk(patched[: span[0]], piece)
                         patched = patched[: span[0]] + piece + patched[span[1] :]
@@ -2744,9 +2744,6 @@ class RuntimeContent:
 
         if surgical_candidate is not None:
             candidate = surgical_candidate
-            mangled = count_split_backtick_identifiers(candidate)
-            if mangled and not partial_bilingual:
-                candidate = normalize_split_backtick_identifiers(candidate)
             gate_failures = check_publication_gates(
                 candidate,
                 source_locale=entry.pair.source_locale.value,
