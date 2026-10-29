@@ -65,3 +65,11 @@ include оставался текстом для существующего из
   подтверждением чистоты всего runtime. Scope gates/document чистый.
 - HTML-примеры и весь YFM не заменяются этим CommonMark scanner. Это не
   полный YFM parser; аудит не меняет прежнюю обработку HTML как текста.
+
+## Поставка
+
+Независимое review: blockers нет, 87 focused tests подтверждены reviewer.
+Код f67e360 опубликован в main; v1.0.1 передвинут с ad56276 на f67e360.
+На PR53925 заново поставлена метка doc_translate:
+https://github.com/ydb-platform/ydb/actions/runs/40842548202 .
+При записи этой заметки run in_progress; успешный итог ещё не подтверждён.
