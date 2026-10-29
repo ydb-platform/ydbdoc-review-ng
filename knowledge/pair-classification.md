@@ -216,3 +216,5 @@ semantic conflict/need_context, если RU существует и есть р�
 новых failures нет. Ruff/mypy clean для classifier. Independent review без
 blockers. Checkpoint fixtures теперь используют invalid model response, а не
 semantic ambiguity, которая больше не должна останавливать перевод.
+
+Поставка fallback:00a9e26 опубликован main/v1.0.1. Новый запуск53925:https://github.com/ydb-platform/ydb/actions/runs/40832048376, при записи:in_progress.
