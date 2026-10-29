@@ -45,9 +45,18 @@ Counterpart blocks are retrieval candidates, NOT proven translations. Heading or
 are hints only: translated documents may reorder, insert or omit sections. Check heading
 context and anchors. before_blocks/after_blocks contain whole affected Markdown blocks;
 current_blocks contain counterpart candidates; delta contains the actual changed lines.
+On expanded_articles, current_text is the COMPLETE current article in each locale;
+read it directly. Empty current_blocks then means blocks were replaced by current_text,
+not missing evidence. Do not claim a section is unseen when current_text contains it.
 The heading outline describes selected sections; omitted_sections counts other sections. Do not assume unseen text is absent. A batch contains only some PR deltas; classify only the deltas shown, using counterpart candidates as evidence. An
-expanded_sections request is the final bounded context retry. If still insufficient,
-return need_context. New pages provide complete content within the request bound.
+expanded_articles or expanded_sections request is the final context retry. If still insufficient,
+return need_context. complete_current=true proves the whole current article is shown.
+exists=false proves the article is absent, not that retrieval failed. A link-only fix
+in an existing source page does not require creating a long-missing counterpart page
+or section. If complete counterpart evidence confirms that the corrected link's
+passage is absent, ignore that pre-existing drift and return no_translation for that
+link-only delta. This does not apply to new pages or added substantive content.
+New pages provide complete content within the request bound.
 Only focused_delta_locales can be translation sources: ru_to_en requires a shown RU
 change missing from current EN; en_to_ru requires a shown EN change missing from
 current RU. Counterpart current text is evidence, never a new source delta. If the
@@ -230,6 +239,14 @@ def _anchor_candidates(blocks: list[_Block], groups: list[set[str]]) -> set[int]
     return candidates
 
 
+
+def _whole_sections(blocks: list[_Block], selected: set[int]) -> set[int]:
+    headings = {blocks[i].headings for i in selected}
+    return {
+        i for i, block in enumerate(blocks)
+        if any(block.headings[:len(parent)] == parent for parent in headings)
+    }
+
 def _delta(old: str, new: str) -> list[dict[str, object]]:
     before, after = old.splitlines(), new.splitlines()
     return [
@@ -239,7 +256,7 @@ def _delta(old: str, new: str) -> list[dict[str, object]]:
     ]
 
 
-def pair_request(
+def _pair_request(
     files: tuple[InventoryFile, ...],
     pair: LocalePairInventory,
     before: SnapshotRef,
@@ -248,6 +265,7 @@ def pair_request(
     operator_context: str | None = None,
     *,
     expanded: bool = False,
+    whole_articles: bool = False,
     request_budget: Callable[[ModelRequest], ContextBudget] = _default_request_budget,
     focus: frozenset[tuple[str, int]] | None = None,
 ) -> ModelRequest:
@@ -258,6 +276,7 @@ def pair_request(
     affected: dict[str, tuple[set[int], set[int]]] = {}
     delta_locales: set[str] = set()
     anchor_groups: dict[str, list[tuple[set[str], list[set[str]]]]] = {}
+    section_groups: dict[str, list[tuple[set[str], set[str]]]] = {}
     for locale, side in sides.items():
         item = next((f for f in files if side.path in (f.change.old_path, f.change.new_path)), None)
         old = side.content if item is None else item.before
@@ -266,7 +285,7 @@ def pair_request(
         new_text = "" if new is None else new.decode("utf-8")
         if "\x00" in old_text + new_text:
             raise ValueError("binary_pair_requires_deterministic_handling")
-        versions[locale] = (old_text, new_text, item is not None, old is None)
+        versions[locale] = (old_text, new_text, item is not None, item is not None and old is None and new is not None)
         old_blocks, new_blocks = _blocks(old_text), _blocks(new_text)
         parsed[locale] = old_blocks, new_blocks
         changes = [
@@ -282,12 +301,18 @@ def pair_request(
             delta_locales.add(locale)
         old_lines, new_lines = old_text.splitlines(), new_text.splitlines()
         anchor_groups[locale] = []
+        section_groups[locale] = []
         for _, a, b, c, d in changes:
             surrounding = [
                 _anchors(blocks[i].text)
                 for blocks, span in ((old_blocks, (a, b)), (new_blocks, (c, d)))
                 for i in _affected(blocks, [span])
             ]
+            headings = {
+                h for blocks, span in ((old_blocks, (a, b)), (new_blocks, (c, d)))
+                for i in _affected(blocks, [span]) for h in blocks[i].headings[1:]
+            }
+            section_groups[locale].append((set().union(*surrounding), headings))
             anchor_groups[locale].extend(
                 (_anchors(line), surrounding) for line in old_lines[a:b] + new_lines[c:d]
             )
@@ -300,7 +325,7 @@ def pair_request(
         "key": pair.key.relative_path.value,
         "before_sha": before.commit_sha.value,
         "after_sha": after.commit_sha.value,
-        "context": "expanded_sections" if expanded else "affected_blocks",
+        "context": "expanded_articles" if whole_articles else ("expanded_sections" if expanded else "affected_blocks"),
         "operator_context": operator_context,
         "focused_delta_locales": sorted(delta_locales),
     }
@@ -312,24 +337,36 @@ def pair_request(
         other_indices = affected[other][1]
         # Deletions may leave no after block: use their before positions too.
         seeds = other_indices or affected[other][0]
-        candidates = {j for i in seeds for j in range(max(0, i - 2), min(len(new_blocks), i + 3))}
-        for anchors, surrounding in anchor_groups[other]:
-            matches = _anchor_candidates(new_blocks, [anchors])
-            if not matches:
-                # Each prose-only change gets its own fallback, even when a
-                # different change already found a specific counterpart.
-                matches = _anchor_candidates(new_blocks, surrounding)
-            candidates |= matches
+        candidates = set() if expanded else {
+            j for i in seeds for j in range(max(0, i - 2), min(len(new_blocks), i + 3))
+        }
+        if expanded and not whole_articles:
+            for anchors, headings in section_groups[other]:
+                ids = {a for h in headings for a in re.findall(r"\{#([^}]+)\}", h)}
+                matches = _anchor_candidates(new_blocks, [anchors])
+                matches |= {
+                    i for i, block in enumerate(new_blocks)
+                    if any(h in headings or ids.intersection(
+                        re.findall(r"\{#([^}]+)\}", h)
+                    ) for h in block.headings[1:])
+                }
+                if new_blocks and not matches:
+                    raise CounterpartSectionMissing(
+                        "Corresponding section not found for a change in oversized article"
+                    )
+                candidates |= matches
+        elif not expanded:
+            for anchors, surrounding in anchor_groups[other]:
+                matches = _anchor_candidates(new_blocks, [anchors])
+                if not matches:
+                    matches = _anchor_candidates(new_blocks, surrounding)
+                candidates |= matches
         selected = new_indices | candidates
-        if is_new:
+        if is_new or whole_articles:
             selected = set(range(len(new_blocks)))
         if expanded:
-            sections = {new_blocks[i].section for i in selected}
-            selected |= {i for i, block in enumerate(new_blocks) if block.section in sections}
-            old_sections = {old_blocks[i].section for i in old_indices}
-            old_indices = old_indices | {
-                i for i, block in enumerate(old_blocks) if block.section in old_sections
-            }
+            selected = _whole_sections(new_blocks, selected)
+            old_indices = _whole_sections(old_blocks, old_indices)
         selected_sections = {new_blocks[i].section for i in selected}
         payload[locale] = {
             "path": side.path.value,
@@ -354,7 +391,8 @@ def pair_request(
             "before_blocks": _wire(old_blocks, old_indices),
             "after_blocks": _wire(new_blocks, new_indices),
             # No duplicated after blocks in the counterpart context.
-            "current_blocks": _wire(new_blocks, selected - new_indices),
+            "current_blocks": [] if whole_articles else _wire(new_blocks, selected - new_indices),
+            "current_text": new_text if whole_articles else None,
         }
     prompt = (
         PROMPT
@@ -399,6 +437,37 @@ def pair_request(
         raise ContextBoundExceeded("Complete request and reply exceed model token budget bound")
     return request
 
+
+
+class CounterpartSectionMissing(ValueError):
+    """No matching section, not proof that the counterpart passage is absent."""
+
+
+def pair_request(
+    files: tuple[InventoryFile, ...],
+    pair: LocalePairInventory,
+    before: SnapshotRef,
+    after: SnapshotRef,
+    model: str,
+    operator_context: str | None = None,
+    *,
+    expanded: bool = False,
+    request_budget: Callable[[ModelRequest], ContextBudget] = _default_request_budget,
+    focus: frozenset[tuple[str, int]] | None = None,
+) -> ModelRequest:
+    """Use whole articles on retry, falling back to whole matched sections locally."""
+    if expanded:
+        try:
+            return _pair_request(
+                files, pair, before, after, model, operator_context,
+                expanded=True, whole_articles=True, request_budget=request_budget, focus=focus,
+            )
+        except ContextBoundExceeded:
+            pass
+    return _pair_request(
+        files, pair, before, after, model, operator_context,
+        expanded=expanded, request_budget=request_budget, focus=focus,
+    )
 
 def parse_pair_response(text: str, key: str) -> PairDecision:
     def unique(items: list[tuple[str, object]]) -> dict[str, object]:
@@ -469,6 +538,9 @@ def classify_pairs(
                         request_budget=request_budget,
                         focus=focus,
                     )
+                except CounterpartSectionMissing as error:
+                    decision = PairDecision(key, "need_context", str(error))
+                    break
                 except ContextBoundExceeded:
                     # Interleave locales so batching does not separate all RU
                     # evidence from all EN evidence. Ordinals are packing hints,

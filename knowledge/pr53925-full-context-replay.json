@@ -1,0 +1,50 @@
+[
+  {
+    "key": "dev/optimization/index.md",
+    "response": {
+      "key": "dev/optimization/index.md",
+      "reason": "RU changes are link-only fixes to anchors within the same page (layout.md#resultset-column to #structure, #stages to #statistics). EN's current text does not contain the corresponding section structure list with these links, but the EN delta contains unrelated content changes (removing glossary links, changing --explain link, adding task links). The RU link changes are not reflected in EN, but the EN page does not have the same section structure list, so the RU changes are not missing translations of EN content. The EN changes are substantive and not present in RU, but the RU delta is only link fixes. Since the RU changes are link-only fixes in an existing page and the EN counterpart does not have the corresponding passage, this is pre-existing drift. The EN changes are substantive and missing from RU, but the focused delta locales include both, and the EN changes are not link-only. However, the RU changes are link-only and do not require translation. The EN changes are substantive and missing from RU, so en_to_ru is needed for the EN changes. But the RU changes are link-only and already synchronized in the sense that EN doesn't have that structure. The EN changes are substantive and missing from RU, so en_to_ru is the action.",
+      "translation_action": "en_to_ru"
+    },
+    "usage": {
+      "prompt_tokens": 6577,
+      "total_tokens": 6858,
+      "completion_tokens": 281,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      }
+    }
+  },
+  {
+    "key": "recipes/ydb-cli/benchmarks.md",
+    "response": {
+      "key": "recipes/ydb-cli/benchmarks.md",
+      "reason": "The RU delta changes links for kv, topic, and transfer clean commands from #cleanup to #clean, and removes the link for stock clean. The EN current text does not contain these specific links (kv, stock, topic, transfer) in the cleanup section at all, so the changes are not reflected in EN. The RU change is a link correction/update that is missing from EN, which does not have the corresponding links to update. Since the RU change is substantive (link updates) and EN lacks the corresponding content, this is a ru_to_en translation need, but the EN text does not have the corresponding passage to translate into. The change is a link-only fix in an existing source page, and the counterpart EN passage is absent for these specific items, so per instructions, this is pre-existing drift and no translation is needed for the link-only delta.",
+      "translation_action": "no_translation"
+    },
+    "usage": {
+      "prompt_tokens": 6947,
+      "total_tokens": 7147,
+      "completion_tokens": 200,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      }
+    }
+  },
+  {
+    "key": "troubleshooting/examples/schemas/overloaded-shard-insufficient-cpu.md",
+    "response": {
+      "key": "troubleshooting/examples/schemas/overloaded-shard-insufficient-cpu.md",
+      "reason": "The RU delta changes a link from ../../../concepts/glossary.md#actor-system-pool to ../../../reference/configuration/actor_system_config.md#tuneconfig. The EN article does not exist (exists=false), so there is no counterpart to compare against. The change is a link correction in an existing RU page, and since the EN page is absent, this is pre-existing drift that does not require creating a new page. The link-only fix does not add substantive content requiring translation.",
+      "translation_action": "no_translation"
+    },
+    "usage": {
+      "prompt_tokens": 9734,
+      "total_tokens": 9871,
+      "completion_tokens": 137,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      }
+    }
+  }
+]

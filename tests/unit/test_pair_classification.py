@@ -111,7 +111,7 @@ def test_need_context_retries_once_then_preserves_checkpoint():
     result = pc.classify_pairs(files, (pair,), BEFORE, AFTER, "model", invoke)
     assert result[0].action == "need_context"
     assert len(requests) == 2
-    assert "expanded_sections" in requests[1].prompt
+    assert "expanded_articles" in requests[1].prompt
 
 
 def test_oversized_indivisible_block_is_checkpoint_not_truncated_model_input():
@@ -527,3 +527,89 @@ def test_new_reason_first_response_preserves_semantic_decision():
     )
     assert result.action == "no_translation"
     assert result.reason == "Already synchronized"
+
+
+def test_context_retry_includes_shorter_counterpart_even_without_matching_links():
+    prefix = b'# RU\n\n' + b'Paragraph.\n\n' * 30
+    en = b'# Benchmarks\n\n## Cleanup {#cleanup}\n\n[tpcc clean](tpcc.md#cleanup)\n'
+    files, pair = fixture(prefix + b'[kv](kv.md#cleanup)',
+                          prefix + b'[kv](kv.md#clean)', en, en)
+    requests = []
+
+    def invoke(request):
+        requests.append(request)
+        return response('need_context' if len(requests) == 1 else 'no_translation')
+
+    pc.classify_pairs(files, (pair,), BEFORE, AFTER, 'model', invoke)
+    evidence = json.loads(requests[1].prompt.split('Pair evidence: ', 1)[1])
+    assert evidence['en']['complete_current'] is True
+    assert '[tpcc clean]' in evidence['en']['current_text']
+    assert len(requests) == 2
+
+
+def test_oversized_article_retry_uses_whole_matching_section_not_ordinal():
+    ru = b'# RU\n\n## Cleanup {#cleanup}\n\n[run](kv.md#old)\n'
+    en = (b'# EN\n\n## Wrong positional section\n\n' + b'x' * 270000
+          + b'\n\n## Cleanup {#cleanup}\n\n[run](kv.md#clean)\n\nTail of section.\n')
+    files, pair = fixture(ru, ru.replace(b'#old', b'#clean'), en, en)
+    request = pc.pair_request(files, pair, BEFORE, AFTER, 'model', expanded=True)
+    evidence = json.loads(request.prompt.split('Pair evidence: ', 1)[1])
+    blocks = evidence['en']['current_blocks']
+    assert any(b['text'] == 'Tail of section.' for b in blocks)
+    assert not any('Wrong positional section' in b['text'] for b in blocks)
+    assert evidence['en']['complete_current'] is False
+
+
+def test_no_matching_section_does_not_send_empty_context_retry():
+    ru = b'# RU\n\n' + b'Paragraph.\n\n' * 30
+    en = b'# EN\n\n' + b'x' * 270000
+    files, pair = fixture(ru + b'[kv](kv.md#old)', ru + b'[kv](kv.md#new)', en, en)
+    requests = []
+
+    def invoke(request):
+        requests.append(request)
+        return response('need_context')
+
+    result = pc.classify_pairs(files, (pair,), BEFORE, AFTER, 'model', invoke)
+    assert len(requests) == 1
+    assert result[0].action == 'need_context'
+    assert 'section' in result[0].reason.lower()
+
+
+def test_absent_counterpart_is_not_a_new_page():
+    files, pair = fixture(b'[x](old.md)', b'[x](new.md)', None, None)
+    request = pc.pair_request(files, pair, BEFORE, AFTER, 'model', expanded=True)
+    evidence = json.loads(request.prompt.split('Pair evidence: ', 1)[1])
+    assert evidence['en']['exists'] is False
+    assert evidence['en']['new_page'] is False
+
+
+def test_one_matched_change_cannot_hide_an_unmatched_change_in_large_article():
+    old = b'# RU\n\n## A {#a}\n\nUse `known` old.\n\n## B {#b}\n\nOld prose.\n'
+    new = old.replace(b'old.', b'new.').replace(b'Old prose.', b'New prose.')
+    en = (b'# EN\n\n## Huge\n\n' + b'x' * 270000
+          + b'\n\n## A {#a}\n\nUse `known`.\n\n## Different title\n\nEnglish prose.\n')
+    files, pair = fixture(old, new, en, en)
+    with pytest.raises(pc.CounterpartSectionMissing):
+        pc.pair_request(files, pair, BEFORE, AFTER, 'model', expanded=True)
+
+
+def test_whole_article_retry_contains_contiguous_current_text():
+    old = b'# Source\n\nOld.\n\n## Other\n\nSource tail.'
+    new = old.replace(b'Old.', b'New.')
+    en = b'# Target\n\nText.\n\n## Other\n\nTarget tail.'
+    files, pair = fixture(old, new, en, en)
+    req = pc.pair_request(files, pair, BEFORE, AFTER, 'model', expanded=True)
+    evidence = json.loads(req.prompt.split('Pair evidence: ', 1)[1])
+    assert evidence['ru']['current_text'] == new.decode()
+    assert evidence['en']['current_text'] == en.decode()
+
+
+def test_matching_parent_section_keeps_nested_subsections():
+    old = b'# RU\n\n## Source parent\n\nUse `cmd` old.\n'
+    en = (b'# EN\n\n## Huge\n\n' + b'x' * 270000
+          + b'\n\n## Target parent\n\nUse `cmd`.\n\n### Target child\n\nImportant child condition.\n')
+    files, pair = fixture(old, old.replace(b'old.', b'new.'), en, en)
+    req = pc.pair_request(files, pair, BEFORE, AFTER, 'model', expanded=True)
+    evidence = json.loads(req.prompt.split('Pair evidence: ', 1)[1])
+    assert any(b['text'] == 'Important child condition.' for b in evidence['en']['current_blocks'])
