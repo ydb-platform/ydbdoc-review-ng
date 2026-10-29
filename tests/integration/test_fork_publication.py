@@ -44,7 +44,7 @@ def test_translate_uses_fork_for_all_git_mutations_and_keeps_pr_upstream():
     assert git_writes and all(p.startswith(FORK) for _,p,_ in git_writes)
     pulls = [(p,b) for m,p,b in services.wire if m == "POST" and p.endswith("/pulls")]
     assert pulls[0][0] == UPSTREAM + "/pulls"
-    assert pulls[0][1]["head"] == "sintjuri:translation/pr-42"
+    assert pulls[0][1]["head"] == "sintjuri:robots/translation/pr-42"
     assert any(p.startswith(FORK + "/contents/") for _,p,_ in services.wire)
 
 
@@ -57,7 +57,7 @@ def test_verify_accepts_only_configured_fork_and_freezes_fork_target():
     source.snapshot_verify(auth)
     assert source.metadata_snapshot.repository.value == "sintjuri/ydb"
     assert ("GET", UPSTREAM + "/git/ref/heads/main", None) in services.wire
-    assert any(p == FORK + "/git/ref/heads/translation/pr-42" for _,p,_ in services.wire)
+    assert any(p == FORK + "/git/ref/heads/robots/translation/pr-42" for _,p,_ in services.wire)
 
 
 def test_read_same_path_and_sha_from_explicit_source_and_target_repositories():
@@ -86,11 +86,11 @@ def test_continue_checks_fork_identity_and_reads_fork_branch():
             value["number"] = 43
         return value
     checkpoint = SimpleNamespace(source_pr=42, source_sha=GitSha(services.source),
-        target_sha=GitSha(services.translated), translation_branch="translation/pr-42")
+        target_sha=GitSha(services.translated), translation_branch="robots/translation/pr-42")
     reader = SimpleNamespace(load_checkpoint=lambda *args, **kwargs: checkpoint)
     backend = GitHubBackend(transport, publication_repository="sintjuri/ydb")
     assert resolve_continue_checkpoint(backend, reader, 43, now=datetime.now(UTC)) is checkpoint
-    assert any(p == FORK + "/git/ref/heads/translation/pr-42" for _,p,_ in services.wire)
+    assert any(p == FORK + "/git/ref/heads/robots/translation/pr-42" for _,p,_ in services.wire)
 
 
 def test_deployed_action_publishes_to_upstream():
@@ -113,4 +113,4 @@ def test_deployed_action_publishes_to_upstream():
     assert writes and all(p.startswith(UPSTREAM + "/") for p, _ in writes)
     assert not any(p.startswith(FORK + "/") for _, p, _ in wire)
     assert any(m == "POST" and p == UPSTREAM + "/pulls"
-               and b["head"] == "translation/pr-42" for m, p, b in wire)
+               and b["head"] == "robots/translation/pr-42" for m, p, b in wire)

@@ -406,7 +406,7 @@ def test_fresh_translate_deletes_previous_branch_and_closes_open_checkpoints():
     assert result.verdict is Verdict.GREEN
     assert services.rows[saved.continuation_id]["status"] == "closed"
     assert any(
-        method == "DELETE" and "/git/refs/heads/translation" in path
+        method == "DELETE" and "/git/refs/heads/robots/translation" in path
         for method, path in services.events
     )
 

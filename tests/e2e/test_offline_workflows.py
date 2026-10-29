@@ -66,7 +66,7 @@ MULTILANGUAGE_FIXTURE = FIXTURES / "e2e/multilanguage.md"
 PR_51079_SHA = "5aab6d0e65926540eff571d03a018a492face7e1"
 REAL_FIXTURE_SHA256 = "d13d910ccaefec0eab57c927317caa5f863081455a6a2371192a57443548a80b"
 NOW = datetime(2026, 9, 21, 12, tzinfo=UTC)
-BRANCH = "translation/pr-42"
+BRANCH = "robots/translation/pr-42"
 MODEL = "offline-model"
 
 

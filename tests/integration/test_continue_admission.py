@@ -71,7 +71,7 @@ class AdmissionServices:
             42: {
                 "number": 42,
                 "body": "source PR",
-                "head": {"ref": "translation/pr-999", "sha": SOURCE_SHA, "repo": repo},
+                "head": {"ref": "robots/translation/pr-999", "sha": SOURCE_SHA, "repo": repo},
                 "base": {"ref": "main", "repo": repo},
             },
             52: {
@@ -260,7 +260,7 @@ def test_rejection_is_read_only_and_never_echoes_operator_context(services, faul
     elif fault == "partial_provenance":
         services.prs[52]["body"] = "<!-- ydbdoc-source-pr:42 -->"
     elif fault == "wrong_branch":
-        services.prs[52]["head"]["ref"] = "translation/pr-42"
+        services.prs[52]["head"]["ref"] = "robots/translation/pr-42"
     elif fault == "foreign_head":
         services.prs[52]["head"]["repo"] = {"full_name": "outsider/ydb"}
     elif fault == "foreign_base":

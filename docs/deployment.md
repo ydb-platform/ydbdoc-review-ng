@@ -46,7 +46,7 @@ rendered as zero.
 
 PR/base metadata resolves immutable SHAs; a changing PR inventory is rejected.
 Old merged PRs translate the pinned current base. No checkout, hooks or source
-repository code runs. CI creates branches `translation/pr-N` and Git objects in
+repository code runs. CI creates branches `robots/translation/pr-N` and Git objects in
 `ydb-platform/ydb`, using the source PR base. PRs, source/target reads and
 comments use the same repository. The consumer's `github.token` supplies its
 configured contents/PR/issues permissions. Fork publication remains an optional

@@ -244,3 +244,19 @@ upstream head lookup, поэтому PR57400 больше не нужен. Во�
 Проверка upstream restore:56focused passed, полный suite2380passed272baselinefailed7deselected. Review без blockers. PR57400 закрыт без слияния.
 
 Поставка upstream restore:009a090 в main/v1.0.1. CI53925:https://github.com/ydb-platform/ydb/actions/runs/40835498090, при записи:in_progress.
+
+Проверка CI40835498090: перевод пяти документов завершён, GitHub принял объекты и коммит, но отклонил создание ветки translation/pr-53925. API проверки правил ветки подтвердил ruleset25886992 Restrict branch creation, созданный26октября. В исключениях есть robots/**/*, но нет translation/*. Предложен разрешённый префикс robots/translation/pr-N с обновлением runtime и consumer. Правила GitHub и код не менялись.
+
+### Разрешённый namespace CI
+
+Новые переводы создают robots/translation/pr-N в ydb-platform/ydb, что
+соответствует исключению robots/**/* в ruleset25886992. Consumer должен искать
+PR по этому head. Verify получает фактический head из PR, continue из checkpoint:
+старые translation/pr-N по-прежнему читаются, автоматически не переименовываются.
+Fresh translate сбрасывает только новую robots-ветку и её checkpoints.
+
+Consumer PR:https://github.com/ydb-platform/ydb/pull/57415 меняет поиск head на
+robots/translation/pr-N. Verify/continue/policy workflows проверены, старого
+префикса в них нет.75focused passed,full2380passed272baselinefailed7deselected,
+review без blockers. До принятия consumer PR автоматическое ok-to-test не найдёт
+новую ветку; публикация runtime от этого не зависит.

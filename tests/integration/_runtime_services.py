@@ -268,7 +268,7 @@ class RuntimeServices:
                 "changed_files": len([name for name in self.files if name.startswith("ydb/docs/en/")]),
                 "head": {
                     "sha": self.translated,
-                    "ref": "translation/pr-42",
+                    "ref": "robots/translation/pr-42",
                     "repo": {"full_name": "ydb-platform/ydb"},
                 },
                 "base": {
@@ -287,9 +287,9 @@ class RuntimeServices:
                     if name.startswith("ydb/docs/en/")]
         if path == "/git/ref/heads/main":
             return {"object": {"sha": self.base}}
-        if path.startswith("/git/ref/heads/translation"):
+        if path.startswith("/git/ref/heads/robots/translation"):
             return None if self.branch_head is None else {"object": {"sha": self.branch_head}}
-        if method == "DELETE" and path.startswith("/git/refs/heads/translation"):
+        if method == "DELETE" and path.startswith("/git/refs/heads/robots/translation"):
             self.branch_head = None
             return None
         if method == "DELETE" and "/labels/" in path:

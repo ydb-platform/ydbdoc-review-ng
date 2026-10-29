@@ -251,7 +251,7 @@ class RuntimeSource:
         self._authorize()
         self.github.remove_label(request.pr_number, Mode.DOC_TRANSLATE.value)
         return AuthorizedRun(
-            Mode.DOC_TRANSLATE, f"translation/pr-{request.pr_number}", None, request
+            Mode.DOC_TRANSLATE, f"robots/translation/pr-{request.pr_number}", None, request
         )
 
     def authorize_continue(

@@ -1785,7 +1785,7 @@ def test_github_backend_commits_exact_bytes_and_rejects_changed_head() -> None:
 
     backend = GitHubBackend(transport)
     context = PublicationContext(
-        "ydb-platform/ydb", "translation/pr-42", "main", "main", GitSha("a" * 40)
+        "ydb-platform/ydb", "robots/translation/pr-42", "main", "main", GitSha("a" * 40)
     )
     plan = PublicationPlan((FileChange(RepoPath("en/page.md"), b"old", b"new"),), ())
     sha = backend.commit(context, plan)

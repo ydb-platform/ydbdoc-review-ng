@@ -426,7 +426,7 @@ calls. Иначе job идёт целиком, даже если сама пер
 
 ## 7. Публикация и отчёт
 
-- CI публикует ветку `translation/pr-N`, Git-объекты и PR в `ydb-platform/ydb`.
+- CI публикует ветку `robots/translation/pr-N`, Git-объекты и PR в `ydb-platform/ydb`.
   Base = base source PR. Source/base и target читаются из той же репы.
   Verify и continue проверяют head repository.
 - В ветку уходят только файлы, прошедшие publication gates (§2.3). Полу-EN

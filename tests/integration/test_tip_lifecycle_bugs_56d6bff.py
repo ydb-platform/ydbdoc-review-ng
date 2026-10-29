@@ -282,7 +282,7 @@ def test_stale_unmarked_aktualny_is_updated_on_next_translation_link() -> None:
     commit = GitSha("c" * 40)
     context = PublicationContext(
         "ydb-platform/ydb",
-        "translation/pr-42",
+        "robots/translation/pr-42",
         "main",
         "main",
         commit,
