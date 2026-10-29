@@ -426,11 +426,9 @@ calls. Иначе job идёт целиком, даже если сама пер
 
 ## 7. Публикация и отчёт
 
-- Ветка `translation/pr-N` и Git-объекты публикуются в `sintjuri/ydb`.
-  PR открывается в `ydb-platform/ydb`, base = base source PR из upstream.
-  Source/base читаются из upstream, опубликованный target из fork.
-  Verify и continue проверяют head repository. Старые upstream ветки
-  автоматически не переносятся и не удаляются.
+- CI публикует ветку `translation/pr-N`, Git-объекты и PR в `ydb-platform/ydb`.
+  Base = base source PR. Source/base и target читаются из той же репы.
+  Verify и continue проверяют head repository.
 - В ветку уходят только файлы, прошедшие publication gates (§2.3). Полу-EN
   с кириллицей / split-backtick / битыми include **не** публикуется.
   Success job — arbiter GREEN/YELLOW на этих bytes.

@@ -58,7 +58,7 @@ runs:
         BUDGET_RUB: ${{ inputs.budget-rub }}
         YDBDOC_GITHUB_READ_TOKEN: ${{ github.token }}
         YDBDOC_RUNTIME_FACTORY: ydbdoc_review_ng.runtime:create_runtime
-        YDBDOC_PUBLICATION_REPOSITORY: sintjuri/ydb
+        YDBDOC_PUBLICATION_REPOSITORY: ydb-platform/ydb
         YDBDOC_ACTION_PATH: ${{ github.action_path }}
       run: |
         # Credentials remain environment references, never shell arguments.

@@ -218,3 +218,27 @@ blockers. Checkpoint fixtures теперь используют invalid model re
 semantic ambiguity, которая больше не должна останавливать перевод.
 
 Поставка fallback:00a9e26 опубликован main/v1.0.1. Новый запуск53925:https://github.com/ydb-platform/ydb/actions/runs/40832048376, при записи:in_progress.
+
+### Результат CI40832048376
+
+Запуск https://github.com/ydb-platform/ydb/actions/runs/40832048376 завершился
+failure на publish 2026-10-29 07:05:49UTC. Audit
+aee8ca60-199e-4ef2-a9ed-4a07e9f7ff6a:error=publish_failed.
+111пар:108no_translation,2en_to_ru (datashard-locks-and-change-visibility.md,
+explain-plan.md),1ru_to_en (hive.md). Конфликтов/need_context нет, три документа
+прошли translation/document status=ok. Сбой первого POST
+/repos/sintjuri/ydb/git/blobs:github_request_failed. До semantic review не дошло.
+Consumer по-прежнему передаёт github.token, ограниченный upstream. PR57400
+остаётся OPEN, mergedAt=null; в нём переключение на YDBDOC_PUSH_PAT и fork head.
+Фактические права существующего секрета YDBDOC_PUSH_PAT пока не проверены.
+
+### Возврат публикации CI в upstream
+
+Пользователь изменил hook; developer-инструкция теперь явно разрешает ветки
+из CI в ydb-platform/ydb. Action снова явно задаёт publication repository
+`ydb-platform/ydb` для всех режимов. Consumer уже использует github.token и
+upstream head lookup, поэтому PR57400 больше не нужен. Возможность отдельно
+настроить fork в runtime сохранена. Интеграционный тест берёт env из action
+и проверяет реальные Git write paths и PR head на fake transport.
+
+Проверка upstream restore:56focused passed, полный suite2380passed272baselinefailed7deselected. Review без blockers. PR57400 закрыт без слияния.

@@ -93,10 +93,24 @@ def test_continue_checks_fork_identity_and_reads_fork_branch():
     assert any(p == FORK + "/git/ref/heads/translation/pr-42" for _,p,_ in services.wire)
 
 
-def test_deployed_action_selects_fork_for_every_runtime_mode():
+def test_deployed_action_publishes_to_upstream():
     from pathlib import Path
 
     import yaml
     action = yaml.safe_load((Path(__file__).parents[2] / ".github/actions/doc-review/action.yml").read_text())
     step = next(s for s in action["runs"]["steps"] if "-m ydbdoc_review_ng.cli" in s.get("run", ""))
-    assert step["env"]["YDBDOC_PUBLICATION_REPOSITORY"] == "sintjuri/ydb"
+    services = RuntimeServices()
+    wire = []
+    def transport(method, path, payload):
+        wire.append((method, path, payload))
+        return services.github(method, path, payload)
+    env = {**ENV, "YDBDOC_PUBLICATION_REPOSITORY": step["env"]["YDBDOC_PUBLICATION_REPOSITORY"]}
+    result = create_runtime(environment=env, ydb_executor=services,
+        github_transport=transport, model_transport=services.model).doc_translate(
+            TranslateWorkflowInput(42, GitSha(services.source), Decimal(10)))
+    assert result.verdict.value == "GREEN"
+    writes = [(p, b) for m, p, b in wire if m != "GET" and "/git/" in p]
+    assert writes and all(p.startswith(UPSTREAM + "/") for p, _ in writes)
+    assert not any(p.startswith(FORK + "/") for _, p, _ in wire)
+    assert any(m == "POST" and p == UPSTREAM + "/pulls"
+               and b["head"] == "translation/pr-42" for m, p, b in wire)
