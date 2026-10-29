@@ -46,7 +46,7 @@ from ydbdoc_review_ng.direction import (
     inventory_request,
     parse_inventory_response,
 )
-from ydbdoc_review_ng.domain import FilePair, GitSha, Locale, Mode, ModelRole, RepoPath, SnapshotRef
+from ydbdoc_review_ng.domain import FilePair, GitSha, Locale, Mode, ModelRole, RepoPath, RepositoryId, SnapshotRef
 from ydbdoc_review_ng.links import (
     LinkDestinationResolver,
     WikipediaLanglinks,
@@ -875,7 +875,7 @@ class RuntimeContent:
             RepoPath(f"{source_root.value}/concepts/glossary.md"),
         )
         target_snapshot = SnapshotRef(
-            plans.preparation.snapshots.source_snapshot.repository,
+            plans.preparation.metadata_snapshot.repository,
             plans.preparation.metadata_snapshot.commit_sha,
         )
         target_glossary = self.source.github.read_bytes(
@@ -886,6 +886,12 @@ class RuntimeContent:
             document.source.decode("utf-8") if source_text is None else source_text,
             source_glossary,
             target_glossary,
+        )
+
+    def _publication_snapshot(self, sha: GitSha) -> SnapshotRef:
+        repository = self.source.snapshots.source_snapshot.repository
+        return SnapshotRef(
+            RepositoryId(getattr(self.source.github, "publication_repository", repository.value)), sha
         )
 
     def _link_resolver(
@@ -920,7 +926,7 @@ class RuntimeContent:
         plans = self.plans
         if plans is not None:
             target_snapshot = SnapshotRef(
-                plans.preparation.snapshots.source_snapshot.repository,
+                plans.preparation.metadata_snapshot.repository,
                 plans.preparation.metadata_snapshot.commit_sha,
             )
             for destination in destinations:
@@ -1783,7 +1789,7 @@ class RuntimeContent:
         )
         documents = []
         target_snapshot = SnapshotRef(
-            snapshots.source_snapshot.repository, preparation.metadata_snapshot.commit_sha
+            preparation.metadata_snapshot.repository, preparation.metadata_snapshot.commit_sha
         )
         for entry in self.entries:
             path = entry.pair.target_path
@@ -2069,9 +2075,7 @@ class RuntimeContent:
             # candidate. Target branch owns accepted document bytes in v3.
             if self.source.github.head(checkpoint.translation_branch) != checkpoint.target_sha:
                 raise RuntimeBoundaryError("continue_translation_head_mismatch")
-            published = SnapshotRef(
-                plans.preparation.snapshots.source_snapshot.repository, checkpoint.target_sha
-            )
+            published = self._publication_snapshot(checkpoint.target_sha)
             candidate = self.assemble_documents(
                 plans, replay.accepted_documents, replay.accepted_maps
             )
@@ -2952,7 +2956,7 @@ class RuntimeContent:
         # target tree (in-flight overlay plus already-present target snapshot files).
         available = {path for path, value in files.items() if value is not None}
         base_snapshot = SnapshotRef(
-            plans.preparation.snapshots.source_snapshot.repository,
+            plans.preparation.metadata_snapshot.repository,
             plans.preparation.metadata_snapshot.commit_sha,
         )
 
@@ -3070,7 +3074,7 @@ class RuntimeContent:
             if type(published) is PublicationContext
             else self.source.context.current_head
         )
-        target = SnapshotRef(self.source.snapshots.source_snapshot.repository, head)
+        target = self._publication_snapshot(head)
         publishable_nulls = self._publishable_null_paths()
         return PublicationPlan(
             tuple(
@@ -3462,9 +3466,7 @@ class RuntimeContent:
         if target_sha is not None and self.source.github.head(snapshot.branch) != target_sha:
             raise RuntimeBoundaryError("review_checkpoint_head_mismatch")
         if target_sha is not None:
-            published = SnapshotRef(
-                plans.preparation.snapshots.source_snapshot.repository, target_sha
-            )
+            published = self._publication_snapshot(target_sha)
             for path, content in unpack(review.final_candidate).items():
                 # Pending/unreviewed null means "not assembled", not a Git deletion (§5.1).
                 if content is None:

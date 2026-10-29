@@ -14,3 +14,5 @@
 8. Docs-only контрактные коммиты (как tool-critic plan) тоже push в `public`
    с `YDB_GH_TOKEN` и cleared `credential.helper`; runtime loop — отдельная
    фаза после independent review.
+
+Fork publisher и условия запуска: [2026-10-29](fork-publication-2026-10-29.md).

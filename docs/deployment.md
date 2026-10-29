@@ -12,7 +12,8 @@ and `ydb_executor`. No separate deployment Python module must be authored.
 |---|---|
 | `GITHUB_ACTOR` | Authenticated runner identity for translate/verify. Continue authorizes the actual label actor from issue events and the comment author. |
 | `YDBDOC_ALLOWED_ACTORS` | Comma/whitespace separated exact logins. Empty denies all. |
-| `YDB_GH_TOKEN`, fallback `GH_TOKEN` | Project token takes precedence. Contents/PR write and checks read in `ydb-platform/ydb`. |
+| `YDB_GH_TOKEN`, fallback `GH_TOKEN` | Project token takes precedence. Contents write in `sintjuri/ydb`; PR/issues write and checks read in `ydb-platform/ydb`. |
+| `YDBDOC_PUBLICATION_REPOSITORY` | Git objects and translation branches repository. The deployed action sets `sintjuri/ydb`; direct invocations must set the same value. Without it, the generic runtime retains its legacy same-repository behavior. |
 | `YANDEX_API_KEY`, `YANDEX_FOLDER_ID` | Native Yandex model credentials. |
 | `YDBDOC_MODEL` | Optional translation model name, default `deepseek-v4-flash`. DeepSeek uses the Yandex Cloud OpenAI-compatible endpoint. |
 | `YDBDOC_MODEL_CRITIC` | Semantic critic-editor, default `yandexgpt-5.1`, independently selected from the translator. |
@@ -45,8 +46,14 @@ rendered as zero.
 
 PR/base metadata resolves immutable SHAs; a changing PR inventory is rejected.
 Old merged PRs translate the pinned current base. No checkout, hooks or source
-repository code runs. Branches are `translation/pr-N` in `ydb-platform/ydb`
-using the source PR base. PR body markers bind source PR and source SHA.
+repository code runs. Branches are `translation/pr-N` in `sintjuri/ydb`, using the source PR base
+from `ydb-platform/ydb`. Translation PRs open in `ydb-platform/ydb` with
+`head=sintjuri:translation/pr-N`. Before the first Git mutation, the runtime
+checks that the publication repository belongs to the upstream fork network.
+Source/base reads and comments stay upstream; published content reads, ref
+updates and branch resets use the fork. Verify and continue validate that fork
+identity. Old upstream translation branches are not deleted or migrated; start
+a fresh `doc_translate` to replace an old upstream checkpoint. PR body markers bind source PR and source SHA.
 Verify requires those markers and the exact current translation head.
 Each fresh translate run creates its first commit directly on the pinned base
 snapshot. If the translation branch already exists, the runtime replaces only

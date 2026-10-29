@@ -216,8 +216,14 @@ class GitHubBackend:
     repository = "ydb-platform/ydb"
     prefix = "/repos/ydb-platform/ydb"
 
-    def __init__(self, transport: JsonTransport) -> None:
+    def __init__(
+        self, transport: JsonTransport, *, publication_repository: str | None = None
+    ) -> None:
         self.transport = transport
+        self.publication_repository = publication_repository or self.repository
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", self.publication_repository):
+            raise RuntimeBoundaryError("publication_repository_invalid")
+        self._publication_validated = self.publication_repository == self.repository
         self.source_pr: int | None = None
         self.source_sha: GitSha | None = None
         self._content_cache: dict[tuple[SnapshotRef, RepoPath], bytes | None] = {}
@@ -225,6 +231,19 @@ class GitHubBackend:
 
     def request(self, method: str, path: str, payload: object = None) -> Any:
         return self.transport(method, self.prefix + path, payload)
+
+    def publication_request(self, method: str, path: str, payload: object = None) -> Any:
+        if method != "GET" and not self._publication_validated:
+            fork = self.transport("GET", "/repos/" + self.publication_repository, None)
+            if (not isinstance(fork, dict) or fork.get("fork") is not True
+                    or fork.get("source", {}).get("full_name") != self.repository):
+                raise RuntimeBoundaryError("publication_fork_mismatch")
+            self._publication_validated = True
+        return self.transport(method, "/repos/" + self.publication_repository + path, payload)
+
+    def base_head(self, branch: str) -> GitSha | None:
+        data = self.request("GET", "/git/ref/heads/" + urllib.parse.quote(branch, safe="/"))
+        return None if data is None else GitSha(data["object"]["sha"])
 
     def read_issue_events(self, pr_number: int, /) -> tuple[IssueEvent, ...]:
         """Read one complete page, retaining the actual actor and event time."""
@@ -297,12 +316,13 @@ class GitHubBackend:
             raise RuntimeBoundaryError("pull_request_identity_invalid") from None
 
     def read_bytes(self, snapshot: SnapshotRef, path: RepoPath, /) -> bytes | None:
-        if snapshot.repository.value != self.repository:
+        if snapshot.repository.value not in {self.repository, self.publication_repository}:
             raise RuntimeBoundaryError("repository_mismatch")
         key = (snapshot, path)
         if key in self._content_cache:
             return self._content_cache[key]
-        data = self.request(
+        reader = self.publication_request if snapshot.repository.value == self.publication_repository else self.request
+        data = reader(
             "GET",
             "/contents/"
             + urllib.parse.quote(path.value, safe="/")
@@ -331,14 +351,14 @@ class GitHubBackend:
         return content
 
     def head(self, branch: str) -> GitSha | None:
-        data = self.request("GET", "/git/ref/heads/" + urllib.parse.quote(branch, safe="/"))
+        data = self.publication_request("GET", "/git/ref/heads/" + urllib.parse.quote(branch, safe="/"))
         return None if data is None else GitSha(data["object"]["sha"])
 
     def delete_branch(self, branch: str) -> None:
         """Delete a remote branch ref. Missing refs are a successful no-op (§5.1)."""
         if self.head(branch) is None:
             return
-        self.request("DELETE", "/git/refs/heads/" + urllib.parse.quote(branch, safe="/"))
+        self.publication_request("DELETE", "/git/refs/heads/" + urllib.parse.quote(branch, safe="/"))
 
     def remove_label(self, pr_number: int, label: str) -> None:
         """Drop an accepted trigger label. Missing labels are a successful no-op (§0).
@@ -352,14 +372,14 @@ class GitHubBackend:
     def commit(self, context: PublicationContext, plan: PublicationPlan, /) -> GitSha:
         if plan.metadata:
             raise RuntimeBoundaryError("metadata_must_be_materialized_before_validation")
-        parent = self.request("GET", "/git/commits/" + context.current_head.value)
+        parent = self.publication_request("GET", "/git/commits/" + context.current_head.value)
         tree = []
         for change in plan.files:
             if change.before == change.after:
                 continue
             blob = None
             if change.after is not None:
-                blob = self.request(
+                blob = self.publication_request(
                     "POST",
                     "/git/blobs",
                     {
@@ -368,10 +388,10 @@ class GitHubBackend:
                     },
                 )["sha"]
             tree.append({"path": change.path.value, "mode": "100644", "type": "blob", "sha": blob})
-        tree_sha = self.request(
+        tree_sha = self.publication_request(
             "POST", "/git/trees", {"base_tree": parent["tree"]["sha"], "tree": tree}
         )["sha"]
-        result = self.request(
+        result = self.publication_request(
             "POST",
             "/git/commits",
             {
@@ -390,13 +410,13 @@ class GitHubBackend:
                 raise RuntimeBoundaryError("head_disappeared")
             if current is not None:
                 raise RuntimeBoundaryError("head_changed")
-            self.request(
+            self.publication_request(
                 "POST", "/git/refs", {"ref": "refs/heads/" + context.branch, "sha": sha.value}
             )
         elif current != expected:
             raise RuntimeBoundaryError("head_changed")
         else:
-            self.request(
+            self.publication_request(
                 "PATCH",
                 "/git/refs/heads/" + urllib.parse.quote(context.branch, safe="/"),
                 {"sha": sha.value, "force": expected != context.current_head},
@@ -406,7 +426,7 @@ class GitHubBackend:
         if repository != self.repository:
             raise RuntimeBoundaryError("repository_mismatch")
         query = urllib.parse.urlencode(
-            {"state": "open", "head": "ydb-platform:" + branch, "base": base, "per_page": 100}
+            {"state": "open", "head": self.publication_repository.split("/")[0] + ":" + branch, "base": base, "per_page": 100}
         )
         matches = self.request("GET", "/pulls?" + query)
         if len(matches) > 1:
@@ -419,7 +439,7 @@ class GitHubBackend:
             "/pulls",
             {
                 "title": f"PR #{self.source_pr} translation",
-                "head": context.branch,
+                "head": (context.branch if self.publication_repository == self.repository else self.publication_repository.split("/")[0] + ":" + context.branch),
                 "base": context.base,
                 "body": f"<!-- ydbdoc-source-pr:{self.source_pr} -->\n"
                 f"<!-- ydbdoc-source-sha:{self.source_sha.value if self.source_sha else ''} -->\n",

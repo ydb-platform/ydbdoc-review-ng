@@ -19,7 +19,7 @@ from ydbdoc_review_ng.continuation import (
     checkpoint_scope_sha256,
     validate_restored_documents,
 )
-from ydbdoc_review_ng.domain import GitSha, RepoPath, SnapshotRef
+from ydbdoc_review_ng.domain import GitSha, RepoPath
 from ydbdoc_review_ng.persistence import ContinuationCheckpoint
 from ydbdoc_review_ng.runtime_github import GitHubBackend, RuntimeBoundaryError
 from ydbdoc_review_ng.scope import FileOperation
@@ -88,7 +88,7 @@ def _load_accepted_from_branch(
     target_sha: GitSha,
     paths: set[RepoPath],
 ) -> tuple[AcceptedDocument, ...]:
-    published = SnapshotRef(plans.preparation.snapshots.source_snapshot.repository, target_sha)
+    published = content._publication_snapshot(target_sha)
     accepted: list[AcceptedDocument] = []
     for path in sorted(paths, key=lambda item: item.value):
         # Assets/binaries stay in plans.fixed_files by path/bytes. Only Markdown and
@@ -304,7 +304,7 @@ def resolve_continue_checkpoint(
         raise RuntimeBoundaryError("continue_source_identity_mismatch")
     if provenance is not None and (
         source_pr == pr_number
-        or pr.head_repository != github.repository
+        or pr.head_repository != github.publication_repository
         or provenance.source_sha != checkpoint.source_sha
         or pr.head_branch != checkpoint.translation_branch
         or pr.head_sha != checkpoint.target_sha

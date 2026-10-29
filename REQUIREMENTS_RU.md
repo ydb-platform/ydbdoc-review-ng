@@ -410,7 +410,11 @@ calls. Иначе job идёт целиком, даже если сама пер
 
 ## 7. Публикация и отчёт
 
-- Репозиторий `ydb-platform/ydb`, base = base source PR.
+- Ветка `translation/pr-N` и Git-объекты публикуются в `sintjuri/ydb`.
+  PR открывается в `ydb-platform/ydb`, base = base source PR из upstream.
+  Source/base читаются из upstream, опубликованный target из fork.
+  Verify и continue проверяют head repository. Старые upstream ветки
+  автоматически не переносятся и не удаляются.
 - В ветку уходят только файлы, прошедшие publication gates (§2.3). Полу-EN
   с кириллицей / split-backtick / битыми include **не** публикуется.
   Success job — arbiter GREEN/YELLOW на этих bytes.

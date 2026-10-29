@@ -273,7 +273,7 @@ class RuntimeSource:
         self._authorize()
         pr = self.github.request("GET", f"/pulls/{request.pr_number}")
         if (
-            pr["head"]["repo"]["full_name"] != self.github.repository
+            pr["head"]["repo"]["full_name"] != self.github.publication_repository
             or pr["head"]["sha"] != request.target_sha.value
         ):
             raise RuntimeBoundaryError("verification_head_mismatch")
@@ -304,7 +304,7 @@ class RuntimeSource:
         base = BaseBranch(pr["base"]["ref"])
         if expected_base is not None and base.value != expected_base:
             raise RuntimeBoundaryError("base_mismatch")
-        tip = self.github.head(base.value)
+        tip = self.github.base_head(base.value)
         if tip is None:
             raise RuntimeBoundaryError("base_missing")
         repository = RepositoryId(self.github.repository)
@@ -386,7 +386,10 @@ class RuntimeSource:
             publication_parent,
             expected_branch_head=head,
         )
-        self.metadata_snapshot = SnapshotRef(repository, self.context.current_head)
+        self.metadata_snapshot = SnapshotRef(
+            RepositoryId(self.github.publication_repository) if authorization.mode is Mode.DOC_VERIFY else repository,
+            self.context.current_head,
+        )
         self.source_base_snapshot = source_base_snapshot
         self.source_change_snapshot = change_snapshot
         self.source_pr = source_pr
@@ -668,7 +671,8 @@ def create_runtime(
         or GitHubHTTP(
             env.get("YDBDOC_GITHUB_READ_TOKEN", ""),
             env.get("YDB_GH_TOKEN") or env.get("GH_TOKEN", ""),
-        )
+        ),
+        publication_repository=env.get("YDBDOC_PUBLICATION_REPOSITORY"),
     )
     models = RecordedModels(env, persistence, model_transport or UrllibTransport())
     source = RuntimeSource(env, github)

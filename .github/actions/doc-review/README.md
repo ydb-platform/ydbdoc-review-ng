@@ -22,7 +22,8 @@ Final RED returns exit 1 in every mode.
 Inputs use environment variables and quoted shell arguments. Secrets stay in
 environment references. Workflows forward the model/YDB/project-token secrets
 and variables listed in [deployment](../../../docs/deployment.md). They request
-contents/PR write and checks read, checkout only the trusted tool with
+contents write in `sintjuri/ydb`, PR/issues write and checks read in
+`ydb-platform/ydb`, checkout only the trusted tool with
 `persist-credentials: false`, and never checkout source PR code.
 
 Setup/install needs Python/package-index access unless supplied locally. No
@@ -42,3 +43,7 @@ maps and the saved immutable source/base, and rejects a moved translation head.
 The consumer must serialize runs by repository and PR and execute the action from
 a reviewed immutable commit without checking out PR code. Deploy that workflow
 only after the release gate and explicit schema migration described in deployment.
+
+The action sets `YDBDOC_PUBLICATION_REPOSITORY=sintjuri/ydb` for all modes.
+Translation branches and Git objects live in that fork; PRs and comments remain
+in `ydb-platform/ydb`. Set the same variable for direct CLI invocations.

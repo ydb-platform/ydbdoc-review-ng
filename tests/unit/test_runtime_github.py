@@ -408,3 +408,67 @@ def test_content_cache_stops_admitting_entries_at_budget(monkeypatch, budget):
     assert backend.read_bytes(snapshot, path) == b'content'
     assert backend.read_bytes(snapshot, path) == b'content'
     assert len(calls) == 2
+
+
+def test_fork_publication_writes_git_to_fork_and_opens_upstream_pr():
+    from ydbdoc_review_ng.domain import RepoPath
+    from ydbdoc_review_ng.publication import FileChange, PublicationPlan
+    calls = []
+    def transport(method, path, payload):
+        calls.append((method, path, payload))
+        if method == "GET" and path == "/repos/sintjuri/ydb":
+            return {"fork": True, "source": {"full_name": "ydb-platform/ydb"}}
+        if "/git/ref/heads/" in path:
+            return None
+        if "/git/commits/" in path:
+            return {"tree": {"sha": "d" * 40}}
+        if path.endswith(("/git/blobs", "/git/trees")):
+            return {"sha": "e" * 40}
+        if path.endswith("/git/commits"):
+            return {"sha": "c" * 40}
+        if path.endswith("/git/refs"):
+            return {}
+        if path.endswith("/pulls"):
+            return {"number": 43}
+        if "/pulls?" in path:
+            return []
+        raise AssertionError(path)
+    backend = GitHubBackend(transport, publication_repository="sintjuri/ydb")
+    backend.source_pr, backend.source_sha = 42, GitSha("a" * 40)
+    context = PublicationContext("ydb-platform/ydb", "translation/pr-42", "stable-26-1", "stable-26-1", GitSha("b" * 40))
+    sha = backend.commit(context, PublicationPlan((FileChange(RepoPath("page.md"), b"old", b"new"),), ()))
+    backend.push(context, sha)
+    assert backend.find_pr(context.repository, context.branch, context.base) is None
+    assert backend.create_pr(context, sha) == 43
+    mutations = [(m, p, body) for m, p, body in calls if m != "GET"]
+    assert all(p.startswith("/repos/sintjuri/ydb/git/") for m, p, body in mutations[:-1])
+    assert mutations[-1][1] == "/repos/ydb-platform/ydb/pulls"
+    assert mutations[-1][2]["head"] == "sintjuri:translation/pr-42"
+    assert mutations[-1][2]["base"] == "stable-26-1"
+    assert any("head=sintjuri%3Atranslation%2Fpr-42" in p for m, p, body in calls)
+
+
+def test_fork_reset_and_base_head_use_separate_repositories():
+    calls = []
+    def transport(method, path, payload):
+        calls.append((method, path))
+        if path == "/repos/sintjuri/ydb":
+            return {"fork": True, "source": {"full_name": "ydb-platform/ydb"}}
+        return {"object": {"sha": "a" * 40}} if method == "GET" else None
+    backend = GitHubBackend(transport, publication_repository="sintjuri/ydb")
+    assert backend.base_head("main") == GitSha("a" * 40)
+    backend.delete_branch("translation/pr-42")
+    assert ("GET", "/repos/ydb-platform/ydb/git/ref/heads/main") in calls
+    assert ("DELETE", "/repos/sintjuri/ydb/git/refs/heads/translation/pr-42") in calls
+    assert not any(m == "DELETE" and "/repos/ydb-platform/" in p for m, p in calls)
+
+
+def test_unrelated_publication_repository_is_rejected_before_mutation():
+    calls = []
+    def transport(method, path, payload):
+        calls.append(method)
+        return {"fork": True, "source": {"full_name": "other/repo"}}
+    backend = GitHubBackend(transport, publication_repository="sintjuri/ydb")
+    with pytest.raises(RuntimeBoundaryError, match="publication_fork_mismatch"):
+        backend.publication_request("POST", "/git/blobs", {})
+    assert calls == ["GET"]
