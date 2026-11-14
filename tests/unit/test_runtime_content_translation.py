@@ -1122,6 +1122,38 @@ def test_same_page_target_fragment_must_exist_in_candidate() -> None:
     )
 
 
+def test_new_explicit_same_page_fragment_is_allowed() -> None:
+    document = document_for(
+        b"## New section {#new-section}\n\nSee [section](#new-section).\n",
+        target=b"# Existing target\n",
+    )
+
+    content = content_with(ScriptedModels([]))
+    resolver = content._link_resolver(
+        document,
+        document.entry.target_content,
+        metadata_input=True,
+    )
+
+    assert resolver.allows("#new-section", "#new-section")
+    assert not content._link_resolver(
+        document, document.entry.target_content
+    ).allows("#new-section", "#new-section")
+
+
+def test_new_implicit_same_page_fragment_is_invalid() -> None:
+    document = document_for(
+        b"## New section\n\nSee [section](#new-section).\n",
+        target=b"# Existing target\n",
+    )
+
+    resolver = content_with(ScriptedModels([]))._link_resolver(
+        document, document.entry.target_content
+    )
+
+    assert not resolver.allows("#new-section", "#new-section")
+
+
 def test_absolute_internal_link_fragment_is_checked_against_target_page() -> None:
     destination = (
         "https://ydb.tech/docs/ru/concepts/table#row-oriented-table"
@@ -1217,7 +1249,7 @@ def test_unmapped_relative_target_fragment_is_invalid() -> None:
         ),
     )
 
-    resolver = content._link_resolver(document, None)
+    resolver = content._link_resolver(document, None, metadata_input=True)
 
     assert not resolver.allows(destination, destination)
 
@@ -1278,9 +1310,10 @@ def test_new_fragment_on_target_in_same_translation_batch_is_allowed() -> None:
         ),
     )
 
-    resolver = content._link_resolver(document, None)
+    resolver = content._link_resolver(document, None, metadata_input=True)
 
     assert resolver.allows(destination, destination)
+    assert not content._link_resolver(document, None).allows(destination, destination)
 
 
 def test_implicit_fragment_on_target_in_same_translation_batch_is_invalid() -> None:
@@ -1314,9 +1347,81 @@ def test_implicit_fragment_on_target_in_same_translation_batch_is_invalid() -> N
         ),
     )
 
-    resolver = content._link_resolver(document, None)
+    resolver = content._link_resolver(document, None, metadata_input=True)
 
     assert not resolver.allows(destination, destination)
+
+
+def test_final_batch_validation_rejects_linked_candidate_losing_anchor() -> None:
+    from ydbdoc_review_ng.quality import QualityInputError
+
+    source_a_path = RepoPath("ydb/docs/ru/core/a.md")
+    target_a_path = RepoPath("ydb/docs/en/core/a.md")
+    source_b_path = RepoPath("ydb/docs/ru/core/b.md")
+    target_b_path = RepoPath("ydb/docs/en/core/b.md")
+    source_a = b"See [B](b.md#new-section).\n"
+    source_b = b"## New section {#new-section}\n"
+
+    def make_document(source_path: RepoPath, target_path: RepoPath, source: bytes) -> Document:
+        entry = ScopeEntry(
+            FilePair(Locale.RU, Locale.EN, source_path, target_path),
+            source,
+            b"# Existing target\n",
+            ScopeOrigin.INITIAL,
+            FileOperation.TRANSLATE,
+            (PairKey(RepoPath(source_path.value.rsplit("/", 1)[-1])),),
+            None,
+            None,
+        )
+        plan = build_markdown_plan(SNAPSHOT, source_path, source)
+        return Document(entry, source, plan, build_translation_request(source, plan))
+
+    document_a = make_document(source_a_path, target_a_path, source_a)
+    document_b = make_document(source_b_path, target_b_path, source_b)
+
+    class Github:
+        def read_bytes(self, _snapshot: SnapshotRef, path: RepoPath, /) -> bytes | None:
+            return {
+                source_a_path: source_a,
+                source_b_path: source_b,
+                target_a_path: b"# Existing target\n",
+                target_b_path: b"# Existing target\n",
+            }.get(path)
+
+    content = content_with(ScriptedModels([]))
+    content.source = cast(RuntimeSource, SimpleNamespace(github=Github()))
+    content.documents = (document_a, document_b)
+    content.plans = cast(
+        FrozenSourcePlans,
+        SimpleNamespace(
+            preparation=SimpleNamespace(
+                snapshots=SimpleNamespace(source_snapshot=SNAPSHOT),
+                metadata_snapshot=SNAPSHOT,
+            ),
+            documents=(document_a, document_b),
+        ),
+    )
+
+    with pytest.raises(QualityInputError, match="translation_link_target_anchor_missing"):
+        content._require_in_flight_target_anchors(
+            {
+                target_a_path.value: b"See [B](b.md#new-section).\n",
+                target_b_path.value: b"# Existing target\n",
+            }
+        )
+
+    content._require_in_flight_target_anchors(
+        {
+            target_a_path.value: b"See [B](b.md#new-section).\n",
+            target_b_path.value: b"## New section {#new-section}\n",
+        }
+    )
+    content._require_in_flight_target_anchors(
+        {
+            target_a_path.value: None,
+            target_b_path.value: b"# Existing target\n",
+        }
+    )
 
 
 def test_thin_translation_receives_and_publishes_localized_link_anchor() -> None:

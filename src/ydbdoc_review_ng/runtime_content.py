@@ -909,11 +909,18 @@ class RuntimeContent:
         )
 
     def _link_resolver(
-        self, document: Document, target_reference: bytes | None, /
+        self,
+        document: Document,
+        target_reference: bytes | None,
+        /,
+        *,
+        metadata_input: bool = False,
     ) -> LinkDestinationResolver:
         overrides = existing_target_link_overrides(document.source, target_reference)
         invalid_sources: set[str] = set()
         destinations = markdown_link_destinations(document.source)
+        source_explicit_anchors = markdown_explicit_anchors(document.source)
+        allow_new_explicit_anchors = metadata_input
         if target_reference is not None:
             self_anchors = markdown_anchors(target_reference)
             for destination in destinations:
@@ -927,6 +934,8 @@ class RuntimeContent:
                 ):
                     overrides.pop(destination)
                 if destination not in overrides and parsed.fragment not in self_anchors:
+                    if allow_new_explicit_anchors and parsed.fragment in source_explicit_anchors:
+                        continue
                     replacement = closest_target_anchor(parsed.fragment, self_anchors)
                     if replacement is not None:
                         overrides[destination] = f"#{replacement}"
@@ -944,6 +953,12 @@ class RuntimeContent:
             for destination in destinations:
                 parsed = urllib.parse.urlsplit(destination)
                 if not parsed.fragment:
+                    continue
+                if (
+                    allow_new_explicit_anchors
+                    and not parsed.path
+                    and parsed.fragment in source_explicit_anchors
+                ):
                     continue
                 source_content: bytes | None = None
                 target_link_path: RepoPath | None = None
@@ -1001,7 +1016,8 @@ class RuntimeContent:
                     target_content = target_reference
                 if target_content is None:
                     if (
-                        target_link_path in in_flight_target_paths
+                        allow_new_explicit_anchors
+                        and target_link_path in in_flight_target_paths
                         and source_content is not None
                         and parsed.fragment in markdown_explicit_anchors(source_content)
                     ):
@@ -1017,7 +1033,8 @@ class RuntimeContent:
                         overrides.pop(destination)
                 if destination not in overrides and parsed.fragment not in anchors:
                     if (
-                        target_link_path in in_flight_target_paths
+                        allow_new_explicit_anchors
+                        and target_link_path in in_flight_target_paths
                         and source_content is not None
                         and parsed.fragment in markdown_explicit_anchors(source_content)
                     ):
@@ -1066,9 +1083,71 @@ class RuntimeContent:
         if not markdown_link_destinations_are_localized(
             document.source,
             target,
-            self._link_resolver(document, target_reference),
+            self._link_resolver(document, target_reference, metadata_input=True),
         ):
             raise QualityInputError("translation_link_invalid")
+
+    def _require_in_flight_target_anchors(
+        self, files: Mapping[str, bytes | None], /
+    ) -> None:
+        in_flight = {document.entry.pair.target_path for document in self.documents}
+        for document in self.documents:
+            if files.get(document.entry.pair.target_path.value) is None:
+                continue
+            target_reference = (
+                document.entry.target_content
+                if document.entry.target_content is not None
+                else document.entry.rename_from_target_content
+            )
+            resolver = self._link_resolver(
+                document, target_reference, metadata_input=True
+            )
+            for destination in markdown_link_destinations(document.source):
+                localized = resolver(destination)
+                if not resolver.allows(destination, localized):
+                    raise QualityInputError("translation_link_invalid")
+                parsed = urllib.parse.urlsplit(localized)
+                if not parsed.fragment:
+                    continue
+                if parsed.scheme or parsed.netloc:
+                    prefix = f"/docs/{document.entry.pair.target_locale.value}"
+                    if (
+                        parsed.scheme not in {"http", "https"}
+                        or parsed.hostname not in {"ydb.tech", "www.ydb.tech"}
+                        or not parsed.path.startswith(prefix + "/")
+                    ):
+                        continue
+                    suffix = parsed.path[len(prefix) :].lstrip("/")
+                    if not suffix.endswith(".md"):
+                        suffix += ".md"
+                    target_root = (
+                        self.roots.ru
+                        if document.entry.pair.target_locale.value == "ru"
+                        else self.roots.en
+                    )
+                    linked_target = RepoPath(f"{target_root.value}/{suffix}")
+                elif parsed.path:
+                    if not parsed.path.endswith(".md"):
+                        continue
+                    source_link_path = RepoPath(
+                        posixpath.normpath(
+                            posixpath.join(
+                                posixpath.dirname(document.entry.pair.source_path.value),
+                                parsed.path,
+                            )
+                        )
+                    )
+                    try:
+                        linked_target = paired_markdown_path(self.roots, source_link_path)
+                    except ValueError:
+                        continue
+                else:
+                    linked_target = document.entry.pair.target_path
+                if linked_target not in in_flight:
+                    continue
+                candidate = files.get(linked_target.value)
+                if candidate is None or parsed.fragment not in markdown_anchors(candidate):
+                    raise QualityInputError("translation_link_target_anchor_missing")
 
     def prepare_source(
         self, snapshot: ImmutableRunSnapshot, /, *, translate: bool = True
@@ -2392,7 +2471,9 @@ class RuntimeContent:
             if entry.target_content is not None
             else entry.rename_from_target_content
         )
-        link_resolver = self._link_resolver(document, target_reference_bytes)
+        link_resolver = self._link_resolver(
+            document, target_reference_bytes, metadata_input=True
+        )
         prepared = prepare_document(
             document.source,
             document.plan,
@@ -3186,6 +3267,7 @@ class RuntimeContent:
         }
         if {item.path.value: item.after for item in plan.files} != published:
             raise RuntimeBoundaryError("candidate_plan_mismatch")
+        self._require_in_flight_target_anchors(files)
         for document in self.documents:
             target = files.get(document.entry.pair.target_path.value)
             if target is None:
