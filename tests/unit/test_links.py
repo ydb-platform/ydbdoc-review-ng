@@ -3,6 +3,18 @@ from __future__ import annotations
 from typing import Any
 
 
+def test_explicit_anchor_inventory_uses_headings_only_across_whole_document() -> None:
+    from ydbdoc_review_ng.anchors import markdown_explicit_anchors
+
+    source = (
+        b"# First {#first}\n\nparagraph {#not-an-anchor}\n\n"
+        b"```md\n## Fake {#fake}\n```\n\n"
+        b"<!--\n## Comment {#comment}\n-->\n\n## Last\n"
+    )
+
+    assert markdown_explicit_anchors(source) == frozenset({"first"})
+
+
 def test_internal_ydb_link_changes_only_documentation_locale() -> None:
     from ydbdoc_review_ng.links import LinkDestinationResolver
 

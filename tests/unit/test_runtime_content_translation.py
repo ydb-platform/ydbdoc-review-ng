@@ -1247,6 +1247,78 @@ def test_missing_relative_target_page_fragment_is_invalid() -> None:
     assert not resolver.allows(destination, destination)
 
 
+def test_new_fragment_on_target_in_same_translation_batch_is_allowed() -> None:
+    destination = "reference/properties.md#new-section"
+    document = document_for(f"See [section]({destination}).\n".encode())
+    source_page = RepoPath("ydb/docs/ru/core/reference/properties.md")
+    target_page = RepoPath("ydb/docs/en/core/reference/properties.md")
+
+    class Github:
+        def read_bytes(self, _snapshot: SnapshotRef, path: RepoPath, /) -> bytes | None:
+            if path == source_page:
+                return b"## New section {#new-section}\n"
+            if path == target_page:
+                return b"# Existing target\n"
+            return None
+
+    content = content_with(ScriptedModels([]))
+    content.source = cast(RuntimeSource, SimpleNamespace(github=Github()))
+    content.plans = cast(
+        FrozenSourcePlans,
+        SimpleNamespace(
+            preparation=SimpleNamespace(
+                snapshots=SimpleNamespace(source_snapshot=SNAPSHOT),
+                metadata_snapshot=SNAPSHOT,
+            ),
+            documents=(
+                SimpleNamespace(
+                    entry=SimpleNamespace(pair=SimpleNamespace(target_path=target_page))
+                ),
+            ),
+        ),
+    )
+
+    resolver = content._link_resolver(document, None)
+
+    assert resolver.allows(destination, destination)
+
+
+def test_implicit_fragment_on_target_in_same_translation_batch_is_invalid() -> None:
+    destination = "reference/properties.md#new-section"
+    document = document_for(f"See [section]({destination}).\n".encode())
+    source_page = RepoPath("ydb/docs/ru/core/reference/properties.md")
+    target_page = RepoPath("ydb/docs/en/core/reference/properties.md")
+
+    class Github:
+        def read_bytes(self, _snapshot: SnapshotRef, path: RepoPath, /) -> bytes | None:
+            if path == source_page:
+                return b"## New section\n"
+            if path == target_page:
+                return b"# Existing target\n"
+            return None
+
+    content = content_with(ScriptedModels([]))
+    content.source = cast(RuntimeSource, SimpleNamespace(github=Github()))
+    content.plans = cast(
+        FrozenSourcePlans,
+        SimpleNamespace(
+            preparation=SimpleNamespace(
+                snapshots=SimpleNamespace(source_snapshot=SNAPSHOT),
+                metadata_snapshot=SNAPSHOT,
+            ),
+            documents=(
+                SimpleNamespace(
+                    entry=SimpleNamespace(pair=SimpleNamespace(target_path=target_page))
+                ),
+            ),
+        ),
+    )
+
+    resolver = content._link_resolver(document, None)
+
+    assert not resolver.allows(destination, destination)
+
+
 def test_thin_translation_receives_and_publishes_localized_link_anchor() -> None:
     destination = "reference/properties.md#jdbc-url"
     document = document_for(f"See [JDBC URL]({destination}).\n".encode())

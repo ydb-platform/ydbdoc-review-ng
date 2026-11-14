@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, cast
 
 import yaml
 
-from ydbdoc_review_ng.anchors import markdown_anchors
+from ydbdoc_review_ng.anchors import markdown_anchors, markdown_explicit_anchors
 from ydbdoc_review_ng.application import ImmutableRunSnapshot, WorkflowCandidate
 from ydbdoc_review_ng.application.workflows import CheckpointCapture, SemanticCheckpointStop
 from ydbdoc_review_ng.continuation import (
@@ -938,11 +938,15 @@ class RuntimeContent:
                 plans.preparation.metadata_snapshot.repository,
                 plans.preparation.metadata_snapshot.commit_sha,
             )
+            in_flight_target_paths = {
+                item.entry.pair.target_path for item in getattr(plans, "documents", ())
+            }
             for destination in destinations:
                 parsed = urllib.parse.urlsplit(destination)
                 if not parsed.fragment:
                     continue
                 source_content: bytes | None = None
+                target_link_path: RepoPath | None = None
                 if parsed.scheme or parsed.netloc:
                     prefix = f"/docs/{document.entry.pair.source_locale.value}"
                     if (
@@ -968,8 +972,9 @@ class RuntimeContent:
                         plans.preparation.snapshots.source_snapshot,
                         RepoPath(f"{source_root.value}/{suffix}"),
                     )
+                    target_link_path = RepoPath(f"{target_root.value}/{suffix}")
                     target_content = self.source.github.read_bytes(
-                        target_snapshot, RepoPath(f"{target_root.value}/{suffix}")
+                        target_snapshot, target_link_path
                     )
                 elif parsed.path:
                     if not parsed.path.endswith(".md"):
@@ -995,6 +1000,12 @@ class RuntimeContent:
                 else:
                     target_content = target_reference
                 if target_content is None:
+                    if (
+                        target_link_path in in_flight_target_paths
+                        and source_content is not None
+                        and parsed.fragment in markdown_explicit_anchors(source_content)
+                    ):
+                        continue
                     if parsed.path:
                         invalid_sources.add(destination)
                     continue
@@ -1005,6 +1016,12 @@ class RuntimeContent:
                     if existing_fragment not in anchors:
                         overrides.pop(destination)
                 if destination not in overrides and parsed.fragment not in anchors:
+                    if (
+                        target_link_path in in_flight_target_paths
+                        and source_content is not None
+                        and parsed.fragment in markdown_explicit_anchors(source_content)
+                    ):
+                        continue
                     replacement = None
                     if source_content is not None:
                         page_overrides = existing_target_link_overrides(
