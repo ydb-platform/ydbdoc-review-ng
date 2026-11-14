@@ -150,12 +150,8 @@ from ydbdoc_review_ng.translation.document import (
     verify_document_candidate_with_links,
 )
 from ydbdoc_review_ng.translation.formatting import normalize_heading_spacing
-from ydbdoc_review_ng.translation.gates import check_publication_gates, join_soft_wrapped_prose
+from ydbdoc_review_ng.translation.gates import check_publication_gates
 from ydbdoc_review_ng.translation.language import validate_translated_prose
-from ydbdoc_review_ng.translation.split_backtick import (
-    count_split_backtick_identifiers,
-    normalize_split_backtick_identifiers,
-)
 from ydbdoc_review_ng.translation.surgical import (
     SurgicalMode,
     join_insert_hunk,
@@ -2482,8 +2478,6 @@ class RuntimeContent:
         # The existing target remains available for link/scope analysis, but it is
         # deliberately not sent to the translation model. Translation must be
         # reconstructed from the authoritative source and the accepted response.
-        chunk = prepared.chunks[0]
-
         def invoke_chunk(
             chunk: DocumentChunk,
             chunk_index: int,
@@ -2762,7 +2756,6 @@ class RuntimeContent:
             raise InvalidTranslationResponse("translation_publication_gates_failed")
 
         surgical_candidate: bytes | None = None
-        surgical_mode: SurgicalMode | None = None
         source_before = _read_source_before(self.source, entry.pair.source_path)
         source_after = (
             _read_source_snapshot(self.source, "source_change_snapshot", entry.pair.source_path)
@@ -2799,7 +2792,6 @@ class RuntimeContent:
             surgical = plan_surgical_update(
                 source_before, source_after, target_reference_bytes
             )
-            surgical_mode = surgical.mode
             write_trace(
                 "translation",
                 "surgical",
