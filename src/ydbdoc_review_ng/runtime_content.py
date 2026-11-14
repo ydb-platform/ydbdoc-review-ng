@@ -61,6 +61,10 @@ from ydbdoc_review_ng.links import (
     WikipediaLanglinks,
     closest_target_anchor,
     existing_target_link_overrides,
+    localize_markdown_link_destinations,
+    markdown_link_destinations,
+    markdown_link_destinations_are_localized,
+    paired_target_anchor,
 )
 from ydbdoc_review_ng.locales import (
     ChangedFileKind,
@@ -146,8 +150,12 @@ from ydbdoc_review_ng.translation.document import (
     verify_document_candidate_with_links,
 )
 from ydbdoc_review_ng.translation.formatting import normalize_heading_spacing
-from ydbdoc_review_ng.translation.gates import check_publication_gates
+from ydbdoc_review_ng.translation.gates import check_publication_gates, join_soft_wrapped_prose
 from ydbdoc_review_ng.translation.language import validate_translated_prose
+from ydbdoc_review_ng.translation.split_backtick import (
+    count_split_backtick_identifiers,
+    normalize_split_backtick_identifiers,
+)
 from ydbdoc_review_ng.translation.surgical import (
     SurgicalMode,
     join_insert_hunk,
@@ -905,12 +913,7 @@ class RuntimeContent:
     ) -> LinkDestinationResolver:
         overrides = existing_target_link_overrides(document.source, target_reference)
         invalid_sources: set[str] = set()
-        destinations = tuple(
-            match.group(1).decode("utf-8")
-            for match in re.finditer(
-                rb"(?<!!)\[[^\]]*\]\(<?([^\s)>]+)>?\)", document.source
-            )
-        )
+        destinations = markdown_link_destinations(document.source)
         if target_reference is not None:
             self_anchors = markdown_anchors(target_reference)
             for destination in destinations:
@@ -939,6 +942,7 @@ class RuntimeContent:
                 parsed = urllib.parse.urlsplit(destination)
                 if not parsed.fragment:
                     continue
+                source_content: bytes | None = None
                 if parsed.scheme or parsed.netloc:
                     prefix = f"/docs/{document.entry.pair.source_locale.value}"
                     if (
@@ -954,6 +958,15 @@ class RuntimeContent:
                         self.roots.ru
                         if document.entry.pair.target_locale.value == "ru"
                         else self.roots.en
+                    )
+                    source_root = (
+                        self.roots.ru
+                        if document.entry.pair.source_locale.value == "ru"
+                        else self.roots.en
+                    )
+                    source_content = self.source.github.read_bytes(
+                        plans.preparation.snapshots.source_snapshot,
+                        RepoPath(f"{source_root.value}/{suffix}"),
                     )
                     target_content = self.source.github.read_bytes(
                         target_snapshot, RepoPath(f"{target_root.value}/{suffix}")
@@ -973,12 +986,17 @@ class RuntimeContent:
                         target_link_path = paired_markdown_path(self.roots, source_link_path)
                     except ValueError:
                         continue
+                    source_content = self.source.github.read_bytes(
+                        plans.preparation.snapshots.source_snapshot, source_link_path
+                    )
                     target_content = self.source.github.read_bytes(
                         target_snapshot, target_link_path
                     )
                 else:
                     target_content = target_reference
                 if target_content is None:
+                    if parsed.path:
+                        invalid_sources.add(destination)
                     continue
                 anchors = markdown_anchors(target_content)
                 existing = overrides.get(destination)
@@ -987,7 +1005,20 @@ class RuntimeContent:
                     if existing_fragment not in anchors:
                         overrides.pop(destination)
                 if destination not in overrides and parsed.fragment not in anchors:
-                    replacement = closest_target_anchor(parsed.fragment, anchors)
+                    replacement = None
+                    if source_content is not None:
+                        page_overrides = existing_target_link_overrides(
+                            source_content, target_content
+                        )
+                        localized_self = page_overrides.get(f"#{parsed.fragment}")
+                        if localized_self is not None:
+                            replacement = urllib.parse.urlsplit(localized_self).fragment
+                        if replacement is None:
+                            replacement = paired_target_anchor(
+                                parsed.fragment, source_content, target_content
+                            )
+                    if replacement is None:
+                        replacement = closest_target_anchor(parsed.fragment, anchors)
                     if replacement is not None:
                         overrides[destination] = urllib.parse.urlunsplit(
                             (
@@ -998,6 +1029,8 @@ class RuntimeContent:
                                 replacement,
                             )
                         )
+                    else:
+                        invalid_sources.add(destination)
         return LinkDestinationResolver(
             document.entry.pair.source_locale.value,
             document.entry.pair.target_locale.value,
@@ -1005,6 +1038,20 @@ class RuntimeContent:
             overrides=overrides,
             invalid_sources=frozenset(invalid_sources),
         )
+
+    def _require_localized_links(
+        self,
+        document: Document,
+        target: bytes,
+        target_reference: bytes | None,
+        /,
+    ) -> None:
+        if not markdown_link_destinations_are_localized(
+            document.source,
+            target,
+            self._link_resolver(document, target_reference),
+        ):
+            raise QualityInputError("translation_link_invalid")
 
     def prepare_source(
         self, snapshot: ImmutableRunSnapshot, /, *, translate: bool = True
@@ -2530,6 +2577,10 @@ class RuntimeContent:
         ) -> bytes:
             """Whole-file Markdown in/out without placeholders (thin algorithm)."""
             payload = document.source if source_bytes is None else source_bytes
+            try:
+                payload = localize_markdown_link_destinations(payload, link_resolver)
+            except ValueError:
+                raise InvalidTranslationResponse("translation_link_invalid") from None
             source_text = payload.decode("utf-8")
             if existing_bytes is ...:
                 existing = (
@@ -2766,6 +2817,10 @@ class RuntimeContent:
             candidate = thin_translate_document()
         if candidate != target_reference_bytes:
             candidate = normalize_heading_spacing(candidate)
+        if not markdown_link_destinations_are_localized(
+            document.source, candidate, link_resolver
+        ):
+            raise InvalidTranslationResponse("translation_link_invalid")
         try:
             candidate_plan = build_markdown_plan(
                 document.plan.source_snapshot, entry.pair.target_path, candidate
@@ -3119,6 +3174,12 @@ class RuntimeContent:
             if target is None:
                 # Soft-publish leaves failed translator targets as null for critic.
                 continue
+            target_reference = (
+                document.entry.target_content
+                if document.entry.target_content is not None
+                else document.entry.rename_from_target_content
+            )
+            self._require_localized_links(document, target, target_reference)
             try:
                 target_plan = build_markdown_plan(
                     document.plan.source_snapshot, document.entry.pair.target_path, target
@@ -3323,6 +3384,11 @@ class RuntimeContent:
                     entry = document.entry
                 document = Document(
                     entry, source, source_plan, build_translation_request(source, source_plan)
+                )
+                self._require_localized_links(
+                    document,
+                    target,
+                    translated_files.get(name),
                 )
                 try:
                     target_plan = build_markdown_plan(source_snapshot, path, target)

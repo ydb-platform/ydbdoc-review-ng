@@ -6,7 +6,10 @@ import json
 import re
 import urllib.parse
 import urllib.request
+from collections import Counter
 from collections.abc import Callable, Mapping
+
+from ydbdoc_review_ng.anchors import markdown_heading_outline
 
 _YDB_HOSTS = frozenset({"ydb.tech", "www.ydb.tech"})
 _WIKIPEDIA_HOST = re.compile(r"^(?P<locale>[a-z][a-z0-9-]*)\.wikipedia\.org$")
@@ -15,6 +18,12 @@ _MAX_WIKIPEDIA_RESPONSE_BYTES = 1_000_000
 JsonFetcher = Callable[[str], object]
 
 _MARKDOWN_DESTINATION = re.compile(rb"(?<!!)\[[^\]]*\]\(<?([^\s)>]+)>?\)")
+_REFERENCE_DESTINATION = re.compile(
+    rb"(?m)^ {0,3}\[[^\]\r\n]+\]:[ \t]+<?([^\s>]+)>?"
+)
+_URI_AUTOLINK_DESTINATION = re.compile(
+    rb"<((?:https?|ftp)://[^\s<>]+)>"
+)
 
 
 def _anchor_key(value: str) -> str:
@@ -26,6 +35,151 @@ def closest_target_anchor(fragment: str, anchors: set[str] | frozenset[str], /) 
     key = _anchor_key(fragment.casefold())
     matches = sorted(anchor for anchor in anchors if _anchor_key(anchor.casefold()) == key)
     return matches[0] if len(matches) == 1 else None
+
+
+def paired_target_anchor(fragment: str, source_page: bytes, target_page: bytes, /) -> str | None:
+    """Map a heading only inside an unambiguous interval of shared anchor landmarks."""
+    source_outline = markdown_heading_outline(source_page)
+    target_outline = markdown_heading_outline(target_page)
+    if not source_outline or not target_outline:
+        return None
+    matches = [index for index, (_level, anchor) in enumerate(source_outline) if anchor == fragment]
+    if len(matches) != 1:
+        return None
+    source_index = matches[0]
+    source_counts = Counter(anchor for _level, anchor in source_outline if anchor is not None)
+    target_counts = Counter(anchor for _level, anchor in target_outline if anchor is not None)
+    target_positions = {
+        anchor: index
+        for index, (_level, anchor) in enumerate(target_outline)
+        if anchor is not None and target_counts[anchor] == 1
+    }
+    landmarks = [
+        (index, target_positions[anchor])
+        for index, (_level, anchor) in enumerate(source_outline)
+        if anchor is not None
+        and source_counts[anchor] == 1
+        and anchor in target_positions
+        and source_outline[index][0] == target_outline[target_positions[anchor]][0]
+    ]
+    if source_outline[source_index][1] in target_positions:
+        return source_outline[source_index][1]
+    before = [pair for pair in landmarks if pair[0] < source_index]
+    after = [pair for pair in landmarks if pair[0] > source_index]
+    if not before or not after:
+        return None
+    source_before, target_before = before[-1]
+    source_after, target_after = after[0]
+    if target_before >= target_after:
+        return None
+    source_segment = source_outline[source_before + 1 : source_after]
+    target_segment = target_outline[target_before + 1 : target_after]
+    if len(source_segment) != 1 or tuple(level for level, _anchor in source_segment) != tuple(
+        level for level, _anchor in target_segment
+    ):
+        return None
+    target_index = target_before + (source_index - source_before)
+    target_anchor = target_outline[target_index][1]
+    if target_anchor is None or target_counts[target_anchor] != 1:
+        return None
+    return target_anchor
+
+
+def _opaque_markdown_spans(content: bytes, /) -> tuple[tuple[int, int], ...]:
+    """Return fenced, indented, inline-code, frontmatter, and comment byte spans."""
+    spans: list[tuple[int, int]] = []
+    lines = content.splitlines(keepends=True)
+    offsets: list[int] = []
+    cursor = 0
+    for line in lines:
+        offsets.append(cursor)
+        cursor += len(line)
+
+    def container_body(line: bytes) -> bytes:
+        body = line.rstrip(b"\r\n")
+        cursor = 0
+        while True:
+            prefix = re.match(rb" {0,3}>[ \t]?", body[cursor:])
+            if prefix is None:
+                return body[cursor:]
+            cursor += prefix.end()
+
+    index = 0
+    if lines and lines[0].rstrip(b"\r\n") == b"---":
+        for probe in range(1, len(lines)):
+            if lines[probe].rstrip(b"\r\n") in {b"---", b"..."}:
+                spans.append((0, offsets[probe] + len(lines[probe])))
+                index = probe + 1
+                break
+    while index < len(lines):
+        body = container_body(lines[index])
+        opening = re.match(rb"^ {0,3}(`{3,}|~{3,})", body)
+        if opening is not None:
+            marker = opening.group(1)
+            closing = re.compile(
+                rb"^ {0,3}" + re.escape(marker[:1]) + rb"{" + str(len(marker)).encode() + rb",}[ \t]*$"
+            )
+            probe = index + 1
+            while probe < len(lines) and closing.match(container_body(lines[probe])) is None:
+                probe += 1
+            end = len(content) if probe == len(lines) else offsets[probe] + len(lines[probe])
+            spans.append((offsets[index], end))
+            index = probe + 1
+            continue
+        if body.startswith((b"    ", b"\t")):
+            spans.append((offsets[index], offsets[index] + len(lines[index])))
+        index += 1
+
+    for match in re.finditer(rb"<!--[\s\S]*?(?:-->|\Z)", content):
+        spans.append((match.start(), match.end()))
+
+    def occupied(start: int, end: int) -> bool:
+        return any(start < opaque_end and end > opaque_start for opaque_start, opaque_end in spans)
+
+    cursor = 0
+    while cursor < len(content):
+        if content[cursor] != 0x60 or occupied(cursor, cursor + 1):
+            cursor += 1
+            continue
+        end_run = cursor + 1
+        while end_run < len(content) and content[end_run] == 0x60:
+            end_run += 1
+        marker = content[cursor:end_run]
+        closing = content.find(marker, end_run)
+        if closing < 0:
+            cursor = end_run
+            continue
+        spans.append((cursor, closing + len(marker)))
+        cursor = closing + len(marker)
+    return tuple(sorted(spans))
+
+
+def _markdown_destination_spans(content: bytes, /) -> tuple[tuple[int, int, str], ...]:
+    """Inventory model-visible Markdown destinations without double-counting overlaps."""
+    opaque = _opaque_markdown_spans(content)
+    matches = []
+    for pattern in (
+        _MARKDOWN_DESTINATION,
+        _REFERENCE_DESTINATION,
+        _URI_AUTOLINK_DESTINATION,
+    ):
+        for match in pattern.finditer(content):
+            if any(
+                match.start(1) < opaque_end and match.end(1) > opaque_start
+                for opaque_start, opaque_end in opaque
+            ):
+                continue
+            matches.append((match.start(1), match.end(1), match.group(1).decode("utf-8")))
+    result: list[tuple[int, int, str]] = []
+    for item in sorted(matches):
+        if any(item[0] < end and item[1] > start for start, end, _value in result):
+            continue
+        result.append(item)
+    return tuple(result)
+
+
+def markdown_link_destinations(content: bytes, /) -> tuple[str, ...]:
+    return tuple(value for _start, _end, value in _markdown_destination_spans(content))
 
 
 def _same_internal_page(source: str, target: str) -> bool:
@@ -49,8 +203,8 @@ def existing_target_link_overrides(source: bytes, target: bytes | None, /) -> di
     """Reuse a target-local fragment only when it unambiguously belongs to the same page."""
     if target is None:
         return {}
-    source_values = [match.group(1).decode("utf-8") for match in _MARKDOWN_DESTINATION.finditer(source)]
-    target_values = [match.group(1).decode("utf-8") for match in _MARKDOWN_DESTINATION.finditer(target)]
+    source_values = list(markdown_link_destinations(source))
+    target_values = list(markdown_link_destinations(target))
     result: dict[str, str] = {}
     for source_value in source_values:
         matches = {
@@ -236,3 +390,42 @@ class LinkDestinationResolver:
         if path != prefix and not path.startswith(prefix + "/"):
             return path
         return f"/docs/{self.target_locale}" + path[len(prefix) :]
+
+
+def localize_markdown_link_destinations(
+    content: bytes, resolver: LinkDestinationResolver, /
+) -> bytes:
+    """Rewrite model-visible Markdown destinations through the deterministic resolver."""
+    localized = bytearray(content)
+    for start, end, source in reversed(_markdown_destination_spans(content)):
+        target = resolver(source)
+        if not resolver.allows(source, target):
+            raise ValueError("translation_link_invalid")
+        localized[start:end] = target.encode("utf-8")
+    return bytes(localized)
+
+
+def markdown_link_destinations_are_localized(
+    source: bytes, target: bytes, resolver: LinkDestinationResolver, /
+) -> bool:
+    """Require the candidate to preserve the resolver-approved destination multiset."""
+    source_values = markdown_link_destinations(source)
+    expected = tuple(resolver(value) for value in source_values)
+    if any(
+        not resolver.allows(source_value, target_value)
+        for source_value, target_value in zip(source_values, expected, strict=True)
+    ):
+        return False
+    changed_pairs = tuple(
+        (source_value, target_value)
+        for source_value, target_value in zip(source_values, expected, strict=True)
+        if target_value != source_value
+    )
+    if not changed_pairs:
+        return True
+    target_values = Counter(markdown_link_destinations(target))
+    expected_values = Counter(expected)
+    protected_values = {
+        value for pair in changed_pairs for value in pair
+    }
+    return all(target_values[value] == expected_values[value] for value in protected_values)

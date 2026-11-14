@@ -1152,6 +1152,225 @@ def test_absolute_internal_link_fragment_is_checked_against_target_page() -> Non
     )
 
 
+def test_relative_internal_link_uses_paired_target_heading_anchor() -> None:
+    destination = "reference/properties.md#jdbc-url"
+    document = document_for(f"See [JDBC URL]({destination}).\n".encode())
+    source_page = RepoPath("ydb/docs/ru/core/reference/properties.md")
+    target_page = RepoPath("ydb/docs/en/core/reference/properties.md")
+
+    class Github:
+        def read_bytes(self, _snapshot: SnapshotRef, path: RepoPath, /) -> bytes | None:
+            if path == source_page:
+                return (
+                    "# Свойства JDBC-драйвера\n\n"
+                    "См. [JDBC URL](#jdbc-url).\n\n"
+                    "## Примеры JDBC URL {#jdbc-url}\n"
+                ).encode()
+            if path == target_page:
+                return (
+                    b"# JDBC Driver Properties\n\n"
+                    b"See [JDBC URL](#jdbc-url-examples).\n\n"
+                    b"## JDBC URL Examples {#jdbc-url-examples}\n"
+                )
+            return None
+
+    content = content_with(ScriptedModels([]))
+    content.source = cast(RuntimeSource, SimpleNamespace(github=Github()))
+    content.plans = cast(
+        FrozenSourcePlans,
+        SimpleNamespace(
+            preparation=SimpleNamespace(
+                snapshots=SimpleNamespace(source_snapshot=SNAPSHOT),
+                metadata_snapshot=SNAPSHOT,
+            )
+        ),
+    )
+
+    assert content._link_resolver(document, None)(destination) == (
+        "reference/properties.md#jdbc-url-examples"
+    )
+
+
+def test_unmapped_relative_target_fragment_is_invalid() -> None:
+    destination = "reference/properties.md#jdbc-url"
+    document = document_for(f"See [JDBC URL]({destination}).\n".encode())
+    source_page = RepoPath("ydb/docs/ru/core/reference/properties.md")
+    target_page = RepoPath("ydb/docs/en/core/reference/properties.md")
+
+    class Github:
+        def read_bytes(self, _snapshot: SnapshotRef, path: RepoPath, /) -> bytes | None:
+            if path == source_page:
+                return b"## JDBC URL {#jdbc-url}\n"
+            if path == target_page:
+                return b"### Connection Properties {#connection-properties}\n"
+            return None
+
+    content = content_with(ScriptedModels([]))
+    content.source = cast(RuntimeSource, SimpleNamespace(github=Github()))
+    content.plans = cast(
+        FrozenSourcePlans,
+        SimpleNamespace(
+            preparation=SimpleNamespace(
+                snapshots=SimpleNamespace(source_snapshot=SNAPSHOT),
+                metadata_snapshot=SNAPSHOT,
+            )
+        ),
+    )
+
+    resolver = content._link_resolver(document, None)
+
+    assert not resolver.allows(destination, destination)
+
+
+def test_missing_relative_target_page_fragment_is_invalid() -> None:
+    destination = "reference/missing.md#section"
+    document = document_for(f"See [section]({destination}).\n".encode())
+
+    class Github:
+        def read_bytes(self, _snapshot: SnapshotRef, _path: RepoPath, /) -> bytes | None:
+            return None
+
+    content = content_with(ScriptedModels([]))
+    content.source = cast(RuntimeSource, SimpleNamespace(github=Github()))
+    content.plans = cast(
+        FrozenSourcePlans,
+        SimpleNamespace(
+            preparation=SimpleNamespace(
+                snapshots=SimpleNamespace(source_snapshot=SNAPSHOT),
+                metadata_snapshot=SNAPSHOT,
+            )
+        ),
+    )
+
+    resolver = content._link_resolver(document, None)
+
+    assert not resolver.allows(destination, destination)
+
+
+def test_thin_translation_receives_and_publishes_localized_link_anchor() -> None:
+    destination = "reference/properties.md#jdbc-url"
+    document = document_for(f"See [JDBC URL]({destination}).\n".encode())
+    source_page = RepoPath("ydb/docs/ru/core/reference/properties.md")
+    target_page = RepoPath("ydb/docs/en/core/reference/properties.md")
+
+    class Github:
+        def read_bytes(self, _snapshot: SnapshotRef, path: RepoPath, /) -> bytes | None:
+            if path == source_page:
+                return (
+                    "# Свойства JDBC-драйвера\n\n"
+                    "См. [JDBC URL](#jdbc-url).\n\n"
+                    "## Примеры JDBC URL {#jdbc-url}\n"
+                ).encode()
+            if path == target_page:
+                return (
+                    b"# JDBC Driver Properties\n\n"
+                    b"See [JDBC URL](#jdbc-url-examples).\n\n"
+                    b"## JDBC URL Examples {#jdbc-url-examples}\n"
+                )
+            return None
+
+    class EchoThinSource:
+        def invoke(self, request: ModelRequest, /) -> ModelCallResult:
+            source = request.prompt.split("=== SOURCE ===\n", 1)[1].split(
+                "\n=== END SOURCE ===", 1
+            )[0]
+            return ModelCallResult(source, None, ())
+
+    content = content_with(EchoThinSource())
+    content.source = cast(RuntimeSource, SimpleNamespace(github=Github()))
+    content.plans = cast(
+        FrozenSourcePlans,
+        SimpleNamespace(
+            preparation=SimpleNamespace(
+                snapshots=SimpleNamespace(source_snapshot=SNAPSHOT),
+                metadata_snapshot=SNAPSHOT,
+                inventory=SimpleNamespace(pair_decisions=()),
+            )
+        ),
+    )
+
+    _accepted, translated = content._translate_document(document)
+
+    assert translated.translated_markdown == (
+        "See [JDBC URL](reference/properties.md#jdbc-url-examples).\n"
+    )
+
+
+def test_thin_translation_rejects_unmapped_target_fragment() -> None:
+    destination = "reference/properties.md#jdbc-url"
+    document = document_for(f"See [JDBC URL]({destination}).\n".encode())
+    source_page = RepoPath("ydb/docs/ru/core/reference/properties.md")
+    target_page = RepoPath("ydb/docs/en/core/reference/properties.md")
+
+    class Github:
+        def read_bytes(self, _snapshot: SnapshotRef, path: RepoPath, /) -> bytes | None:
+            if path == source_page:
+                return b"## JDBC URL {#jdbc-url}\n"
+            if path == target_page:
+                return b"### Connection Properties {#connection-properties}\n"
+            return None
+
+    class EchoThinSource:
+        def invoke(self, request: ModelRequest, /) -> ModelCallResult:
+            source = request.prompt.split("=== SOURCE ===\n", 1)[1].split(
+                "\n=== END SOURCE ===", 1
+            )[0]
+            return ModelCallResult(source, None, ())
+
+    content = content_with(EchoThinSource())
+    content.source = cast(RuntimeSource, SimpleNamespace(github=Github()))
+    content.plans = cast(
+        FrozenSourcePlans,
+        SimpleNamespace(
+            preparation=SimpleNamespace(
+                snapshots=SimpleNamespace(source_snapshot=SNAPSHOT),
+                metadata_snapshot=SNAPSHOT,
+                inventory=SimpleNamespace(pair_decisions=()),
+            )
+        ),
+    )
+
+    with pytest.raises(InvalidTranslationResponse, match="translation_link_invalid"):
+        content._translate_document(document)
+
+
+def test_thin_translation_rejects_model_restoring_source_anchor() -> None:
+    destination = "reference/properties.md#jdbc-url"
+    document = document_for(f"See [JDBC URL]({destination}).\n".encode())
+    source_page = RepoPath("ydb/docs/ru/core/reference/properties.md")
+    target_page = RepoPath("ydb/docs/en/core/reference/properties.md")
+
+    class Github:
+        def read_bytes(self, _snapshot: SnapshotRef, path: RepoPath, /) -> bytes | None:
+            if path == source_page:
+                return b"See [JDBC](#jdbc-url).\n## JDBC URL {#jdbc-url}\n"
+            if path == target_page:
+                return b"See [JDBC](#jdbc-url-examples).\n## JDBC URL Examples {#jdbc-url-examples}\n"
+            return None
+
+    class RestoresSourceAnchor:
+        def invoke(self, _request: ModelRequest, /) -> ModelCallResult:
+            return ModelCallResult(
+                f"See [JDBC URL]({destination}).\n", None, ()
+            )
+
+    content = content_with(RestoresSourceAnchor())
+    content.source = cast(RuntimeSource, SimpleNamespace(github=Github()))
+    content.plans = cast(
+        FrozenSourcePlans,
+        SimpleNamespace(
+            preparation=SimpleNamespace(
+                snapshots=SimpleNamespace(source_snapshot=SNAPSHOT),
+                metadata_snapshot=SNAPSHOT,
+                inventory=SimpleNamespace(pair_decisions=()),
+            )
+        ),
+    )
+
+    with pytest.raises(InvalidTranslationResponse, match="translation_link_invalid"):
+        content._translate_document(document)
+
+
 def test_content_filter_does_not_create_recursive_child_calls() -> None:
     source = content_filter_witness()
     document = document_for(source)
@@ -1410,6 +1629,65 @@ def test_validate_plan_soft_publishes_nonsymmetric_existing_target_link() -> Non
     plan = PublicationPlan((FileChange(target_path, document.entry.target_content, localized),), ())
 
     content.validate_plan(cast(ImmutableRunSnapshot, object()), candidate, plan)
+
+
+def test_validate_plan_rejects_critic_restoring_source_anchor() -> None:
+    from ydbdoc_review_ng.continuation import SourceChangeInventory
+    from ydbdoc_review_ng.direction import Direction
+    from ydbdoc_review_ng.domain import Mode
+    from ydbdoc_review_ng.quality import QualityInputError
+    from ydbdoc_review_ng.repository import (
+        BaseBranch,
+        PullRequestState,
+        ResolvedRepositorySnapshots,
+    )
+    from ydbdoc_review_ng.runtime_github import GitHubBackend
+    from ydbdoc_review_ng.scope import PotentialScopeSet, ScopeManifest
+
+    document = document_for(
+        b"# Source {#source}\n\nSee [section](#source).\n",
+        target=b"# Target {#target}\n\nSee [section](#target).\n",
+    )
+    target_path = document.entry.pair.target_path
+    corrupted = b"# Target {#target}\n\nSee [section](#source).\n"
+    snap = SnapshotRef(RepositoryId("ydb-platform/ydb"), GitSha("a" * 40))
+    source = RuntimeSource({}, cast(GitHubBackend, object()))
+    source.snapshots = ResolvedRepositorySnapshots(
+        PullRequestState.MERGED,
+        BaseBranch("main"),
+        snap,
+        snap,
+        snap,
+        snap,
+        snap,
+        snap,
+        snap,
+    )
+    content = RuntimeContent(source, cast(RecordedModels, ScriptedModels([])), {})
+    preparation = FrozenPreparation(
+        ImmutableRunSnapshot(Mode.DOC_TRANSLATE, snap.commit_sha, None, "translation/pr-1", None),
+        source.snapshots,
+        SourceChangeInventory(()),
+        snap,
+        (),
+        PotentialScopeSet(snap, content.roots, (), None),
+        True,
+    )
+    content.plans = FrozenSourcePlans(
+        preparation,
+        ScopeManifest(Direction.RU_TO_EN, snap, content.roots, (), (), 0, 0),
+        (document,),
+        (),
+        TranslationPlan(Direction.RU_TO_EN, (), ()),
+    )
+    content.documents = (document,)
+    candidate = WorkflowCandidate(pack({target_path.value: corrupted}), None)
+    plan = PublicationPlan(
+        (FileChange(target_path, document.entry.target_content, corrupted),), ()
+    )
+
+    with pytest.raises(QualityInputError, match="translation_link_invalid"):
+        content.validate_plan(cast(ImmutableRunSnapshot, object()), candidate, plan)
 
 
 def test_lost_placeholder_candidate_is_not_created() -> None:

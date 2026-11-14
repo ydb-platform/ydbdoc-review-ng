@@ -163,3 +163,115 @@ def test_missing_fragment_uses_unique_singular_plural_target_anchor() -> None:
         "row-oriented-table", {"row-oriented-tables", "column-oriented-tables"}
     ) == "row-oriented-tables"
     assert closest_target_anchor("operator", {"database", "topic"}) is None
+
+
+def test_paired_heading_maps_only_inside_unambiguous_anchor_landmarks() -> None:
+    from ydbdoc_review_ng.links import paired_target_anchor
+
+    source = (
+        "# Свойства JDBC-драйвера {#properties}\n\n"
+        "## Примеры JDBC URL {#jdbc-url}\n"
+        "## Конец {#end}\n"
+    ).encode()
+    target = (
+        b"# JDBC Driver Properties {#properties}\n\n"
+        b"## JDBC URL Examples {#jdbc-url-examples}\n"
+        b"## End {#end}\n"
+    )
+
+    assert paired_target_anchor("jdbc-url", source, target) == "jdbc-url-examples"
+
+
+def test_paired_heading_rejects_reordered_siblings() -> None:
+    from ydbdoc_review_ng.links import paired_target_anchor
+
+    source = b"# Page {#page}\n## JDBC {#jdbc}\n## Other {#other}\n## End {#end}\n"
+    target = b"# Page {#page}\n## Other {#other}\n## JDBC EN {#jdbc-en}\n## End {#end}\n"
+
+    assert paired_target_anchor("jdbc", source, target) is None
+
+
+def test_paired_heading_rejects_reordered_translated_siblings() -> None:
+    from ydbdoc_review_ng.links import paired_target_anchor
+
+    source = b"# Root {#root}\n## A {#a-ru}\n## B {#b-ru}\n## End {#end}\n"
+    target = b"# Root {#root}\n## B {#b-en}\n## A {#a-en}\n## End {#end}\n"
+
+    assert paired_target_anchor("a-ru", source, target) is None
+
+
+def test_reference_definition_destinations_are_localized_and_validated() -> None:
+    from ydbdoc_review_ng.links import (
+        LinkDestinationResolver,
+        localize_markdown_link_destinations,
+        markdown_link_destinations_are_localized,
+    )
+
+    source = b"See [JDBC][properties].\n\n[properties]: properties.md#jdbc-url\n"
+    expected = b"See [JDBC][properties].\n\n[properties]: properties.md#jdbc-url-examples\n"
+    resolver = LinkDestinationResolver(
+        "ru",
+        "en",
+        overrides={"properties.md#jdbc-url": "properties.md#jdbc-url-examples"},
+    )
+
+    assert localize_markdown_link_destinations(source, resolver) == expected
+    assert markdown_link_destinations_are_localized(source, expected, resolver)
+    assert not markdown_link_destinations_are_localized(source, source, resolver)
+
+
+def test_destinations_inside_code_are_not_localized_or_validated() -> None:
+    from ydbdoc_review_ng.links import (
+        LinkDestinationResolver,
+        localize_markdown_link_destinations,
+        markdown_link_destinations_are_localized,
+    )
+
+    source = (
+        b"```md\n[properties]: missing.md#jdbc-url\n"
+        b"<https://ydb.tech/docs/ru/missing#jdbc-url>\n```\n\n"
+        b"`[inline](missing.md#jdbc-url)`\n"
+    )
+    resolver = LinkDestinationResolver(
+        "ru",
+        "en",
+        invalid_sources=frozenset(
+            {
+                "missing.md#jdbc-url",
+                "https://ydb.tech/docs/ru/missing#jdbc-url",
+            }
+        ),
+    )
+
+    assert localize_markdown_link_destinations(source, resolver) == source
+    assert markdown_link_destinations_are_localized(source, source, resolver)
+
+
+def test_destinations_inside_blockquote_code_are_opaque() -> None:
+    from ydbdoc_review_ng.links import markdown_link_destinations
+
+    source = (
+        b"> ~~~md\n"
+        b"> [fenced](page.md#section)\n"
+        b"> ~~~\n\n"
+        b">     [indented](page.md#section)\n"
+    )
+
+    assert markdown_link_destinations(source) == ()
+
+
+def test_localized_destination_collision_cannot_hide_lost_link() -> None:
+    from ydbdoc_review_ng.links import (
+        LinkDestinationResolver,
+        markdown_link_destinations_are_localized,
+    )
+
+    source = b"[first](page.md#x) and [second](page.md#y)\n"
+    lost_first = b"[second](page.md#y)\n"
+    resolver = LinkDestinationResolver(
+        "ru",
+        "en",
+        overrides={"page.md#x": "page.md#y"},
+    )
+
+    assert not markdown_link_destinations_are_localized(source, lost_first, resolver)
