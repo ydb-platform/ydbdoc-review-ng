@@ -1223,6 +1223,165 @@ def test_relative_internal_link_uses_paired_target_heading_anchor() -> None:
     )
 
 
+def test_translation_accepts_fragment_from_yfm_included_target_page() -> None:
+    destination = "concepts/datamodel/table.md#column-oriented-tables"
+    source = f"See [column-oriented tables]({destination}).\n".encode()
+    document = document_for(source, target=None)
+    source_wrapper = RepoPath("ydb/docs/ru/core/concepts/datamodel/table.md")
+    target_wrapper = RepoPath("ydb/docs/en/core/concepts/datamodel/table.md")
+    source_include = RepoPath(
+        "ydb/docs/ru/core/concepts/datamodel/_includes/table.md"
+    )
+    target_include = RepoPath(
+        "ydb/docs/en/core/concepts/datamodel/_includes/table.md"
+    )
+    source_snapshot = SnapshotRef(SNAPSHOT.repository, GitSha("b" * 40))
+    target_snapshot = SnapshotRef(SNAPSHOT.repository, GitSha("c" * 40))
+    files = {
+        (source_snapshot, source_wrapper): b"{% include [table.md](_includes/table.md) %}\n",
+        (target_snapshot, target_wrapper): b"{% include [table.md](_includes/table.md) %}\n",
+        (source_snapshot, source_include): (
+            b"## Column-oriented tables {#column-oriented-tables}\n"
+        ),
+        (target_snapshot, target_include): (
+            b"## Column-oriented tables {#column-oriented-tables}\n"
+        ),
+    }
+
+    class Github:
+        def read_bytes(self, snapshot: SnapshotRef, path: RepoPath, /) -> bytes | None:
+            return files.get((snapshot, path))
+
+    models = ScriptedModels([source.decode()])
+    content = content_with(models)
+    content.source = cast(RuntimeSource, SimpleNamespace(github=Github()))
+    content.plans = cast(
+        FrozenSourcePlans,
+        SimpleNamespace(
+            preparation=SimpleNamespace(
+                snapshots=SimpleNamespace(source_snapshot=source_snapshot),
+                metadata_snapshot=target_snapshot,
+                inventory=SimpleNamespace(pair_decisions=(), files=()),
+            )
+        ),
+    )
+
+    resolver = content._link_resolver(document, None, metadata_input=True)
+    assert resolver.allows(destination, destination)
+
+    _accepted, translated = content._translate_document(document)
+
+    assert translated.translated_markdown.encode() == source
+    assert len(models.calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("opaque_wrapper", "hidden_content"),
+    [
+        (
+            (
+                b"{% note info %}\n"
+                b"{% cut \"Example\" %}\n"
+                b"```yfm\n"
+                b"{% include [example](hidden.md) %}\n"
+                b"```\n"
+                b"{% endcut %}\n"
+                b"{% endnote %}\n"
+            ),
+            b"```\n## Hidden {#hidden-anchor}\n",
+        ),
+        (
+            (
+                b"{% note info %}\n"
+                b"<!--\n"
+                b"{% include [example](hidden.md) %}\n"
+                b"-->\n"
+                b"{% endnote %}\n"
+            ),
+            b"-->\n## Hidden {#hidden-anchor}\n",
+        ),
+    ],
+)
+def test_fragment_from_include_inside_opaque_yfm_body_remains_invalid(
+    opaque_wrapper: bytes, hidden_content: bytes
+) -> None:
+    destination = "concepts/datamodel/table.md#hidden-anchor"
+    document = document_for(f"See [hidden]({destination}).\n".encode(), target=None)
+    source_wrapper = RepoPath("ydb/docs/ru/core/concepts/datamodel/table.md")
+    target_wrapper = RepoPath("ydb/docs/en/core/concepts/datamodel/table.md")
+    hidden = RepoPath("ydb/docs/en/core/concepts/datamodel/hidden.md")
+    files = {
+        source_wrapper: b"## Hidden {#hidden-anchor}\n",
+        target_wrapper: opaque_wrapper,
+        hidden: hidden_content,
+    }
+
+    class Github:
+        def read_bytes(self, _snapshot: SnapshotRef, path: RepoPath, /) -> bytes | None:
+            return files.get(path)
+
+    content = content_with(ScriptedModels([]))
+    content.source = cast(RuntimeSource, SimpleNamespace(github=Github()))
+    content.plans = cast(
+        FrozenSourcePlans,
+        SimpleNamespace(
+            preparation=SimpleNamespace(
+                snapshots=SimpleNamespace(source_snapshot=SNAPSHOT),
+                metadata_snapshot=SNAPSHOT,
+            )
+        ),
+    )
+
+    resolver = content._link_resolver(document, None, metadata_input=True)
+
+    assert not resolver.allows(destination, destination)
+
+
+def test_included_heading_keeps_position_for_paired_anchor_mapping() -> None:
+    destination = "concepts/datamodel/table.md#source-anchor"
+    document = document_for(f"See [section]({destination}).\n".encode(), target=None)
+    source_wrapper = RepoPath("ydb/docs/ru/core/concepts/datamodel/table.md")
+    target_wrapper = RepoPath("ydb/docs/en/core/concepts/datamodel/table.md")
+    source_include = RepoPath("ydb/docs/ru/core/concepts/datamodel/section.md")
+    target_include = RepoPath("ydb/docs/en/core/concepts/datamodel/section.md")
+    files = {
+        source_wrapper: (
+            b"## Before {#before}\n"
+            b"{% include [section](section.md) %}\n"
+            b"## After {#after}\n"
+        ),
+        target_wrapper: (
+            b"## Before {#before}\n"
+            b"{% include [section](section.md) %}\n"
+            b"## After {#after}\n"
+        ),
+        source_include: b"### Source section {#source-anchor}\n",
+        target_include: b"### Target section {#target-anchor}\n",
+    }
+
+    class Github:
+        def read_bytes(self, _snapshot: SnapshotRef, path: RepoPath, /) -> bytes | None:
+            return files.get(path)
+
+    content = content_with(ScriptedModels([]))
+    content.source = cast(RuntimeSource, SimpleNamespace(github=Github()))
+    content.plans = cast(
+        FrozenSourcePlans,
+        SimpleNamespace(
+            preparation=SimpleNamespace(
+                snapshots=SimpleNamespace(source_snapshot=SNAPSHOT),
+                metadata_snapshot=SNAPSHOT,
+            )
+        ),
+    )
+
+    resolver = content._link_resolver(document, None, metadata_input=True)
+
+    assert resolver(destination) == (
+        "concepts/datamodel/table.md#target-anchor"
+    )
+
+
 def test_unmapped_relative_target_fragment_is_invalid() -> None:
     destination = "reference/properties.md#jdbc-url"
     document = document_for(f"See [JDBC URL]({destination}).\n".encode())

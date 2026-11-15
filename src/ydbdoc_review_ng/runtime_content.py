@@ -80,7 +80,7 @@ from ydbdoc_review_ng.models import AttemptError, ModelRequest
 from ydbdoc_review_ng.models.configuration import PRODUCTION_MODEL
 from ydbdoc_review_ng.models.types import FrozenJson, mutable_json
 from ydbdoc_review_ng.parser.markdown import build_markdown_plan
-from ydbdoc_review_ng.plan import ProtectedKind, SourcePlan, fields_of
+from ydbdoc_review_ng.plan import BlockKind, ProtectedKind, SourcePlan, fields_of
 from ydbdoc_review_ng.ports import SnapshotReader
 from ydbdoc_review_ng.publication import (
     FileChange,
@@ -177,6 +177,117 @@ from ydbdoc_review_ng.translation_plan import (
     reconcile_fixed_outputs,
     translation_plan_sha256,
 )
+
+
+_YFM_MARKDOWN_INCLUDE = re.compile(
+    rb" {0,3}\{%[ \t]+include[ \t]+"
+    rb"(?:\[[^\]\r\n]*\]\(([^)\r\n]+)\)|([^\s%][^\r\n]*?))"
+    rb"[ \t]+%\}[ \t]*(?:\r?\n)?"
+)
+
+
+def _yfm_include_directives(
+    source: bytes,
+    plan: SourcePlan,
+    /,
+    *,
+    depth: int = 0,
+) -> tuple[tuple[int, int, bytes], ...]:
+    if depth >= 32:
+        return ()
+    directives: list[tuple[int, int, bytes]] = []
+    for block in plan.blocks:
+        if block.kind is not BlockKind.T008_YFM:
+            continue
+        block_content = source[block.span.start : block.span.end]
+        match = _YFM_MARKDOWN_INCLUDE.fullmatch(block_content)
+        if match is not None:
+            directives.append(
+                (block.span.start, block.span.end, match[1] or match[2])
+            )
+            continue
+        lines = block_content.splitlines(keepends=True)
+        if len(lines) < 3:
+            continue
+        body_start = block.span.start + len(lines[0])
+        body_end = block.span.end - len(lines[-1])
+        body = source[body_start:body_end]
+        body_plan = build_markdown_plan(plan.source_snapshot, plan.source_path, body)
+        directives.extend(
+            (start + body_start, end + body_start, raw)
+            for start, end, raw in _yfm_include_directives(
+                body,
+                body_plan,
+                depth=depth + 1,
+            )
+        )
+    return tuple(directives)
+
+
+def _markdown_with_local_includes(
+    reader: SnapshotReader,
+    snapshot: SnapshotRef,
+    path: RepoPath,
+    content: bytes,
+    /,
+    *,
+    seen: frozenset[RepoPath] = frozenset(),
+    depth: int = 0,
+) -> bytes:
+    if path in seen or depth >= 32:
+        return content
+    seen = seen | {path}
+    plan = build_markdown_plan(snapshot, path, content)
+    directives = _yfm_include_directives(content, plan)
+    parts: list[bytes] = []
+    cursor = 0
+    for start, end, raw_bytes in directives:
+        parts.append(content[cursor:start])
+        directive = content[start:end]
+        try:
+            raw = raw_bytes.decode("utf-8").strip()
+            parsed = urllib.parse.urlsplit(raw)
+        except (UnicodeDecodeError, ValueError):
+            parts.append(directive)
+            cursor = end
+            continue
+        if (
+            parsed.scheme
+            or parsed.netloc
+            or parsed.query
+            or parsed.fragment
+            or parsed.path.startswith("/")
+            or not parsed.path.endswith(".md")
+        ):
+            parts.append(directive)
+            cursor = end
+            continue
+        normalized = posixpath.normpath(
+            posixpath.join(posixpath.dirname(path.value), parsed.path)
+        )
+        if normalized == ".." or normalized.startswith("../"):
+            parts.append(directive)
+            cursor = end
+            continue
+        include_path = RepoPath(normalized)
+        included = reader.read_bytes(snapshot, include_path)
+        if included is None:
+            parts.append(directive)
+            cursor = end
+            continue
+        parts.append(
+            _markdown_with_local_includes(
+                reader,
+                snapshot,
+                include_path,
+                included,
+                seen=seen,
+                depth=depth + 1,
+            )
+        )
+        cursor = end
+    parts.append(content[cursor:])
+    return b"".join(parts)
 
 if TYPE_CHECKING:
     from ydbdoc_review_ng.persistence import ContinuationCheckpoint
@@ -957,6 +1068,7 @@ class RuntimeContent:
                 ):
                     continue
                 source_content: bytes | None = None
+                source_link_path: RepoPath | None = None
                 target_link_path: RepoPath | None = None
                 if parsed.scheme or parsed.netloc:
                     prefix = f"/docs/{document.entry.pair.source_locale.value}"
@@ -979,9 +1091,9 @@ class RuntimeContent:
                         if document.entry.pair.source_locale.value == "ru"
                         else self.roots.en
                     )
+                    source_link_path = RepoPath(f"{source_root.value}/{suffix}")
                     source_content = self.source.github.read_bytes(
-                        plans.preparation.snapshots.source_snapshot,
-                        RepoPath(f"{source_root.value}/{suffix}"),
+                        plans.preparation.snapshots.source_snapshot, source_link_path
                     )
                     target_link_path = RepoPath(f"{target_root.value}/{suffix}")
                     target_content = self.source.github.read_bytes(
@@ -1021,7 +1133,25 @@ class RuntimeContent:
                     if parsed.path:
                         invalid_sources.add(destination)
                     continue
-                anchors = markdown_anchors(target_content)
+                target_anchor_content = (
+                    _markdown_with_local_includes(
+                        self.source.github,
+                        target_snapshot,
+                        target_link_path,
+                        target_content,
+                    )
+                    if target_link_path is not None
+                    else target_content
+                )
+                source_anchor_content = source_content
+                if source_content is not None and source_link_path is not None:
+                    source_anchor_content = _markdown_with_local_includes(
+                        self.source.github,
+                        plans.preparation.snapshots.source_snapshot,
+                        source_link_path,
+                        source_content,
+                    )
+                anchors = markdown_anchors(target_anchor_content)
                 existing = overrides.get(destination)
                 if existing is not None:
                     existing_fragment = urllib.parse.urlsplit(existing).fragment
@@ -1036,16 +1166,18 @@ class RuntimeContent:
                     ):
                         continue
                     replacement = None
-                    if source_content is not None:
+                    if source_anchor_content is not None:
                         page_overrides = existing_target_link_overrides(
-                            source_content, target_content
+                            source_anchor_content, target_anchor_content
                         )
                         localized_self = page_overrides.get(f"#{parsed.fragment}")
                         if localized_self is not None:
                             replacement = urllib.parse.urlsplit(localized_self).fragment
                         if replacement is None:
                             replacement = paired_target_anchor(
-                                parsed.fragment, source_content, target_content
+                                parsed.fragment,
+                                source_anchor_content,
+                                target_anchor_content,
                             )
                     if replacement is None:
                         replacement = closest_target_anchor(parsed.fragment, anchors)
