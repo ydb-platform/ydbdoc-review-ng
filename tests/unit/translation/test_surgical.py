@@ -80,6 +80,47 @@ def test_structural_insert_appends_hunk_on_existing_target() -> None:
     assert hunk.target_span == (len(b"* One\n"), len(b"* One\n"))
 
 
+def test_multiple_structural_inserts_do_not_collapse_into_tail_append() -> None:
+    source_before = (
+        b"## SELECT\n\nOld introduction.\n\n"
+        b"## Procedure {#selectexec}\n\nSteps.\n\n"
+        b"## Other section\n"
+    )
+    source_after = (
+        b'{% if backend_name != "YDB" %}\n'
+        b"## SELECT\n\nOld introduction.\n\n"
+        b"{% endif %}\n\n"
+        b'{% if backend_name == "YDB" %}\n\n'
+        b"# SELECT\n\nNew reference.\n\n"
+        b"{% endif %}\n\n"
+        b"## Procedure {#selectexec}\n\nSteps.\n\n"
+        b'{% if backend_name != "YDB" %}\n'
+        b"## Other section\n"
+        b"{% endif %}\n"
+    )
+    existing_en = (
+        b"## SELECT\n\nExisting English introduction.\n\n"
+        b"## Procedure {#selectexec}\n\nEnglish steps.\n\n"
+        b"## Other section\n"
+    )
+
+    plan = plan_surgical_update(source_before, source_after, existing_en)
+
+    assert plan.mode is SurgicalMode.WHOLE_FILE
+    assert plan.hunks == ()
+
+
+def test_nonterminal_insert_matching_existing_suffix_does_not_append() -> None:
+    plan = plan_surgical_update(
+        b"B\nA\n",
+        b"A\nB\nA\n",
+        b"English B\nEnglish A\n",
+    )
+
+    assert plan.mode is SurgicalMode.WHOLE_FILE
+    assert plan.hunks == ()
+
+
 def test_join_insert_hunk_adds_blank_line_before_heading() -> None:
     existing = b"**KiKiMR** is the old name.\n"
     insert = b"### Tablet recovery mode {#tablet-recovery-mode}\n\nBody.\n"

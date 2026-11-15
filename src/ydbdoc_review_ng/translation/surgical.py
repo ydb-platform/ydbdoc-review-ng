@@ -234,8 +234,11 @@ def plan_surgical_update(
         if patched is not None:
             return SurgicalPlan(SurgicalMode.UNIQUE_REPLACEMENTS, patched_target=patched)
     line_hunks = _changed_line_hunks(source_before, source_after)
-    if line_hunks and all(not before for before, after in line_hunks) and all(
-        after for _before, after in line_hunks
+    if (
+        len(line_hunks) == 1
+        and not line_hunks[0][0]
+        and bool(line_hunks[0][1])
+        and source_after == source_before + line_hunks[0][1]
     ):
         inserted = b"".join(after for _before, after in line_hunks)
         end = len(existing_target)
