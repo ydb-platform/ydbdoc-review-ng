@@ -32,6 +32,16 @@ jobs:
             --memory=3g --cpus=2 -p 2136:2136 \
             -e GRPC_PORT=2136 -e YDB_ANONYMOUS_CREDENTIALS=1 \
             ydbplatform/local-ydb:25.4.1.15@sha256:55fdd320ee0064b9e8c628cb766d481f9be6a2c021ec8235ea8d2280fc937aaf
+      - name: Wait for disposable YDB storage
+        run: |
+          for attempt in $(seq 1 60); do
+            if [ "$(docker inspect --format '{{.State.Health.Status}}' policy-review-ydb)" = healthy ]; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs --tail 150 policy-review-ydb
+          exit 1
       - name: Check real YDB transactions without model calls
         env:
           IMAGE: ghcr.io/ydb-platform/ydbdoc-review-ng:review-${{ github.sha }}
