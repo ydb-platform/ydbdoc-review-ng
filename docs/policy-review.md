@@ -131,7 +131,7 @@ Inline review comments и GitHub suggestions пока не реализован�
    `python -m ydbdoc_review_ng.policy_review.commands init-schema --file docs/doc-review-schema.sql`.
    Запускать из доверенного checkout с доступом к audit YDB; PR worker не выполняет DDL.
 2. Выполнить workflow `Build documentation policy reviewer` в main. Он собирает
-   worker с hash-locked зависимостями из внутреннего mirror, проверяет offline CLI
+   worker с hash-locked зависимостями из публичного PyPI, проверяет offline CLI
    и транзакции на одноразовой anonymous /local YDB; затем публикует image в GHCR.
    Этот workflow не получает credentials модели и не может сделать платный вызов.
 3. После успеха перенести `review-image.json` из build artifact в `docker/review-image.json`,

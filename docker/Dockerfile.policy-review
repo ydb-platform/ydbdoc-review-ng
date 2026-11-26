@@ -2,7 +2,7 @@ FROM python:3.11.14-slim-bookworm
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONSAFEPATH=1
 COPY docker/review-requirements.lock /opt/review-requirements.lock
 RUN python -m pip install --no-cache-dir --only-binary=:all: --require-hashes \
-    --index-url https://pypi.yandex-team.ru/simple/ -r /opt/review-requirements.lock
+    --index-url https://pypi.org/simple/ -r /opt/review-requirements.lock
 COPY src /opt/review/src
 COPY tests/fixtures/policy_review /opt/review/fixtures
 ENV PYTHONPATH=/opt/review/src
