@@ -160,3 +160,25 @@ def test_worker_can_read_public_head_without_any_github_credential() -> None:
 def test_missing_host_credentials_do_not_enable_public_mode_implicitly() -> None:
     with pytest.raises(ReviewError, match="review_github_configuration_invalid"):
         ReviewHTTP("")("GET", PREFIX + "/pulls/42")
+
+
+@pytest.mark.parametrize("count", [51, 200, 201])
+def test_bounded_context_handles_multiple_pages_without_silent_truncation(count: int) -> None:
+    fixture = snapshot_json()
+    body = "# Test\n\n" + " ".join(f"[page](related-{n}.md)" for n in range(count))
+    def api(method, path, payload):
+        if "/compare/" in path:
+            return {"merge_base_commit": {"sha": "c" * 40}}
+        if "/contents/" in path:
+            content_path = path.split("/contents/", 1)[1].split("?", 1)[0]
+            content = fixture["rules"].get(content_path, body if content_path == PATH else "# Related\n")
+            return {"type": "file", "encoding": "base64", "size": len(content.encode()),
+                    "content": base64.b64encode(content.encode()).decode()}
+        return row()
+    github = ReviewGitHub(api)
+    if count > 200:
+        with pytest.raises(ReviewError, match="review_context_limit_exceeded"):
+            github.snapshot(PR, [{"filename": PATH, "status": "added"}])
+    else:
+        result = github.snapshot(PR, [{"filename": PATH, "status": "added"}])
+        assert result is not None and len(result.context) == count

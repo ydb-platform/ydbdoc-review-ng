@@ -21,6 +21,7 @@ from ydbdoc_review_ng.models.configuration import (
     PRODUCTION_MODEL,
     PRODUCTION_PRICING,
 )
+from ydbdoc_review_ng.models.context import ContextBudget
 from ydbdoc_review_ng.policy_review.budget import RunBudget
 from ydbdoc_review_ng.policy_review.types import ReviewError
 
@@ -49,6 +50,15 @@ class BudgetedPolicyModel:
         self._timeout = timeout_seconds
         self._audit_failed = False
         self._before_attempt = before_attempt
+
+    def prepare_request(self, request: ModelRequest) -> ContextBudget:
+        """Preflight exact wire size without reserving money or sending a request."""
+        client = YandexOpenAIClient(
+            self._credentials, self._transport, lambda _: None,
+            pricing=PRODUCTION_PRICING, execution=ExecutionConfig(max_attempts=1),
+            timeout_seconds=self._timeout,
+        )
+        return client.prepare_request(request)
 
     def invoke(self, request: ModelRequest) -> PolicyModelResult:
         if self._audit_failed:

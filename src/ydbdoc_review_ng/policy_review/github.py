@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import base64
 import json
-import posixpath
 import re
 import urllib.error
 import urllib.parse
@@ -13,6 +12,7 @@ from collections.abc import Callable
 from typing import Any
 
 from ydbdoc_review_ng.policy_review.admission import REPOSITORY, ReviewPR, login
+from ydbdoc_review_ng.policy_review.references import markdown_targets
 from ydbdoc_review_ng.policy_review.types import (
     ROOT,
     RULE_FILES,
@@ -193,14 +193,10 @@ class ReviewGitHub:
         changed_paths = {r["path"] for r in changes}
         # Includes and directly linked Markdown pages are data, never executable configs.
         for change in changes:
-            for target in re.findall(r"\]\(([^\s)]+\.md(?:#[^\s)]*)?)\)", change["after"] or ""):
-                parsed = urllib.parse.urlsplit(target)
-                if parsed.scheme or parsed.netloc or not parsed.path:
+            for resolved in markdown_targets(change["path"], change["after"] or ""):
+                if resolved in changed_paths or resolved in context:
                     continue
-                resolved = posixpath.normpath(posixpath.join(posixpath.dirname(change["path"]), parsed.path))
-                if not resolved.startswith(ROOT) or resolved in changed_paths or resolved in context:
-                    continue
-                if len(context) >= 50:
+                if len(context) >= 200:
                     raise ReviewError("review_context_limit_exceeded")
                 value = self.read_text(resolved, pr.head_sha, required=False)
                 if value is not None:

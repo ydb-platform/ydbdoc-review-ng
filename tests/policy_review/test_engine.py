@@ -200,3 +200,110 @@ def test_real_policy_fixture_is_complete_and_produces_grounded_offline_findings(
     assert {(f.rule_id, f.line) for f in report.findings} == {
         ("FORMAT.MD032", 4), ("FORMAT.YQL", 6), ("FORMAT.MD009", 10)
     }
+
+
+def test_large_review_keeps_whole_pages_and_splits_related_context() -> None:
+    value = snapshot_json()
+    second = PATH + ".md"
+    value["files"] = [{"path": PATH, "before": None, "after": "# Test\n\n[A](a.md) [B](b.md)\n"},
+                      {"path": second, "before": None, "after": "# Second\n"}]
+    parent = PATH.rsplit("/", 1)[0]
+    value["context"] = {parent + "/a.md": "A" * 600_000, parent + "/b.md": "B" * 600_000}
+    calls = []
+    def transport(request):
+        payload = json.loads(request.body)
+        prompt = json.loads(payload["messages"][1]["content"])
+        calls.append(prompt)
+        assert len(request.body) + payload["max_tokens"] <= 1_048_576
+        assert len(prompt["files"]) == 1
+        path = prompt["files"][0]["path"]
+        result = json.loads(semantic_json())
+        for item in result["coverage"]:
+            item["path"] = path
+        return response(json.dumps(result))
+    model = BudgetedPolicyModel(YandexCredentials("test-only", "folder"), transport,
+                                RunBudget(Decimal(5000), lambda _: None), lambda _: None)
+    report = review_snapshot(ReviewSnapshot.from_json(value), model=model)
+    assert len(calls) == 3
+    assert {p for call in calls for p, _ in call["context"]} == set(value["context"])
+    assert {(c["path"], c["rule_id"]) for c in report.coverage if c["rule_id"].startswith("DOC.")} == {
+        (path, "DOC." + str(n)) for path in (PATH, second) for n in range(1, 16)}
+    assert report.cost_rub == "0.3" and report.status == "incomplete"
+
+
+def test_budget_stop_does_not_check_unprocessed_pages() -> None:
+    value = snapshot_json()
+    value["files"].append({"path": PATH + ".md", "before": None, "after": "# Second\n"})
+    calls = []
+    def transport(request):
+        calls.append(request)
+        return response(semantic_json(), Decimal("49.99"))
+    model = BudgetedPolicyModel(YandexCredentials("test-only", "folder"), transport,
+                                RunBudget(Decimal(50), lambda _: None), lambda _: None)
+    report = review_snapshot(ReviewSnapshot.from_json(value), model=model)
+    assert len(calls) == 1 and report.status == "budget_insufficient"
+    assert all(c["status"] == "not_checked" for c in report.coverage
+               if c["path"] == PATH + ".md" and c["rule_id"].startswith("DOC."))
+
+
+def test_oversized_indivisible_page_fails_before_any_paid_call() -> None:
+    model = BudgetedPolicyModel(YandexCredentials("test-only", "folder"),
+                                lambda _: pytest.fail("No paid call may occur"),
+                                RunBudget(Decimal(5000), lambda _: None), lambda _: None)
+    with pytest.raises(ReviewError, match="model_context_limit_exceeded"):
+        review_snapshot(snapshot(after="# Test\n" + "x" * 1_048_576), model=model)
+    assert model.budget.reserved == 0 and model.budget.spent == 0
+
+
+def test_partial_page_portions_never_become_complete_coverage() -> None:
+    value = snapshot_json()
+    value["files"][0]["after"] = "# Test\n\n[A](a.md) [B](b.md)\n"
+    parent = PATH.rsplit("/", 1)[0]
+    value["context"] = {parent + "/a.md": "A" * 600_000, parent + "/b.md": "B" * 600_000}
+    responses = iter([response(semantic_json()), HttpResponse(200, b"{}")])
+    calls = []
+    def transport(request):
+        calls.append(request)
+        return next(responses)
+    model = BudgetedPolicyModel(YandexCredentials("test-only", "folder"), transport,
+                                RunBudget(Decimal(5000), lambda _: None), lambda _: None)
+    report = review_snapshot(ReviewSnapshot.from_json(value), model=model)
+    assert report.status == "cost_unknown" and len(calls) == 2
+    assert all(c["status"] == "not_checked" for c in report.coverage
+               if c["rule_id"].startswith("DOC."))
+
+
+def test_finding_disproved_by_another_context_portion_is_not_published() -> None:
+    value = snapshot_json()
+    value["files"][0]["after"] = "# Test\n\n[A](a.md) [B](b.md)\n"
+    parent = PATH.rsplit("/", 1)[0]
+    value["context"] = {parent + "/a.md": "A" * 600_000,
+                        parent + "/b.md": "Definition\n" + "B" * 600_000}
+    finding = {"rule_id": "DOC.1", "path": PATH, "line": 1, "quote": "# Test",
+               "explanation": "Definition missing", "suggestion": "Add definition"}
+    responses = iter([response(semantic_json(findings=[finding])), response(semantic_json())])
+    def transport(request):
+        wire = json.loads(request.body)
+        content = json.loads(wire["messages"][1]["content"])
+        assert content["context_is_partial"] is True
+        return next(responses)
+    model = BudgetedPolicyModel(YandexCredentials("test-only", "folder"), transport,
+                                RunBudget(Decimal(5000), lambda _: None), lambda _: None)
+    report = review_snapshot(ReviewSnapshot.from_json(value), model=model)
+    assert not report.findings
+    assert next(c for c in report.coverage if c["rule_id"] == "DOC.1")["status"] == "not_checked"
+
+
+def test_packing_preserves_full_completion_budget_at_wire_boundary() -> None:
+    from ydbdoc_review_ng.policy_review.engine import _page_requests
+    model = BudgetedPolicyModel(YandexCredentials("test-only", "folder"),
+                                lambda _: pytest.fail("No paid call may occur"),
+                                RunBudget(Decimal(5000), lambda _: None), lambda _: None)
+    frozen = snapshot(after="# Test\n\n[A](a.md)\n")
+    context_path = PATH.rsplit("/", 1)[0] + "/a.md"
+    small = _page_requests(PolicyBundle.load(frozen), frozen.files[0], {context_path: "A" * 100}, model)
+    wire = model.prepare_request(small[0])
+    # Exactly one byte less completion space than the required 4096 tokens.
+    length = 1_048_576 - 4096 - wire.input_tokens + 101
+    with pytest.raises(ReviewError, match="model_context_limit_exceeded"):
+        _page_requests(PolicyBundle.load(frozen), frozen.files[0], {context_path: "A" * length}, model)
