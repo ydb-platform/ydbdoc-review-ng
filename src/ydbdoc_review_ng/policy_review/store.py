@@ -38,10 +38,10 @@ $mine = SELECT COUNT(*) FROM doc_review_claims
  WHERE repository=$repository AND pr=$pr AND request_id=$request_id AND owner=$owner AND phase='waiting';
 UPSERT INTO doc_review_claims (repository, pr, request_id, owner, phase)
 SELECT $repository AS repository, $pr AS pr, $request_id AS request_id,
- $owner AS owner, 'waiting' AS phase WHERE $previous == 0;
+ $owner AS owner, 'waiting'u AS phase FROM AS_TABLE([<|_dummy: 0|>]) WHERE $previous == 0;
 UPSERT INTO doc_review_runs (owner, repository, pr, head, status, updated_at, report)
 SELECT $owner AS owner, $repository AS repository, $pr AS pr, $head AS head,
- 'waiting' AS status, $now AS updated_at, $empty_report AS report WHERE $previous == 0;
+ 'waiting'u AS status, $now AS updated_at, $empty_report AS report FROM AS_TABLE([<|_dummy: 0|>]) WHERE $previous == 0;
 SELECT $previous == 0 OR $mine == 1 AS accepted;
 """
 _CLAIM = """
@@ -50,13 +50,13 @@ $claims = SELECT COUNT(*) FROM doc_review_claims
   WHERE repository=$repository AND pr=$pr AND request_id=$request_id AND owner=$owner AND phase='waiting';
 $eligible = $leases == 0 AND $claims == 1;
 UPSERT INTO doc_review_leases (repository, pr, head, owner)
-SELECT $repository AS repository, $pr AS pr, $head AS head, $owner AS owner WHERE $eligible;
+SELECT $repository AS repository, $pr AS pr, $head AS head, $owner AS owner FROM AS_TABLE([<|_dummy: 0|>]) WHERE $eligible;
 UPSERT INTO doc_review_claims (repository, pr, request_id, owner, phase)
 SELECT $repository AS repository, $pr AS pr, $request_id AS request_id,
- $owner AS owner, 'running' AS phase WHERE $eligible;
+ $owner AS owner, 'running'u AS phase FROM AS_TABLE([<|_dummy: 0|>]) WHERE $eligible;
 UPSERT INTO doc_review_runs (owner, repository, pr, head, status, updated_at, report)
 SELECT $owner AS owner, $repository AS repository, $pr AS pr, $head AS head,
- 'prepared' AS status, $now AS updated_at, $empty_report AS report WHERE $eligible;
+ 'prepared'u AS status, $now AS updated_at, $empty_report AS report FROM AS_TABLE([<|_dummy: 0|>]) WHERE $eligible;
 SELECT $eligible AS accepted;
 """
 _RESERVE = """
@@ -64,7 +64,8 @@ $held = SELECT COUNT(*) FROM doc_review_leases WHERE owner=$owner;
 $previous = SELECT COUNT(*) FROM doc_review_attempts WHERE owner=$owner AND attempt=$attempt;
 UPSERT INTO doc_review_attempts (owner, attempt, kind, reservation, cost, updated_at)
 SELECT $owner AS owner, $attempt AS attempt, $kind AS kind, $reservation AS reservation,
- $cost AS cost, $now AS updated_at WHERE $held == 1 AND $previous == 0;
+ $cost AS cost, $now AS updated_at
+FROM AS_TABLE([<|_dummy: 0|>]) WHERE $held == 1 AND $previous == 0;
 SELECT $held == 1 AND $previous == 0 AS accepted;
 """
 _SETTLE = """
