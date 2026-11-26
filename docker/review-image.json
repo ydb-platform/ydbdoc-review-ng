@@ -1,4 +1,4 @@
 {
-  "image": null,
-  "revision": null
+  "image": "ghcr.io/ydb-platform/ydbdoc-review-ng@sha256:9b1096eb3d873a9999d3e25d165a3fed65ab6873a5f95dd49eab6ea7bd985599",
+  "revision": "5d4d2b915503a857d1f1cdcbfe74c0b2838c5f54"
 }
