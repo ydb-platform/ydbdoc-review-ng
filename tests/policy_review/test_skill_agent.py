@@ -9,13 +9,22 @@ from ydbdoc_review_ng.policy_review.types import ReviewError
 pytestmark = pytest.mark.unit
 
 
+def _github(api):
+    def read(method, route, payload=None):
+        if "/contents/ydb/docs/.ruler/" in route:
+            return None
+        return api(method, route, payload)
+    return ReviewGitHub(read)
+
+
+
 @pytest.mark.parametrize("name", ["changelog-server.md", "release-notes/v26.md", "version-history.md"])
 def test_history_tool_returns_only_changed_lines_without_fetching_full_file(name):
     from ydbdoc_review_ng.policy_review.agent import public_changes, read_source
     path = "ydb/docs/ru/core/" + name
     changes = [{"filename": path, "patch": "@@ -900,2 +900,2 @@\n-old\n+new\n unrelated record"}]
     assert "unrelated record" not in public_changes(changes)[0]["patch"]
-    github = ReviewGitHub(lambda *_: pytest.fail("requested full history"))
+    github = _github(lambda *_: pytest.fail("requested full history"))
     args = {"path": path, "revision": "head", "start_line": 900, "end_line": 900}
     result = read_source(github, changes, "a" * 40, "b" * 40, "read_file", args)
     assert "new" in json.dumps(result)
@@ -29,7 +38,7 @@ def test_new_version_page_in_releases_stays_out_of_model_context_and_file_reads(
     path = "ydb/docs/en/core/releases/26.4.md"
     changes = [{"filename": path, "status": "added", "patch": "@@ -0,0 +1 @@\n+Release history"}]
     assert "patch" not in public_changes(changes)[0]
-    github = ReviewGitHub(lambda *_: pytest.fail("requested historical file"))
+    github = _github(lambda *_: pytest.fail("requested historical file"))
     with pytest.raises(ReviewError, match="historical_read_outside_changed_entry"):
         read_source(github, changes, "a" * 40, "b" * 40, "read_file",
                     {"path": path, "revision": "head", "start_line": 1, "end_line": 1})
@@ -87,13 +96,14 @@ def test_native_provider_can_read_head_then_complete_report(plain_markdown):
                            "gaps": ["Preview unavailable."], "findings": []}))
     model = BudgetedPolicyModel(YandexCredentials("private-api-key", "test"), transport,
                                 RunBudget(Decimal(100), events.append), lambda _: None)
-    report = review_pr(diff, ReviewGitHub(api), model)
+    report = review_pr(diff, _github(api), model)
     assert len(wires) == 2 and all(w["max_tokens"] == 8192 for w in wires)
     assert all(w["tool_choice"] == "auto" for w in wires)
     assert all(w["reasoning_effort"] == "medium" for w in wires)
     assert wires[0]["messages"][0]["role"] == "system"
     assert wires[0]["messages"][0]["content"].startswith((SKILL / "SKILL.md").read_text())
-    assert (SKILL / "public-map.md").read_text() in wires[0]["messages"][0]["content"]
+    refs = json.loads(wires[0]["messages"][0]["content"].split("\n\nTrusted skill references:\n", 1)[1])
+    assert refs["public-map"]["text"] == (SKILL / "public-map.md").read_text()
     assert json.loads(wires[0]["messages"][1]["content"])["changed_file_count"] == 1
     assert "+1. Build the archive." in wires[0]["messages"][1]["content"]
     assert json.loads(wires[1]["messages"][-1]["content"])["lines"] == [[2, "1. Build the archive."]]
@@ -117,7 +127,7 @@ def test_insufficient_budget_before_agent_turn_never_contacts_provider(limit):
     model = BudgetedPolicyModel(YandexCredentials("fake", "test"), lambda _: pytest.fail("paid"),
                                 RunBudget(Decimal(limit), lambda _: pytest.fail("reserved")), lambda _: None)
     with pytest.raises(ReviewError, match="budget_(exceeded|insufficient)"):
-        review_pr(diff, ReviewGitHub(lambda *_: pytest.fail("unexpected GitHub read")), model)
+        review_pr(diff, _github(lambda *_: pytest.fail("unexpected GitHub read")), model)
 
 
 def test_identical_failed_tool_stops_after_one_correction_attempt(capsys):
@@ -142,7 +152,7 @@ def test_identical_failed_tool_stops_after_one_correction_attempt(capsys):
                                RunBudget(Decimal(100), events.append), lambda _: None)
     with pytest.raises(ReviewError, match="repeated_tool_failure"):
         review_pr(ReviewDiff("a" * 40, "b" * 40, "c" * 40, {}, []),
-                  ReviewGitHub(lambda *_: pytest.fail("invalid window must not fetch a file")), model)
+                  _github(lambda *_: pytest.fail("invalid window must not fetch a file")), model)
     assert len(wires) == 2
     assert [e.kind for e in events] == ["reserved", "settled"] * 2
     output = capsys.readouterr().out
@@ -166,7 +176,7 @@ def test_identical_successful_read_cannot_repeat_forever():
                                RunBudget(Decimal(100), lambda _: None), lambda _: None)
     with pytest.raises(ReviewError, match="repeated_tool_call"):
         review_pr(ReviewDiff("a" * 40, "b" * 40, "c" * 40, {}, []),
-                  ReviewGitHub(lambda *_: pytest.fail("local resource needs no network")), model)
+                  _github(lambda *_: pytest.fail("local resource needs no network")), model)
     assert len(requests) == 3
 
 
@@ -207,7 +217,7 @@ def test_agent_stops_at_step_limits(monkeypatch, bound, reason):
                                 RunBudget(Decimal(100), lambda _: None), lambda _: None)
     with pytest.raises(ReviewError, match=reason):
         review_pr(ReviewDiff("a" * 40, "b" * 40, "c" * 40, {}, []),
-                  ReviewGitHub(lambda *_: pytest.fail("unexpected source read")), model)
+                  _github(lambda *_: pytest.fail("unexpected source read")), model)
     assert len(calls) == 1
 
 
@@ -240,7 +250,7 @@ def test_agent_finishes_before_reading_uses_remaining_report_budget():
 
     model = BudgetedPolicyModel(YandexCredentials("test", "test"), transport, budget, lambda _: None)
     result = review_pr(ReviewDiff("a" * 40, "b" * 40, "c" * 40, {}, []),
-                       ReviewGitHub(lambda *_: pytest.fail("no remote reads")), model)
+                       _github(lambda *_: pytest.fail("no remote reads")), model)
     assert len(wires) == 2
     assert result["status"] == "incomplete"
     assert "Reviewed available diff" in result["markdown"]
@@ -252,7 +262,7 @@ def test_empty_historical_search_is_explicitly_limited_to_changed_lines():
 
     path = "ydb/docs/ru/core/changelog-server.md"
     changes = [{"filename": path, "patch": "@@ -90 +90 @@\n-логгировать\n+логировать"}]
-    result = read_source(ReviewGitHub(lambda *_: pytest.fail("must not fetch history")),
+    result = read_source(_github(lambda *_: pytest.fail("must not fetch history")),
                          changes, "a" * 40, "b" * 40, "search",
                          {"path": path, "revision": "head", "literal": "логгир"})
     assert result["lines"] == []
@@ -266,7 +276,7 @@ def test_regular_search_reports_scope_and_truncation():
     from ydbdoc_review_ng.policy_review.agent import read_source
 
     body = ("match\n" * 21).encode()
-    github = ReviewGitHub(lambda *_: {"type": "file", "encoding": "base64", "size": len(body),
+    github = _github(lambda *_: {"type": "file", "encoding": "base64", "size": len(body),
                                      "content": base64.b64encode(body).decode()})
     result = read_source(github, [], "a" * 40, "b" * 40, "search",
                          {"path": "ydb/docs/en/topic.md", "revision": "head", "literal": "match"})
@@ -306,7 +316,7 @@ def test_thinking_tool_round_preserves_opaque_provider_state_without_logging(cap
     model = BudgetedPolicyModel(YandexCredentials("test", "test"), transport,
                                RunBudget(Decimal(100), lambda _: None), lambda _: None)
     result = review_pr(ReviewDiff("a" * 40, "b" * 40, "c" * 40, {}, []),
-                       ReviewGitHub(lambda *_: pytest.fail("no remote source")), model)
+                       _github(lambda *_: pytest.fail("no remote source")), model)
     assert len(wires) == 2
     assert opaque not in json.dumps(result)
     assert opaque not in capsys.readouterr().out

@@ -7,7 +7,7 @@ from ydbdoc_review_ng.models import AttemptResult
 from ydbdoc_review_ng.policy_review.admission import ReviewPR, ReviewTrigger
 from ydbdoc_review_ng.policy_review.budget import BudgetEvent
 from ydbdoc_review_ng.policy_review.github import ReviewGitHub
-from ydbdoc_review_ng.policy_review.types import ReviewDiff, ReviewError
+from ydbdoc_review_ng.policy_review.types import RULE_ROOT, ReviewDiff, ReviewError
 
 from .helpers import PATH
 
@@ -83,6 +83,11 @@ class FakeGitHub(ReviewGitHub):
         self.removed: list[int] = []
         self.inventory = [{"filename": PATH, "status": "modified"}]
         self.snapshots = 0
+
+    def read_text(self, path: str, revision: str, *, required: bool = True) -> str | None:
+        if path.startswith(RULE_ROOT):
+            return None  # Runtime control tests omit the separate writing-policy fixture.
+        raise AssertionError("Unexpected source read in runtime control test")
 
     def read_pr(self, pr: int) -> ReviewPR:
         return self.pr

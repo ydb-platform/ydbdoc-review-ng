@@ -74,7 +74,7 @@ def test_action_runs_full_public_pr_with_ordered_policy_on_exact_wires(tmp_path,
         "GITHUB_RUN_ID": "314", "GITHUB_RUN_ATTEMPT": "1", "RUNNER_TEMP": str(tmp_path),
         "GITHUB_EVENT_NAME": "pull_request_target", "GITHUB_EVENT_PATH": str(event_file),
         "YANDEX_API_KEY": "test-secret", "YANDEX_FOLDER_ID": "test-folder",
-        "YDBDOC_REVIEW_RULES_SHA": manifest["rules_sha"], "YDBDOC_REVIEW_MAX_RUN_COST_RUB": "200",
+        "YDBDOC_REVIEW_RULES_SHA": manifest["rules_sha"], "YDBDOC_REVIEW_MAX_RUN_COST_RUB": "100",
         "YDBDOC_REVIEW_READ_TOKEN": "test-secret", "GITHUB_OUTPUT": str(tmp_path / "output"),
     }.items():
         monkeypatch.setenv(k, v)
@@ -118,13 +118,14 @@ def test_action_runs_full_public_pr_with_ordered_policy_on_exact_wires(tmp_path,
         assert unrelated_history not in request.body.decode() and wire["max_tokens"] == 8192
         if len(wires) == 1:
             assert wire["messages"][0]["content"].startswith((SKILL / "SKILL.md").read_text())
-            assert (SKILL / "public-map.md").read_text() in wire["messages"][0]["content"]
+            refs = json.loads(wire["messages"][0]["content"].split("\n\nTrusted skill references:\n", 1)[1])
+            assert list(refs["writing-policy"]["files"].items()) == list(policy.items())
+            assert refs["writing-policy"]["revision"] == manifest["rules_sha"]
+            assert refs["public-map"]["text"] == (SKILL / "public-map.md").read_text()
             assert len(json.loads(wire["messages"][1]["content"])["changes"]) == 18
-            return tools_reply(("read_resource", {"name": "writing-policy"}),
-                               ("read_file", {"path": path, "revision": "head",
+            return tools_reply(("read_file", {"path": path, "revision": "head",
                                               "start_line": 1, "end_line": 4}))
         replies = [json.loads(m["content"]) for m in wire["messages"] if m["role"] == "tool"]
-        assert list(replies[0]["files"].items()) == list(policy.items())
         assert replies[-1]["revision"] == head and replies[-1]["lines"][0][0] == 1
         return tools_reply(("finish_review", {
             "summary": "Контрольный прогон PR 60931.", "findings": [],

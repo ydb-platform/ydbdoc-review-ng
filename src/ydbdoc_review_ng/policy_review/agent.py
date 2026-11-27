@@ -42,7 +42,7 @@ def _function(name: str, description: str, properties: dict[str, Any]) -> dict[s
 STRING = {"type": "string"}
 INTEGER = {"type": "integer", "minimum": 1}
 SOURCE = {"path": STRING, "revision": {"enum": ["base", "head"], "type": "string"}}
-FINDING = {"path": STRING, "line": INTEGER, "problem": STRING, "proof": STRING, "correction": STRING}
+FINDING = {"path": STRING, "line": INTEGER, "problem": STRING, "proof": STRING, "correction": {**STRING, "description": "The exact replacement fixing every claimed defect. No notes about unrelated or unchanged lines."}}
 TOOLS = [
     _function("read_file", "Read a repository file at HEAD or base tip, inclusive line window (1–120 lines).",
               {**SOURCE, "start_line": INTEGER, "end_line": INTEGER}),
@@ -218,17 +218,17 @@ def review_pr(diff: ReviewDiff, github: ReviewGitHub, model: BudgetedPolicyModel
     gaps = [f"{r['filename']}: {r['gap']}" for r in changes if "gap" in r]
     data = {**diff.metadata, "head_sha": diff.head_sha, "base_tip_sha": diff.base_sha,
             "writing_policy_sha": diff.rules_sha, "changed_file_count": len(diff.files), "changes": changes}
-    bundled = [name for name in RESOURCE_NAMES if name != "writing-policy"]
+    references = {name: resource(github, diff.rules_sha, name) for name in RESOURCE_NAMES}
+    policy_missing = cast(list[str], references["writing-policy"].get("missing", []))
+    gaps.extend("Файл политики отсутствует: " + p for p in policy_missing)
     instructions = (SKILL / "SKILL.md").read_text(encoding="utf-8")
-    instructions += "\n\nThe following trusted skill references are already loaded. Read writing-policy via its tool.\n"
-    for name in bundled:
-        instructions += "\n## Bundled skill reference: " + name + "\n" + (SKILL / (name + ".md")).read_text(encoding="utf-8")
+    instructions += "\n\nTrusted skill references:\n" + json.dumps(references, ensure_ascii=False)
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": instructions},
         {"role": "user", "content": json.dumps(data, ensure_ascii=False)},
     ]
     calls = 0
-    loaded: set[str] = set(bundled)
+    loaded: set[str] = set(RESOURCE_NAMES)
     failed_calls: dict[str, int] = {}
     repeated_calls: dict[str, int] = {}
     for turn_number in range(MAX_TURNS):
