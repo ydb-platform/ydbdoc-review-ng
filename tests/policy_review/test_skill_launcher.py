@@ -117,10 +117,10 @@ def test_action_runs_full_public_pr_with_ordered_policy_on_exact_wires(tmp_path,
         assert "test-secret" not in request.body.decode()
         assert unrelated_history not in request.body.decode() and wire["max_tokens"] == 8192
         if len(wires) == 1:
-            assert wire["messages"][0]["content"] == (SKILL / "SKILL.md").read_text()
+            assert wire["messages"][0]["content"].startswith((SKILL / "SKILL.md").read_text())
+            assert (SKILL / "public-map.md").read_text() in wire["messages"][0]["content"]
             assert len(json.loads(wire["messages"][1]["content"])["changes"]) == 18
-            return tools_reply(*[("read_resource", {"name": n}) for n in
-                                 ["writing-policy", "placement", "public-map", "feature-flags"]],
+            return tools_reply(("read_resource", {"name": "writing-policy"}),
                                ("read_file", {"path": path, "revision": "head",
                                               "start_line": 1, "end_line": 4}))
         replies = [json.loads(m["content"]) for m in wire["messages"] if m["role"] == "tool"]

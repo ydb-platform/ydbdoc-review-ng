@@ -92,7 +92,9 @@ def test_native_provider_can_read_head_then_complete_report(plain_markdown):
     assert all(w["tool_choice"] == "auto" for w in wires)
     assert all(w["reasoning_effort"] == "medium" for w in wires)
     assert wires[0]["messages"][0]["role"] == "system"
-    assert wires[0]["messages"][0]["content"] == (SKILL / "SKILL.md").read_text()
+    assert wires[0]["messages"][0]["content"].startswith((SKILL / "SKILL.md").read_text())
+    assert (SKILL / "public-map.md").read_text() in wires[0]["messages"][0]["content"]
+    assert json.loads(wires[0]["messages"][1]["content"])["changed_file_count"] == 1
     assert "+1. Build the archive." in wires[0]["messages"][1]["content"]
     assert json.loads(wires[1]["messages"][-1]["content"])["lines"] == [[2, "1. Build the archive."]]
     assert "private-api-key" not in json.dumps(wires)
@@ -178,7 +180,7 @@ def test_report_links_current_hunk_and_rejects_fabricated_anchor():
     args = {"summary": "One typo.", "checked": "The changed line.", "findings": [finding], "gaps": []}
     report = finish(diff, args, [])
     assert f"/blob/{diff.head_sha}/{path}#L12" in report["markdown"]
-    assert "Исправление: `typo`" in report["markdown"]
+    assert "Исправление:\n\n`typo`" in report["markdown"]
     finding["line"] = 11
     with pytest.raises(ReviewError, match="outside_head_hunk"):
         finish(diff, args, [])
@@ -225,7 +227,7 @@ def test_agent_finishes_before_reading_uses_remaining_report_budget():
         wires.append(wire)
         if len(wires) == 1:
             # Previous audited calls left enough for a report, but not safe further exploration.
-            budget.spent = Decimal(80)
+            budget.spent = Decimal(70)
             return tools_reply(("read_resource", {"name": "placement"}))
         assert not wire.get("tools")
         assert wire["messages"][-1]["role"] == "user"
@@ -326,3 +328,19 @@ def test_withheld_historical_page_does_not_serialize_a_large_line_inventory():
     result = public_changes([{"filename": "ydb/docs/en/core/releases/26.4.md", "status": "added",
                               "patch": "@@ -0,0 +1 @@\n+Historical release"}])[0]
     assert "patch" not in result and "head_changed_lines" not in result
+
+
+def test_structured_suggestion_renders_as_a_code_block():
+    from markdown_it import MarkdownIt
+
+    from ydbdoc_review_ng.policy_review.agent import finish
+    from ydbdoc_review_ng.policy_review.types import ReviewDiff
+
+    path = "ydb/docs/en/topic.md"
+    diff = ReviewDiff("a" * 40, "b" * 40, "c" * 40, {}, [
+        {"filename": path, "patch": "@@ -12 +12 @@\n-old\n+typoo"}])
+    result = finish(diff, {"summary": "One typo.", "checked": "Changed line.", "gaps": [],
+                          "findings": [{"path": path, "line": 12, "problem": "Typo.",
+                                        "proof": "typoo", "correction": "```suggestion\ntypo\n```"}]}, [])
+    html = MarkdownIt().render(result["markdown"])
+    assert '<code class="language-suggestion">typo\n</code>' in html

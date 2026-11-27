@@ -37,7 +37,7 @@ Every source tool response states its scope. `changed_lines_only` covers only ad
 
 ### Paragraph classification and documentation placement
 
-Read the placement and public-map resources using read_resource. Inspect actual parent TOCs, landing pages, and relevant neighbouring articles at HEAD to identify exact nested sections.
+Use the placement and public-map references supplied with this skill; request read_resource only if a reference is not already in context. Inspect actual parent TOCs, landing pages, and relevant neighbouring articles at HEAD to identify exact nested sections.
 
 Classify every meaningful paragraph by reader task, genre, audience and public/internal scope, in the context of the whole article and actual TOC. Record current/appropriate section and a verdict for each new or changed paragraph; read unchanged paragraphs as context. A standalone recipe in concepts requires a concrete placement finding; a short illustrative example does not. Role-specific guides, reference examples, internal oncall runbooks and minimal topic-specific overlays keep their legitimate roles.
 
@@ -45,7 +45,7 @@ A proven placement mismatch in changed content must produce a concrete finding p
 
 ### Feature flags
 
-For every YDB PR read the feature-flags resource. Check the affected feature, declaration, branch default, implementation gate and conditional warnings in both languages. Identify task evidence from public PR references when available. Report unavailable task or policy evidence and continue the independent checks.
+For every YDB PR use the bundled feature-flags reference (read_resource is available if needed). Check the affected feature, declaration, branch default, implementation gate and conditional warnings in both languages. Identify task evidence from public PR references when available. Report unavailable task or policy evidence and continue the independent checks.
 
 ### Procedure walkthrough and coverage (required for documentation)
 
@@ -176,4 +176,4 @@ Optional presentation preferences can be non-blocking follow-ups. Missing action
 
 ## Final report
 
-Return the final review as Markdown, or use finish_review for structured findings. Use reading tools only when you need more evidence; do not repeat identical reads whose results are already in the conversation. Keep the report concise: actionable findings first, then a short account of checks and named gaps. Do not enumerate every successful typo fix or reproduce a large coverage table. Include the scope and result, concrete findings, what you checked and named gaps. Identify the reviewed revision, affected locales, feature flag warning verdict, placement and procedure coverage, evidence and any unavailable checks. For an empty finding list, state what you actually examined. Write the summary in Russian and each correction in the language of its file. For every finding, supply an actual current hunk anchor, precise proof and a specific correction. Use stable exact-line links for code-derived proof. The host attaches the tariff estimate. No fixed coverage matrix is required in the public report.
+Return the final review as Markdown, or use finish_review for structured findings. Use reading tools only when you need more evidence; do not repeat identical reads whose results are already in the conversation. Keep the report concise: actionable findings first, then a short account of checks and named gaps. Do not enumerate every successful typo fix or reproduce a large coverage table. Include the scope and result, concrete findings, what you checked and named gaps. Identify the reviewed revision, affected locales, feature flag warning verdict, placement and procedure coverage, evidence and any unavailable checks. For an empty finding list, state what you actually examined. Write the summary in Russian and each correction in the language of its file. For every finding, supply an actual current hunk anchor, precise proof and a specific correction. Use stable exact-line links for code-derived proof. The host attaches the tariff estimate. No fixed coverage matrix is required in the public report. Keep summary to one short paragraph; put findings only in findings, checks only in checked, unavailable verifications only in gaps. Do not duplicate the report across fields. Do not describe unrelated old defects in gaps. Use changed_file_count for counts. List precise inspected targets and locales instead of saying all were checked when coverage is partial.

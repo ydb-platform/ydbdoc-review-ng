@@ -51,10 +51,12 @@ TOOLS = [
     _function("read_resource", "Read a complete trusted skill reference or the ordered writing policy.",
               {"name": {"type": "string", "enum": list(RESOURCE_NAMES)}}),
     _function("finish_review", "Return the human review. State scope/result, checks and named gaps.",
-              {"summary": STRING, "findings": {"type": "array", "items": {
+              {"summary": {**STRING, "description": "One short result paragraph only. No headings, finding list or coverage report here."}, "findings": {"type": "array", "items": {
                   "type": "object", "properties": FINDING, "required": list(FINDING),
-                  "additionalProperties": False}}, "checked": STRING,
-               "gaps": {"type": "array", "items": STRING}}),
+                  "additionalProperties": False}}, "checked": {
+                   **STRING, "description": "Brief factual checks. Name only exact targets actually inspected. Use changed_file_count; never infer all-target coverage."},
+               "gaps": {"type": "array", "items": {**STRING, "description":
+                   "An unavailable verification only. Do not include unrelated pre-existing defects."}}}),
 ]
 
 
@@ -197,7 +199,7 @@ def finish(diff: ReviewDiff, args: dict[str, Any], gaps: list[str]) -> dict[str,
         url = f"https://github.com/ydb-platform/ydb/blob/{diff.head_sha}/{quote(path)}#L{line}"
         parts.append(f"### [{path}:{line}]({url})\n\n" + _string(finding["problem"])
                      + "\n\nПруф: " + _string(finding["proof"])
-                     + "\n\nИсправление: " + _string(finding["correction"]))
+                     + "\n\nИсправление:\n\n" + _string(finding["correction"]))
     if not findings:
         parts.append("Замечаний нет.")
     parts.extend(["### Что проверено", _string(args["checked"])])
@@ -215,13 +217,18 @@ def review_pr(diff: ReviewDiff, github: ReviewGitHub, model: BudgetedPolicyModel
     changes = public_changes(diff.files)
     gaps = [f"{r['filename']}: {r['gap']}" for r in changes if "gap" in r]
     data = {**diff.metadata, "head_sha": diff.head_sha, "base_tip_sha": diff.base_sha,
-            "writing_policy_sha": diff.rules_sha, "changes": changes}
+            "writing_policy_sha": diff.rules_sha, "changed_file_count": len(diff.files), "changes": changes}
+    bundled = [name for name in RESOURCE_NAMES if name != "writing-policy"]
+    instructions = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+    instructions += "\n\nThe following trusted skill references are already loaded. Read writing-policy via its tool.\n"
+    for name in bundled:
+        instructions += "\n## Bundled skill reference: " + name + "\n" + (SKILL / (name + ".md")).read_text(encoding="utf-8")
     messages: list[dict[str, Any]] = [
-        {"role": "system", "content": (SKILL / "SKILL.md").read_text(encoding="utf-8")},
+        {"role": "system", "content": instructions},
         {"role": "user", "content": json.dumps(data, ensure_ascii=False)},
     ]
     calls = 0
-    loaded: set[str] = set()
+    loaded: set[str] = set(bundled)
     failed_calls: dict[str, int] = {}
     repeated_calls: dict[str, int] = {}
     for turn_number in range(MAX_TURNS):
