@@ -242,3 +242,31 @@ def test_agent_finishes_before_reading_uses_remaining_report_budget():
     assert result["status"] == "incomplete"
     assert "Reviewed available diff" in result["markdown"]
     assert budget.spent < budget.limit
+
+
+def test_empty_historical_search_is_explicitly_limited_to_changed_lines():
+    from ydbdoc_review_ng.policy_review.agent import read_source
+
+    path = "ydb/docs/ru/core/changelog-server.md"
+    changes = [{"filename": path, "patch": "@@ -90 +90 @@\n-логгировать\n+логировать"}]
+    result = read_source(ReviewGitHub(lambda *_: pytest.fail("must not fetch history")),
+                         changes, "a" * 40, "b" * 40, "search",
+                         {"path": path, "revision": "head", "literal": "логгир"})
+    assert result["lines"] == []
+    assert result["scope"] == "changed_lines_only"
+    assert "entire file" in result["coverage_notice"]
+
+
+def test_regular_search_reports_scope_and_truncation():
+    import base64
+
+    from ydbdoc_review_ng.policy_review.agent import read_source
+
+    body = ("match\n" * 21).encode()
+    github = ReviewGitHub(lambda *_: {"type": "file", "encoding": "base64", "size": len(body),
+                                     "content": base64.b64encode(body).decode()})
+    result = read_source(github, [], "a" * 40, "b" * 40, "search",
+                         {"path": "ydb/docs/en/topic.md", "revision": "head", "literal": "match"})
+    assert result["scope"] == "entire_file"
+    assert result["truncated"] is True
+    assert len(result["lines"]) == 20

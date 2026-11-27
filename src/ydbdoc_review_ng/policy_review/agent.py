@@ -123,7 +123,9 @@ def read_source(github: ReviewGitHub, changes: list[dict[str, object]], head: st
         if not isinstance(literal, str) or not 1 <= len(literal) <= 256:
             raise ReviewError("invalid_literal")
     changed = next((r for r in changes if path in (r["filename"], r.get("previous_filename"))), {})
+    scope = "line_window" if tool == "read_file" else "entire_file"
     if historical(path) or _historical_change(changed):
+        scope = "changed_lines_only"
         if revision != head or changed.get("filename") != path or changed.get("status") in {"added", "removed"}:
             raise ReviewError("historical_read_outside_changed_entry")
         lines = {new: line for kind, _, new, line in patch_lines(str(changed.get("patch", "")))
@@ -145,7 +147,12 @@ def read_source(github: ReviewGitHub, changes: list[dict[str, object]], head: st
                 truncated = True
                 break
             result.append((number, line))
-    reply = {"path": path, "revision": revision, "lines": result, "truncated": truncated}
+    reply = {"path": path, "revision": revision, "scope": scope,
+             "lines": result, "truncated": truncated}
+    if scope == "changed_lines_only":
+        reply["coverage_notice"] = (
+            "Only added/modified lines of this PR were searched/read, not the entire file. "
+            "An empty result says nothing about other entries. Historical content is deliberately withheld.")
     if len(json.dumps(reply, ensure_ascii=False).encode()) > 16_384:
         raise ReviewError("result_too_large_request_smaller_window")
     return reply
@@ -234,7 +241,10 @@ def review_pr(diff: ReviewDiff, github: ReviewGitHub, model: BudgetedPolicyModel
             messages.append({"role": "user", "content": (
                 "Return the final review now using the evidence already read. No more tools are available. "
                 "Include concrete proven findings and explicitly name checks left unverified. "
-                "Do not infer that all scenarios were checked from this forced completion.")})
+                "Do not infer that all scenarios were checked from this forced completion. "
+                "A link is verified only if its actual destination and fragment were read, not inferred from "
+                "other links. Respect each search response scope; absence in changed_lines_only is not "
+                "absence in the file. Keep the report concise and omit unproved coverage claims.")})
             request = ModelRequest(ModelRole.ARBITER, PRODUCTION_MODEL, "pr-review", None,
                                    messages=cast(FrozenJson, messages), max_output_tokens=MAX_OUTPUT_TOKENS)
             wire = model.prepare_request(request)
@@ -292,7 +302,8 @@ def review_pr(diff: ReviewDiff, github: ReviewGitHub, model: BudgetedPolicyModel
             reply_lines = reply.get("lines")
             print("pr-review tool", repr(call.name), json.dumps(coordinates, ensure_ascii=False),
                   "error=" + str(reply.get("error")), "missing=" + str(reply.get("missing")),
-                  "lines=" + str(len(reply_lines) if isinstance(reply_lines, list) else 0), flush=True)
+                  "lines=" + str(len(reply_lines) if isinstance(reply_lines, list) else 0),
+                  "scope=" + str(reply.get("scope")), "truncated=" + str(reply.get("truncated")), flush=True)
             key = call.name + ":" + json.dumps(args, sort_keys=True)
             repeated_calls[key] = repeated_calls.get(key, 0) + 1
             if repeated_calls[key] >= 3:
