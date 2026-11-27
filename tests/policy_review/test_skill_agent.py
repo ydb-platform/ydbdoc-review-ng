@@ -47,7 +47,8 @@ def tools_reply(*calls):
     }).encode())
 
 
-def test_native_provider_can_read_head_then_complete_report():
+@pytest.mark.parametrize("plain_markdown", [False, True])
+def test_native_provider_can_read_head_then_complete_report(plain_markdown):
     import base64
     from decimal import Decimal
 
@@ -75,18 +76,29 @@ def test_native_provider_can_read_head_then_complete_report():
         if len(wires) == 1:
             return tools_reply(("read_file", {"path": path, "revision": "head",
                                               "start_line": 2, "end_line": 2}))
+        if plain_markdown:
+            from ydbdoc_review_ng.models import HttpResponse
+            return HttpResponse(200, json.dumps({
+                "choices": [{"finish_reason": "stop", "message": {
+                    "role": "assistant", "content": "Changed wording. Preview unavailable."}}],
+                "usage": {"prompt_tokens": 100, "completion_tokens": 20},
+            }).encode())
         return tools_reply(("finish_review", {"summary": "Changed wording.", "checked": "Line 1.",
                            "gaps": ["Preview unavailable."], "findings": []}))
     model = BudgetedPolicyModel(YandexCredentials("private-api-key", "test"), transport,
                                 RunBudget(Decimal(100), events.append), lambda _: None)
     report = review_pr(diff, ReviewGitHub(api), model)
     assert len(wires) == 2 and all(w["max_tokens"] == 8192 for w in wires)
+    assert all(w["tool_choice"] == "auto" for w in wires)
+    assert wires[0]["messages"][0]["role"] == "system"
     assert wires[0]["messages"][0]["content"] == (SKILL / "SKILL.md").read_text()
     assert "+1. Build the archive." in wires[0]["messages"][1]["content"]
     assert json.loads(wires[1]["messages"][-1]["content"])["lines"] == [[2, "1. Build the archive."]]
     assert "private-api-key" not in json.dumps(wires)
     assert [e.kind for e in events] == ["reserved", "settled"] * 2
     assert "Changed wording." in report["markdown"] and "Preview unavailable." in report["markdown"]
+    if plain_markdown:
+        assert report["status"] != "clean"
 
 
 @pytest.mark.parametrize("limit", ["0", "0.01"])
@@ -133,6 +145,26 @@ def test_identical_failed_tool_stops_after_one_correction_attempt(capsys):
     output = capsys.readouterr().out
     assert "invalid_line_window" in output
     assert "DO_NOT_LOG_ARGUMENT_CONTENT" not in output and "private-key" not in output
+
+
+def test_identical_successful_read_cannot_repeat_forever():
+    from decimal import Decimal
+
+    from ydbdoc_review_ng.models import YandexCredentials
+    from ydbdoc_review_ng.policy_review.budget import RunBudget
+    from ydbdoc_review_ng.policy_review.model import BudgetedPolicyModel
+    from ydbdoc_review_ng.policy_review.types import ReviewDiff
+
+    requests = []
+    def transport(request):
+        requests.append(request)
+        return tools_reply(("read_resource", {"name": "placement"}))
+    model = BudgetedPolicyModel(YandexCredentials("test", "test"), transport,
+                               RunBudget(Decimal(100), lambda _: None), lambda _: None)
+    with pytest.raises(ReviewError, match="repeated_tool_call"):
+        review_pr(ReviewDiff("a" * 40, "b" * 40, "c" * 40, {}, []),
+                  ReviewGitHub(lambda *_: pytest.fail("local resource needs no network")), model)
+    assert len(requests) == 3
 
 
 def test_report_links_current_hunk_and_rejects_fabricated_anchor():

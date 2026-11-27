@@ -207,16 +207,17 @@ def review_pr(diff: ReviewDiff, github: ReviewGitHub, model: BudgetedPolicyModel
     data = {**diff.metadata, "head_sha": diff.head_sha, "base_tip_sha": diff.base_sha,
             "writing_policy_sha": diff.rules_sha, "changes": changes}
     messages: list[dict[str, Any]] = [
-        {"role": "developer", "content": (SKILL / "SKILL.md").read_text(encoding="utf-8")},
+        {"role": "system", "content": (SKILL / "SKILL.md").read_text(encoding="utf-8")},
         {"role": "user", "content": json.dumps(data, ensure_ascii=False)},
     ]
     calls = 0
     loaded: set[str] = set()
     failed_calls: dict[str, int] = {}
+    repeated_calls: dict[str, int] = {}
     for _ in range(MAX_TURNS):
         request = ModelRequest(ModelRole.ARBITER, PRODUCTION_MODEL, "pr-review", None,
                                messages=cast(FrozenJson, messages), tools=cast(FrozenJson, TOOLS),
-                               tool_choice="required", max_output_tokens=MAX_OUTPUT_TOKENS)
+                               tool_choice="auto", max_output_tokens=MAX_OUTPUT_TOKENS)
         try:
             wire = model.prepare_request(request)
         except ValueError:
@@ -227,7 +228,16 @@ def review_pr(diff: ReviewDiff, github: ReviewGitHub, model: BudgetedPolicyModel
         if turn.status != "ok":
             raise ReviewError(turn.status)
         if not turn.tool_calls:
-            raise ReviewError("review_tool_call_missing")
+            if not turn.text or not turn.text.strip() or len(turn.text) > 50000:
+                raise ReviewError("invalid_report_text")
+            missing_resources = ["Ресурс не проверен: " + x for x in sorted(set(RESOURCE_NAMES) - loaded)]
+            limitations = [*gaps, *missing_resources]
+            markdown = turn.text
+            if limitations:
+                markdown += "\n\n### Что осталось непроверенным\n" + "\n".join("- " + g for g in limitations)
+            print("pr-review final Markdown received", flush=True)
+            return {"status": "incomplete" if limitations else "reviewed",
+                    "markdown": markdown, "findings": []}
         calls += len(turn.tool_calls)
         if calls > MAX_CALLS:
             raise ReviewError("review_tool_limit")
@@ -266,8 +276,11 @@ def review_pr(diff: ReviewDiff, github: ReviewGitHub, model: BudgetedPolicyModel
             print("pr-review tool", repr(call.name), json.dumps(coordinates, ensure_ascii=False),
                   "error=" + str(reply.get("error")), "missing=" + str(reply.get("missing")),
                   "lines=" + str(len(reply_lines) if isinstance(reply_lines, list) else 0), flush=True)
+            key = call.name + ":" + json.dumps(args, sort_keys=True)
+            repeated_calls[key] = repeated_calls.get(key, 0) + 1
+            if repeated_calls[key] >= 3:
+                raise ReviewError("repeated_tool_call")
             if reply.get("error") or reply.get("missing"):
-                key = call.name + ":" + json.dumps(args, sort_keys=True)
                 failed_calls[key] = failed_calls.get(key, 0) + 1
                 if failed_calls[key] >= 2:
                     raise ReviewError("repeated_tool_failure")
