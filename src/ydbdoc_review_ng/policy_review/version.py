@@ -9,6 +9,9 @@ from ydbdoc_review_ng.policy_review.github import JsonAPI
 from ydbdoc_review_ng.policy_review.types import ReviewError, sha
 
 _PREFIX = "/repos/ydb-platform/ydbdoc-review-ng"
+_SKILL = "src/ydbdoc_review_ng/policy_review/skill"
+_FIXED = {".github/actions/policy-review/action.yml", "scripts/run_policy_review.py",
+          "docker/review-requirements.lock"}
 
 
 def action_revision(root: Path, api: JsonAPI) -> str:
@@ -27,14 +30,18 @@ def action_revision(root: Path, api: JsonAPI) -> str:
         if tree["truncated"] is not False:
             raise ValueError
         blobs = {entry["path"]: entry["sha"] for entry in tree["tree"] if entry["type"] == "blob"}
-        paths = [root / ".github/actions/policy-review/action.yml",
-                 root / "scripts/run_policy_review.py",
-                 root / "docker/review-requirements.lock", *sorted((root / "src").rglob("*.py")),
-                 *sorted((root / "src/ydbdoc_review_ng/policy_review/skill").glob("*.md"))]
-        for path in paths:
-            body = path.read_bytes()
+        expected = {name for name in blobs if name in _FIXED
+                    or (name.startswith("src/") and name.endswith(".py"))
+                    or (name.rpartition("/")[0] == _SKILL and name.endswith(".md"))}
+        local = {p.relative_to(root).as_posix() for p in
+                 [*(root / "src").rglob("*.py"), *(root / _SKILL).glob("*.md")]}
+        local.update(name for name in _FIXED if (root / name).is_file())
+        if local != expected or not _FIXED <= local:
+            raise ValueError
+        for name in local:
+            body = (root / name).read_bytes()
             digest = hashlib.sha1(b"blob " + str(len(body)).encode() + b"\0" + body).hexdigest()
-            if blobs.get(path.relative_to(root).as_posix()) != digest:
+            if blobs[name] != digest:
                 raise ValueError
         return revision
     except (KeyError, TypeError, ValueError, OSError):

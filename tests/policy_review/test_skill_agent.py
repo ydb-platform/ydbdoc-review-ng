@@ -9,10 +9,12 @@ from ydbdoc_review_ng.policy_review.types import ReviewError
 pytestmark = pytest.mark.unit
 
 
-def test_history_tool_returns_only_changed_lines_without_fetching_full_file():
-    from ydbdoc_review_ng.policy_review.agent import read_source
-    path = "ydb/docs/ru/core/changelog-server.md"
-    changes = [{"filename": path, "patch": "@@ -900,1 +900,1 @@\n-old\n+new"}]
+@pytest.mark.parametrize("name", ["changelog-server.md", "release-notes/v26.md", "version-history.md"])
+def test_history_tool_returns_only_changed_lines_without_fetching_full_file(name):
+    from ydbdoc_review_ng.policy_review.agent import public_changes, read_source
+    path = "ydb/docs/ru/core/" + name
+    changes = [{"filename": path, "patch": "@@ -900,2 +900,2 @@\n-old\n+new\n unrelated record"}]
+    assert "unrelated record" not in public_changes(changes)[0]["patch"]
     github = ReviewGitHub(lambda *_: pytest.fail("requested full history"))
     args = {"path": path, "revision": "head", "start_line": 900, "end_line": 900}
     result = read_source(github, changes, "a" * 40, "b" * 40, "read_file", args)
@@ -44,13 +46,15 @@ def test_native_provider_can_read_head_then_complete_report():
     from ydbdoc_review_ng.policy_review.model import BudgetedPolicyModel
     from ydbdoc_review_ng.policy_review.types import ReviewDiff
 
-    path = "ydb/docs/en/topic.md"
+    path = "ydb/docs/en/core/contributor/release-process.md"
+    body = b"# How to publish a release\n1. Build the archive.\n"
     diff = ReviewDiff("a" * 40, "b" * 40, "c" * 40, {"pr": 42}, [
-        {"filename": path, "patch": "@@ -1 +1 @@\n-old\n+new"}])
+        {"filename": path, "status": "added",
+         "patch": "@@ -0,0 +1,2 @@\n+# How to publish a release\n+1. Build the archive."}])
     def api(method, url, payload):
         assert method == "GET" and url.endswith(f"/contents/{path}?ref={diff.head_sha}")
-        return {"type": "file", "encoding": "base64", "size": 4,
-                "content": base64.b64encode(b"new\n").decode()}
+        return {"type": "file", "encoding": "base64", "size": len(body),
+                "content": base64.b64encode(body).decode()}
 
     wires = []
     events = []
@@ -59,7 +63,7 @@ def test_native_provider_can_read_head_then_complete_report():
         assert events[-1].kind == "reserved"
         if len(wires) == 1:
             return tools_reply(("read_file", {"path": path, "revision": "head",
-                                              "start_line": 1, "end_line": 1}))
+                                              "start_line": 2, "end_line": 2}))
         return tools_reply(("finish_review", {"summary": "Changed wording.", "checked": "Line 1.",
                            "gaps": ["Preview unavailable."], "findings": []}))
     model = BudgetedPolicyModel(YandexCredentials("private-api-key", "test"), transport,
@@ -67,8 +71,8 @@ def test_native_provider_can_read_head_then_complete_report():
     report = review_pr(diff, ReviewGitHub(api), model)
     assert len(wires) == 2 and all(w["max_tokens"] == 4096 for w in wires)
     assert wires[0]["messages"][0]["content"] == (SKILL / "SKILL.md").read_text()
-    assert "+new" in wires[0]["messages"][1]["content"]
-    assert json.loads(wires[1]["messages"][-1]["content"])["lines"] == [[1, "new"]]
+    assert "+1. Build the archive." in wires[0]["messages"][1]["content"]
+    assert json.loads(wires[1]["messages"][-1]["content"])["lines"] == [[2, "1. Build the archive."]]
     assert "private-api-key" not in json.dumps(wires)
     assert [e.kind for e in events] == ["reserved", "settled"] * 2
     assert "Changed wording." in report["markdown"] and "Preview unavailable." in report["markdown"]

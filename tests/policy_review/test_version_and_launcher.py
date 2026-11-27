@@ -9,9 +9,11 @@ from ydbdoc_review_ng.policy_review.version import action_revision
 pytestmark = pytest.mark.unit
 
 
-def test_moved_tag_is_used_only_when_downloaded_bundle_matches(tmp_path: Path) -> None:
+@pytest.mark.parametrize("mismatch", ["modified", "missing", "extra"])
+def test_moved_tag_is_used_only_when_downloaded_bundle_matches(tmp_path: Path, mismatch: str) -> None:
     files = [".github/actions/policy-review/action.yml", "scripts/run_policy_review.py",
-             "docker/review-requirements.lock", "src/ydbdoc_review_ng/policy_review/skill/SKILL.md", "src/package/code.py"]
+             "docker/review-requirements.lock", "src/ydbdoc_review_ng/policy_review/skill/placement.md",
+             "src/package/code.py"]
     entries = []
     for name in files:
         path = tmp_path / name
@@ -24,6 +26,12 @@ def test_moved_tag_is_used_only_when_downloaded_bundle_matches(tmp_path: Path) -
             return {"object": {"type": "commit", "sha": "a" * 40}}
         return {"truncated": False, "tree": entries}
     assert action_revision(tmp_path, api) == "a" * 40
-    (tmp_path / files[-2]).write_bytes(b"changed")
+    resource = tmp_path / files[-2]
+    if mismatch == "missing":
+        resource.unlink()
+    elif mismatch == "extra":
+        resource.with_name("unexpected.md").write_bytes(b"extra")
+    else:
+        resource.write_bytes(b"changed")
     with pytest.raises(ReviewError, match="review_action_version_changed"):
         action_revision(tmp_path, api)
