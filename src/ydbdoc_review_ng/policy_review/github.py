@@ -50,6 +50,8 @@ class ReviewHTTP:
         if (not self._token and not anonymous
                 or not path.startswith(self._prefix + "/") and path != "/user" or "#" in path):
             raise ReviewError("review_github_configuration_invalid")
+        admission_lookup = method == "GET" and re.fullmatch(
+            re.escape(self._prefix) + r"/collaborators/[A-Za-z0-9-]+(?:/permission)?", path)
         headers = {"Accept": "application/vnd.github+json",
                    "X-GitHub-Api-Version": "2022-11-28", "Content-Type": "application/json"}
         if self._token:
@@ -61,11 +63,15 @@ class ReviewHTTP:
         )
         try:
             with self._opener.open(request, timeout=60) as response:
+                if admission_lookup:
+                    print("Review admission HTTP", response.status, path, flush=True)
                 body = response.read(25_000_001)
                 if len(body) > 25_000_000:
                     raise ReviewError("review_github_response_limit")
                 return True if response.status == 204 else json.loads(body)
         except urllib.error.HTTPError as error:
+            if admission_lookup:
+                print("Review admission HTTP", error.code, path, flush=True)
             if error.code == 404 and method == "GET":
                 return None
             if error.code == 404 and method == "DELETE":
