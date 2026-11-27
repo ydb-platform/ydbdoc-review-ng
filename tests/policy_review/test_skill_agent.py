@@ -206,3 +206,39 @@ def test_agent_stops_at_step_limits(monkeypatch, bound, reason):
         review_pr(ReviewDiff("a" * 40, "b" * 40, "c" * 40, {}, []),
                   ReviewGitHub(lambda *_: pytest.fail("unexpected source read")), model)
     assert len(calls) == 1
+
+
+def test_agent_finishes_before_reading_uses_remaining_report_budget():
+    from decimal import Decimal
+
+    from ydbdoc_review_ng.models import HttpResponse, YandexCredentials
+    from ydbdoc_review_ng.policy_review.budget import RunBudget
+    from ydbdoc_review_ng.policy_review.model import BudgetedPolicyModel
+    from ydbdoc_review_ng.policy_review.types import ReviewDiff
+
+    wires, events = [], []
+    budget = RunBudget(Decimal(100), events.append)
+
+    def transport(request):
+        wire = json.loads(request.body)
+        wires.append(wire)
+        if len(wires) == 1:
+            # Previous audited calls left enough for a report, but not safe further exploration.
+            budget.spent = Decimal(80)
+            return tools_reply(("read_resource", {"name": "placement"}))
+        assert not wire.get("tools")
+        assert wire["messages"][-1]["role"] == "user"
+        assert "final" in wire["messages"][-1]["content"].lower()
+        return HttpResponse(200, json.dumps({
+            "choices": [{"finish_reason": "stop", "message": {
+                "role": "assistant", "content": "Reviewed available diff. Preview was not checked."}}],
+            "usage": {"prompt_tokens": 100, "completion_tokens": 20},
+        }).encode())
+
+    model = BudgetedPolicyModel(YandexCredentials("test", "test"), transport, budget, lambda _: None)
+    result = review_pr(ReviewDiff("a" * 40, "b" * 40, "c" * 40, {}, []),
+                       ReviewGitHub(lambda *_: pytest.fail("no remote reads")), model)
+    assert len(wires) == 2
+    assert result["status"] == "incomplete"
+    assert "Reviewed available diff" in result["markdown"]
+    assert budget.spent < budget.limit

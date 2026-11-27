@@ -5,13 +5,14 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Iterator
+from decimal import Decimal
 from pathlib import Path, PurePosixPath
 from typing import Any, cast
 from urllib.parse import quote
 
 from ydbdoc_review_ng.domain import ModelRole
 from ydbdoc_review_ng.models import ModelRequest
-from ydbdoc_review_ng.models.configuration import PRODUCTION_MODEL
+from ydbdoc_review_ng.models.configuration import DEEPSEEK_PRICE, PRODUCTION_MODEL
 from ydbdoc_review_ng.models.types import FrozenJson
 from ydbdoc_review_ng.policy_review.github import ReviewGitHub
 from ydbdoc_review_ng.policy_review.model import BudgetedPolicyModel
@@ -214,7 +215,7 @@ def review_pr(diff: ReviewDiff, github: ReviewGitHub, model: BudgetedPolicyModel
     loaded: set[str] = set()
     failed_calls: dict[str, int] = {}
     repeated_calls: dict[str, int] = {}
-    for _ in range(MAX_TURNS):
+    for turn_number in range(MAX_TURNS):
         request = ModelRequest(ModelRole.ARBITER, PRODUCTION_MODEL, "pr-review", None,
                                messages=cast(FrozenJson, messages), tools=cast(FrozenJson, TOOLS),
                                tool_choice="auto", max_output_tokens=MAX_OUTPUT_TOKENS)
@@ -224,6 +225,22 @@ def review_pr(diff: ReviewDiff, github: ReviewGitHub, model: BudgetedPolicyModel
             raise ReviewError("model_context_limit_exceeded") from None
         if len(wire.body) > MAX_WIRE or wire.max_tokens < MAX_OUTPUT_TOKENS:
             raise ReviewError("model_context_limit_exceeded")
+        upper_bound = (Decimal(wire.input_tokens) * DEEPSEEK_PRICE.input_token_rub
+                       + Decimal(wire.max_tokens) * DEEPSEEK_PRICE.output_token_rub)
+        available = model.budget.limit - model.budget.spent - model.budget.reserved
+        if turn_number == MAX_TURNS - 1 or available < upper_bound * Decimal("1.5"):
+            # Finish while one bounded answer still fits. The normal reservation remains mandatory.
+            gaps.append("Дальнейшее чтение остановлено для завершения отчёта в пределах лимита.")
+            messages.append({"role": "user", "content": (
+                "Return the final review now using the evidence already read. No more tools are available. "
+                "Include concrete proven findings and explicitly name checks left unverified. "
+                "Do not infer that all scenarios were checked from this forced completion.")})
+            request = ModelRequest(ModelRole.ARBITER, PRODUCTION_MODEL, "pr-review", None,
+                                   messages=cast(FrozenJson, messages), max_output_tokens=MAX_OUTPUT_TOKENS)
+            wire = model.prepare_request(request)
+            if len(wire.body) > MAX_WIRE or wire.max_tokens < MAX_OUTPUT_TOKENS:
+                raise ReviewError("model_context_limit_exceeded")
+            print("pr-review finalizing within run budget", flush=True)
         turn = model.invoke(request)
         if turn.status != "ok":
             raise ReviewError(turn.status)
