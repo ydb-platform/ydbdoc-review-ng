@@ -196,10 +196,14 @@ def finish(diff: ReviewDiff, args: dict[str, Any], gaps: list[str]) -> dict[str,
             new == line and kind != "-" for kind, _, new, _ in patch_lines(str(row.get("patch", "")))
         ):
             raise ReviewError("finding_outside_head_hunk")
+        correction = _string(finding["correction"])
+        if not re.search(r"(?m)^ {0,3}(?:`{3,}|~{3,})", correction):
+            ending = "" if correction.endswith("\n") else "\n"
+            correction = "```suggestion\n" + correction + ending + "```"
         url = f"https://github.com/ydb-platform/ydb/blob/{diff.head_sha}/{quote(path)}#L{line}"
         parts.append(f"### [{path}:{line}]({url})\n\n" + _string(finding["problem"])
                      + "\n\nПруф: " + _string(finding["proof"])
-                     + "\n\nИсправление:\n\n" + _string(finding["correction"]))
+                     + "\n\nИсправление:\n\n" + correction)
     if not findings:
         parts.append("Замечаний нет.")
     parts.extend(["### Что проверено", _string(args["checked"])])

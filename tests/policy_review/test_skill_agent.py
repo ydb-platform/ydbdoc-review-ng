@@ -186,11 +186,11 @@ def test_report_links_current_hunk_and_rejects_fabricated_anchor():
     path = "ydb/docs/en/topic.md"
     diff = ReviewDiff("a" * 40, "b" * 40, "c" * 40, {}, [
         {"filename": path, "patch": "@@ -12 +12 @@\n-old\n+typoo"}])
-    finding = {"path": path, "line": 12, "problem": "Typo.", "proof": "`typoo`", "correction": "`typo`"}
+    finding = {"path": path, "line": 12, "problem": "Typo.", "proof": "`typoo`", "correction": "typo"}
     args = {"summary": "One typo.", "checked": "The changed line.", "findings": [finding], "gaps": []}
     report = finish(diff, args, [])
     assert f"/blob/{diff.head_sha}/{path}#L12" in report["markdown"]
-    assert "Исправление:\n\n`typo`" in report["markdown"]
+    assert "Исправление:\n\n```suggestion\ntypo\n```" in report["markdown"]
     finding["line"] = 11
     with pytest.raises(ReviewError, match="outside_head_hunk"):
         finish(diff, args, [])
@@ -340,7 +340,8 @@ def test_withheld_historical_page_does_not_serialize_a_large_line_inventory():
     assert "patch" not in result and "head_changed_lines" not in result
 
 
-def test_structured_suggestion_renders_as_a_code_block():
+@pytest.mark.parametrize("correction", ["typo", "```suggestion\ntypo\n```", "        typo"])
+def test_structured_suggestion_renders_as_a_code_block(correction):
     from markdown_it import MarkdownIt
 
     from ydbdoc_review_ng.policy_review.agent import finish
@@ -351,6 +352,8 @@ def test_structured_suggestion_renders_as_a_code_block():
         {"filename": path, "patch": "@@ -12 +12 @@\n-old\n+typoo"}])
     result = finish(diff, {"summary": "One typo.", "checked": "Changed line.", "gaps": [],
                           "findings": [{"path": path, "line": 12, "problem": "Typo.",
-                                        "proof": "typoo", "correction": "```suggestion\ntypo\n```"}]}, [])
-    html = MarkdownIt().render(result["markdown"])
-    assert '<code class="language-suggestion">typo\n</code>' in html
+                                        "proof": "typoo", "correction": correction}]}, [])
+    fences = [t for t in MarkdownIt().parse(result["markdown"]) if t.type == "fence"]
+    assert len(fences) == 1
+    expected = "        typo\n" if correction.startswith("        ") else "typo\n"
+    assert fences[0].info == "suggestion" and fences[0].content == expected
