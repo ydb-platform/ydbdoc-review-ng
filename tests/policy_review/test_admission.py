@@ -64,3 +64,28 @@ def test_stale_approval_event_never_approves_current_head() -> None:
     github.pr = replace(github.pr, head_sha="c" * 40)
     assert admit(trigger("ok-to-test"), github, store) == "superseded"
     assert not store.approvals
+
+
+@pytest.mark.parametrize(("permission", "expected"), [
+    ("write", "admitted"), ("maintain", "admitted"), ("admin", "admitted"),
+    ("read", "waiting_for_approval"), ("triage", "waiting_for_approval"),
+    ("none", "waiting_for_approval"),
+])
+def test_admission_uses_verified_write_role_when_collaborator_endpoint_returns_404(permission, expected):
+    from ydbdoc_review_ng.policy_review.github import PREFIX, ReviewGitHub
+
+    calls = []
+    def api(method, path, payload):
+        calls.append(path)
+        if path == PREFIX + "/pulls/42":
+            return {"number": 42, "user": {"login": "member"}, "state": "open", "draft": False,
+                    "changed_files": 1, "head": {"sha": "a" * 40},
+                    "base": {"sha": "b" * 40, "repo": {"full_name": "ydb-platform/ydb"}}}
+        if path == PREFIX + "/collaborators/member":
+            return None  # HTTP 404 from the Actions token, as in PR60634.
+        if path == PREFIX + "/collaborators/member/permission":
+            return {"permission": permission}
+        pytest.fail("Unexpected admission request")
+
+    assert admit(trigger(), ReviewGitHub(api), MemoryStore()) == expected
+    assert calls[-1] == PREFIX + "/collaborators/member/permission"

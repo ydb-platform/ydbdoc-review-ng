@@ -106,15 +106,9 @@ class ReviewGitHub:
         row = self._admission("GET", PREFIX + "/collaborators/" + login(actor), None)
         if row is not True and row is not None:
             raise ReviewError("review_collaborator_response_invalid")
-        if row is None:
-            try:
-                permission = self._admission("GET", PREFIX + "/collaborators/" + login(actor) + "/permission", None)
-                value = permission.get("permission") if type(permission) is dict else None
-                known = {"none", "read", "triage", "write", "maintain", "admin"}
-                print("Review admission permission probe", login(actor), value if value in known else "unavailable", flush=True)
-            except ReviewError:
-                print("Review admission permission probe", login(actor), "unavailable", flush=True)
-        return row is True
+        # Some Actions tokens return 404 here even when /permission exposes a write role.
+        # Public read/triage permission alone must never authorize a paid review.
+        return row is True or self.operator(actor)
 
     def operator(self, actor: str) -> bool:
         row = self._admission("GET", PREFIX + "/collaborators/" + login(actor) + "/permission", None)
