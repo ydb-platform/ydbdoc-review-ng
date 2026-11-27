@@ -42,7 +42,7 @@ def _function(name: str, description: str, properties: dict[str, Any]) -> dict[s
 STRING = {"type": "string"}
 INTEGER = {"type": "integer", "minimum": 1}
 SOURCE = {"path": STRING, "revision": {"enum": ["base", "head"], "type": "string"}}
-FINDING = {"path": STRING, "line": INTEGER, "problem": STRING, "proof": STRING, "correction": {**STRING, "description": "The exact replacement fixing every claimed defect. No notes about unrelated or unchanged lines."}}
+FINDING = {"path": STRING, "line": INTEGER, "original": {**STRING, "description": "Exact complete HEAD line at this number, including indentation. Copy from head_changed_lines. Never quote a neighboring context line."}, "problem": STRING, "proof": STRING, "correction": {**STRING, "description": "The exact replacement fixing every claimed defect. No notes about unrelated or unchanged lines."}}
 TOOLS = [
     _function("read_file", "Read a repository file at HEAD or base tip, inclusive line window (1–120 lines).",
               {**SOURCE, "start_line": INTEGER, "end_line": INTEGER}),
@@ -58,6 +58,8 @@ TOOLS = [
                "gaps": {"type": "array", "items": {**STRING, "description":
                    "An unavailable verification only. Do not include unrelated pre-existing defects."}}}),
 ]
+
+REPORT_SCHEMA = TOOLS[-1]["function"]["parameters"]
 
 
 def historical(path: str) -> bool:
@@ -109,7 +111,7 @@ def public_changes(files: list[dict[str, object]]) -> list[dict[str, object]]:
                                               for kind, old, new, line in patch_lines(patch)
                                               if kind in "+-")
         if isinstance(patch, str) and "patch" in item:
-            item["head_changed_lines"] = [new for kind, _, new, _ in patch_lines(patch) if kind == "+"]
+            item["head_changed_lines"] = {str(new): text for kind, _, new, text in patch_lines(patch) if kind == "+"}
         changes.append(item)
     return changes
 
@@ -192,10 +194,12 @@ def finish(diff: ReviewDiff, args: dict[str, Any], gaps: list[str]) -> dict[str,
     for finding in findings:
         path, line = repo_path(finding["path"]), finding["line"]
         row = next((r for r in diff.files if r["filename"] == path), {})
-        if type(line) is not int or line < 1 or not any(
-            new == line and kind != "-" for kind, _, new, _ in patch_lines(str(row.get("patch", "")))
-        ):
+        source_lines = {new: text for kind, _, new, text in patch_lines(str(row.get("patch", "")))
+                        if kind == "+"}
+        if type(line) is not int or line not in source_lines:
             raise ReviewError("finding_outside_head_hunk")
+        if finding.get("original") != source_lines[line]:
+            raise ReviewError("finding_original_does_not_match_head")
         correction = _string(finding["correction"])
         if not re.search(r"(?m)^ {0,3}(?:`{3,}|~{3,})", correction):
             ending = "" if correction.endswith("\n") else "\n"
@@ -235,10 +239,14 @@ def review_pr(diff: ReviewDiff, github: ReviewGitHub, model: BudgetedPolicyModel
     loaded: set[str] = set(RESOURCE_NAMES)
     failed_calls: dict[str, int] = {}
     repeated_calls: dict[str, int] = {}
+    final_only = False
+    report_failures = 0
     for turn_number in range(MAX_TURNS):
-        request = ModelRequest(ModelRole.CRITIC, PRODUCTION_MODEL, "pr-review", None,
-                               messages=cast(FrozenJson, messages), tools=cast(FrozenJson, TOOLS),
-                               tool_choice="auto", max_output_tokens=MAX_OUTPUT_TOKENS)
+        request = ModelRequest(ModelRole.CRITIC, PRODUCTION_MODEL, "pr-review",
+                               cast(FrozenJson, REPORT_SCHEMA) if final_only else None,
+                               messages=cast(FrozenJson, messages),
+                               tools=None if final_only else cast(FrozenJson, TOOLS),
+                               tool_choice=None if final_only else "auto", max_output_tokens=MAX_OUTPUT_TOKENS)
         try:
             wire = model.prepare_request(request)
         except ValueError:
@@ -248,17 +256,19 @@ def review_pr(diff: ReviewDiff, github: ReviewGitHub, model: BudgetedPolicyModel
         upper_bound = (Decimal(wire.input_tokens) * DEEPSEEK_PRICE.input_token_rub
                        + Decimal(wire.max_tokens) * DEEPSEEK_PRICE.output_token_rub)
         available = model.budget.limit - model.budget.spent - model.budget.reserved
-        if turn_number == MAX_TURNS - 1 or available < upper_bound * Decimal("1.5"):
+        if not final_only and (turn_number == MAX_TURNS - 1 or available < upper_bound * Decimal("1.5")):
+            final_only = True
             # Finish while one bounded answer still fits. The normal reservation remains mandatory.
             gaps.append("Дальнейшее чтение остановлено для завершения отчёта в пределах лимита.")
             messages.append({"role": "user", "content": (
-                "Return the final review now using the evidence already read. No more tools are available. "
+                "Return the final review as the required JSON object now. No more reading tools are available. "
+                "Each finding must include original: the exact changed HEAD line from head_changed_lines. "
                 "Include concrete proven findings and explicitly name checks left unverified. "
                 "Do not infer that all scenarios were checked from this forced completion. "
                 "A link is verified only if its actual destination and fragment were read, not inferred from "
                 "other links. Respect each search response scope; absence in changed_lines_only is not "
                 "absence in the file. Keep the report concise and omit unproved coverage claims.")})
-            request = ModelRequest(ModelRole.CRITIC, PRODUCTION_MODEL, "pr-review", None,
+            request = ModelRequest(ModelRole.CRITIC, PRODUCTION_MODEL, "pr-review", cast(FrozenJson, REPORT_SCHEMA),
                                    messages=cast(FrozenJson, messages), max_output_tokens=MAX_OUTPUT_TOKENS)
             wire = model.prepare_request(request)
             if len(wire.body) > MAX_WIRE or wire.max_tokens < MAX_OUTPUT_TOKENS:
@@ -268,16 +278,26 @@ def review_pr(diff: ReviewDiff, github: ReviewGitHub, model: BudgetedPolicyModel
         if turn.status != "ok":
             raise ReviewError(turn.status)
         if not turn.tool_calls:
-            if not turn.text or not turn.text.strip() or len(turn.text) > 50000:
-                raise ReviewError("invalid_report_text")
-            missing_resources = ["Ресурс не проверен: " + x for x in sorted(set(RESOURCE_NAMES) - loaded)]
-            limitations = [*gaps, *missing_resources]
-            markdown = turn.text
-            if limitations:
-                markdown += "\n\n### Что осталось непроверенным\n" + "\n".join("- " + g for g in limitations)
-            print("pr-review final Markdown received", flush=True)
-            return {"status": "incomplete" if limitations else "reviewed",
-                    "markdown": markdown, "findings": []}
+            try:
+                args = json.loads(turn.text or "")
+                if not isinstance(args, dict):
+                    raise TypeError("invalid_report")
+                result = finish(diff, args, gaps)
+            except (ValueError, KeyError, TypeError, ReviewError) as error:
+                report_failures += 1
+                if report_failures >= 2:
+                    raise ReviewError("invalid_structured_report") from None
+                code = error.code if isinstance(error, ReviewError) else "structured_report_required"
+                messages.extend([
+                    {"role": "assistant", "content": (turn.text or "")[:50000]},
+                    {"role": "user", "content": "Report not published: " + code + ". Return only the required JSON report. "
+                     "For each finding copy original verbatim from the exact added HEAD line, including whitespace. "
+                     "Remove findings on unchanged lines or with mismatched quotes; do not merely change the line number."},
+                ])
+                final_only = True
+                continue
+            print("pr-review validated JSON report received", flush=True)
+            return result
         calls += len(turn.tool_calls)
         if calls > MAX_CALLS:
             raise ReviewError("review_tool_limit")

@@ -56,6 +56,15 @@ def tools_reply(*calls):
     }).encode())
 
 
+def json_reply(summary="Review complete.", findings=None):
+    from ydbdoc_review_ng.models import HttpResponse
+    report = {"summary": summary, "findings": findings or [], "checked": "Available diff.", "gaps": ["Preview unavailable."]}
+    return HttpResponse(200, json.dumps({
+        "choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": json.dumps(report)}}],
+        "usage": {"prompt_tokens": 100, "completion_tokens": 20},
+    }).encode())
+
+
 @pytest.mark.parametrize("plain_markdown", [False, True])
 def test_native_provider_can_read_head_then_complete_report(plain_markdown):
     import base64
@@ -85,20 +94,24 @@ def test_native_provider_can_read_head_then_complete_report(plain_markdown):
         if len(wires) == 1:
             return tools_reply(("read_file", {"path": path, "revision": "head",
                                               "start_line": 2, "end_line": 2}))
-        if plain_markdown:
+        if plain_markdown and len(wires) == 2:
             from ydbdoc_review_ng.models import HttpResponse
             return HttpResponse(200, json.dumps({
                 "choices": [{"finish_reason": "stop", "message": {
                     "role": "assistant", "content": "Changed wording. Preview unavailable."}}],
                 "usage": {"prompt_tokens": 100, "completion_tokens": 20},
             }).encode())
+        if plain_markdown:
+            assert wires[-1]["response_format"]["type"] == "json_schema"
+            return json_reply("Changed wording.")
         return tools_reply(("finish_review", {"summary": "Changed wording.", "checked": "Line 1.",
                            "gaps": ["Preview unavailable."], "findings": []}))
     model = BudgetedPolicyModel(YandexCredentials("private-api-key", "test"), transport,
                                 RunBudget(Decimal(100), events.append), lambda _: None)
     report = review_pr(diff, _github(api), model)
-    assert len(wires) == 2 and all(w["max_tokens"] == 8192 for w in wires)
-    assert all(w["tool_choice"] == "auto" for w in wires)
+    expected_turns = 3 if plain_markdown else 2
+    assert len(wires) == expected_turns and all(w["max_tokens"] == 8192 for w in wires)
+    assert all(w.get("tool_choice", "auto") == "auto" for w in wires)
     assert all(w["reasoning_effort"] == "medium" for w in wires)
     assert wires[0]["messages"][0]["role"] == "system"
     assert wires[0]["messages"][0]["content"].startswith((SKILL / "SKILL.md").read_text())
@@ -108,7 +121,7 @@ def test_native_provider_can_read_head_then_complete_report(plain_markdown):
     assert "+1. Build the archive." in wires[0]["messages"][1]["content"]
     assert json.loads(wires[1]["messages"][-1]["content"])["lines"] == [[2, "1. Build the archive."]]
     assert "private-api-key" not in json.dumps(wires)
-    assert [e.kind for e in events] == ["reserved", "settled"] * 2
+    assert [e.kind for e in events] == ["reserved", "settled"] * expected_turns
     assert "Changed wording." in report["markdown"] and "Preview unavailable." in report["markdown"]
     if plain_markdown:
         assert report["status"] != "clean"
@@ -186,7 +199,7 @@ def test_report_links_current_hunk_and_rejects_fabricated_anchor():
     path = "ydb/docs/en/topic.md"
     diff = ReviewDiff("a" * 40, "b" * 40, "c" * 40, {}, [
         {"filename": path, "patch": "@@ -12 +12 @@\n-old\n+typoo"}])
-    finding = {"path": path, "line": 12, "problem": "Typo.", "proof": "`typoo`", "correction": "typo"}
+    finding = {"path": path, "line": 12, "problem": "Typo.", "proof": "`typoo`", "original": "typoo", "correction": "typo"}
     args = {"summary": "One typo.", "checked": "The changed line.", "findings": [finding], "gaps": []}
     report = finish(diff, args, [])
     assert f"/blob/{diff.head_sha}/{path}#L12" in report["markdown"]
@@ -224,7 +237,7 @@ def test_agent_stops_at_step_limits(monkeypatch, bound, reason):
 def test_agent_finishes_before_reading_uses_remaining_report_budget():
     from decimal import Decimal
 
-    from ydbdoc_review_ng.models import HttpResponse, YandexCredentials
+    from ydbdoc_review_ng.models import YandexCredentials
     from ydbdoc_review_ng.policy_review.budget import RunBudget
     from ydbdoc_review_ng.policy_review.model import BudgetedPolicyModel
     from ydbdoc_review_ng.policy_review.types import ReviewDiff
@@ -242,11 +255,8 @@ def test_agent_finishes_before_reading_uses_remaining_report_budget():
         assert not wire.get("tools")
         assert wire["messages"][-1]["role"] == "user"
         assert "final" in wire["messages"][-1]["content"].lower()
-        return HttpResponse(200, json.dumps({
-            "choices": [{"finish_reason": "stop", "message": {
-                "role": "assistant", "content": "Reviewed available diff. Preview was not checked."}}],
-            "usage": {"prompt_tokens": 100, "completion_tokens": 20},
-        }).encode())
+        assert wire["response_format"]["type"] == "json_schema"
+        return json_reply("Reviewed available diff.")
 
     model = BudgetedPolicyModel(YandexCredentials("test", "test"), transport, budget, lambda _: None)
     result = review_pr(ReviewDiff("a" * 40, "b" * 40, "c" * 40, {}, []),
@@ -307,11 +317,8 @@ def test_thinking_tool_round_preserves_opaque_provider_state_without_logging(cap
             return HttpResponse(200, json.dumps(body).encode())
         assistant = [m for m in wire["messages"] if m["role"] == "assistant"][-1]
         assert assistant["reasoning_content"] == opaque
-        return HttpResponse(200, json.dumps({
-            "choices": [{"finish_reason": "stop", "message": {
-                "role": "assistant", "content": "Review complete; unavailable checks named."}}],
-            "usage": {"prompt_tokens": 100, "completion_tokens": 20},
-        }).encode())
+        return tools_reply(("finish_review", {"summary": "Review complete.", "findings": [],
+                                             "checked": "Available diff.", "gaps": ["Preview unavailable."]}))
 
     model = BudgetedPolicyModel(YandexCredentials("test", "test"), transport,
                                RunBudget(Decimal(100), lambda _: None), lambda _: None)
@@ -328,7 +335,7 @@ def test_diff_supplies_exact_head_line_numbers_without_unchanged_context():
     files = [{"filename": "ydb/docs/ru/core/page.md", "patch":
               "@@ -101,7 +101,7 @@\n context1\n context2\n context3\n-old\n+new\n context4\n context5\n context6"}]
     result = public_changes(files)[0]
-    assert result["head_changed_lines"] == [104]
+    assert result["head_changed_lines"] == {"104": "new"}
     assert result["patch"] == files[0]["patch"]
 
 
@@ -352,8 +359,56 @@ def test_structured_suggestion_renders_as_a_code_block(correction):
         {"filename": path, "patch": "@@ -12 +12 @@\n-old\n+typoo"}])
     result = finish(diff, {"summary": "One typo.", "checked": "Changed line.", "gaps": [],
                           "findings": [{"path": path, "line": 12, "problem": "Typo.",
-                                        "proof": "typoo", "correction": correction}]}, [])
+                                        "proof": "typoo", "original": "typoo", "correction": correction}]}, [])
     fences = [t for t in MarkdownIt().parse(result["markdown"]) if t.type == "fence"]
     assert len(fences) == 1
     expected = "        typo\n" if correction.startswith("        ") else "typo\n"
     assert fences[0].info == "suggestion" and fences[0].content == expected
+
+
+def test_original_quote_must_match_the_changed_head_line():
+    from ydbdoc_review_ng.policy_review.agent import finish
+    from ydbdoc_review_ng.policy_review.types import ReviewDiff
+
+    path = "ydb/docs/ru/core/topic.md"
+    diff = ReviewDiff("a" * 40, "b" * 40, "c" * 40, {}, [{"filename": path, "patch":
+        "@@ -29,2 +29,2 @@\n metering_mode - old untouched description\n-old path\n+min_active_partitions new path"}])
+    finding = {"path": path, "line": 30, "original": "metering_mode - old untouched description",
+               "problem": "Wrong dash.", "proof": "The quoted line.", "correction": "metering_mode — old untouched description"}
+    args = {"summary": "One finding.", "findings": [finding], "checked": "Changed line.", "gaps": []}
+    with pytest.raises(ReviewError, match="original_does_not_match"):
+        finish(diff, args, [])
+    finding["line"] = 29
+    with pytest.raises(ReviewError, match="outside_head_hunk"):
+        finish(diff, args, [])
+
+
+def test_invalid_final_quote_is_repaired_before_a_report_can_be_returned():
+    from decimal import Decimal
+
+    from ydbdoc_review_ng.models import YandexCredentials
+    from ydbdoc_review_ng.policy_review.budget import RunBudget
+    from ydbdoc_review_ng.policy_review.model import BudgetedPolicyModel
+    from ydbdoc_review_ng.policy_review.types import ReviewDiff
+
+    path = "ydb/docs/ru/core/topic.md"
+    diff = ReviewDiff("a" * 40, "b" * 40, "c" * 40, {}, [{"filename": path,
+        "patch": "@@ -30 +30 @@\n-old\n+min_active_partitions new path"}])
+    bad = {"path": path, "line": 30, "original": "metering_mode - unrelated line",
+           "problem": "Bad dash.", "proof": "Wrong neighboring quote.", "correction": "DANGEROUS_REPLACEMENT"}
+    wires = []
+    def transport(request):
+        wire = json.loads(request.body)
+        wires.append(wire)
+        if len(wires) == 1:
+            return json_reply("Bad draft.", [bad])
+        assert not wire.get("tools") and wire["response_format"]["type"] == "json_schema"
+        assert "finding_original_does_not_match_head" in wire["messages"][-1]["content"]
+        return json_reply("No in-scope finding.")
+
+    model = BudgetedPolicyModel(YandexCredentials("test", "test"), transport,
+                               RunBudget(Decimal(100), lambda _: None), lambda _: None)
+    result = review_pr(diff, _github(lambda *_: pytest.fail("all evidence in patch")), model)
+    assert len(wires) == 2
+    assert result["findings"] == []
+    assert "DANGEROUS_REPLACEMENT" not in result["markdown"]
