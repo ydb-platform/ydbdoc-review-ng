@@ -57,7 +57,8 @@ TOOLS = [
 
 
 def historical(path: str) -> bool:
-    return any(re.match(r"^(?:change[-_]?logs?|release[-_]?notes?|(?:version[-_]?)?history|whats[-_]?new)(?:[._-]|$)",
+    return any(part.casefold() == "releases" or
+               re.match(r"^(?:change[-_]?logs?|release[-_]?notes?|(?:version[-_]?)?history|whats[-_]?new)(?:[._-]|$)",
                         part, re.IGNORECASE) for part in PurePosixPath(path).parts)
 
 

@@ -24,6 +24,17 @@ def test_history_tool_returns_only_changed_lines_without_fetching_full_file(name
         read_source(github, changes, "a" * 40, "b" * 40, "read_file", args)
 
 
+def test_new_version_page_in_releases_stays_out_of_model_context_and_file_reads():
+    from ydbdoc_review_ng.policy_review.agent import public_changes, read_source
+    path = "ydb/docs/en/core/releases/26.4.md"
+    changes = [{"filename": path, "status": "added", "patch": "@@ -0,0 +1 @@\n+Release history"}]
+    assert "patch" not in public_changes(changes)[0]
+    github = ReviewGitHub(lambda *_: pytest.fail("requested historical file"))
+    with pytest.raises(ReviewError, match="historical_read_outside_changed_entry"):
+        read_source(github, changes, "a" * 40, "b" * 40, "read_file",
+                    {"path": path, "revision": "head", "start_line": 1, "end_line": 1})
+
+
 def tools_reply(*calls):
     from ydbdoc_review_ng.models import HttpResponse
     return HttpResponse(200, json.dumps({
