@@ -308,3 +308,21 @@ def test_thinking_tool_round_preserves_opaque_provider_state_without_logging(cap
     assert len(wires) == 2
     assert opaque not in json.dumps(result)
     assert opaque not in capsys.readouterr().out
+
+
+def test_diff_supplies_exact_head_line_numbers_without_unchanged_context():
+    from ydbdoc_review_ng.policy_review.agent import public_changes
+
+    files = [{"filename": "ydb/docs/ru/core/page.md", "patch":
+              "@@ -101,7 +101,7 @@\n context1\n context2\n context3\n-old\n+new\n context4\n context5\n context6"}]
+    result = public_changes(files)[0]
+    assert result["head_changed_lines"] == [104]
+    assert result["patch"] == files[0]["patch"]
+
+
+def test_withheld_historical_page_does_not_serialize_a_large_line_inventory():
+    from ydbdoc_review_ng.policy_review.agent import public_changes
+
+    result = public_changes([{"filename": "ydb/docs/en/core/releases/26.4.md", "status": "added",
+                              "patch": "@@ -0,0 +1 @@\n+Historical release"}])[0]
+    assert "patch" not in result and "head_changed_lines" not in result

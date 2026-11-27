@@ -106,6 +106,8 @@ def public_changes(files: list[dict[str, object]]) -> list[dict[str, object]]:
                     item["patch"] = "\n".join(f"{kind}{new if kind == '+' else old}: {line}"
                                               for kind, old, new, line in patch_lines(patch)
                                               if kind in "+-")
+        if isinstance(patch, str) and "patch" in item:
+            item["head_changed_lines"] = [new for kind, _, new, _ in patch_lines(patch) if kind == "+"]
         changes.append(item)
     return changes
 
