@@ -266,6 +266,7 @@ class ModelCallResult:
     failure: AttemptError | None
     attempts: tuple[AttemptResult, ...]
     tool_calls: tuple[ModelToolCall, ...] = ()
+    reasoning_content: str | None = field(default=None, repr=False)
 
     @property
     def success(self) -> bool:

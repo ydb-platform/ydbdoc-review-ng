@@ -78,7 +78,7 @@ class UrllibTransport:
 
 
 class _ParsedResponse:
-    __slots__ = ("error", "model", "role", "status", "text", "tool_calls", "usage")
+    __slots__ = ("error", "model", "reasoning_content", "role", "status", "text", "tool_calls", "usage")
 
     def __init__(
         self,
@@ -90,6 +90,7 @@ class _ParsedResponse:
         text: str | None,
         usage: ModelUsage,
         tool_calls: tuple[ModelToolCall, ...] = (),
+        reasoning_content: str | None = None,
     ) -> None:
         self.error = error
         self.model = model
@@ -98,6 +99,7 @@ class _ParsedResponse:
         self.text = text
         self.usage = usage
         self.tool_calls = tool_calls
+        self.reasoning_content = reasoning_content
 
 
 def _token(value: object) -> int | None:
@@ -251,6 +253,7 @@ def _parse_openai(document: Mapping[str, object], role: ModelRole) -> _ParsedRes
         text=text,
         usage=usage,
         tool_calls=tool_calls,
+        reasoning_content=_string(message.get("reasoning_content")) if message else None,
     )
 
 
@@ -474,6 +477,7 @@ class _BaseYandexClient:
                 cost = _provider_cost(document)
             if cost is None and self._pricing is not None:
                 cost = self._pricing(request.model, parsed.usage)
+            error: AttemptError | None
             if response_status in {"content_filter", "ALTERNATIVE_STATUS_CONTENT_FILTER"}:
                 error = AttemptError.CONTENT_FILTER
             elif 200 <= response.status_code < 300:
@@ -504,7 +508,7 @@ class _BaseYandexClient:
             attempts.append(attempt)
             if error is None:
                 return ModelCallResult(
-                    parsed.text, None, tuple(attempts), parsed.tool_calls
+                    parsed.text, None, tuple(attempts), parsed.tool_calls, parsed.reasoning_content
                 )
             if response.status_code == 400:
                 retry_body = _context_retry_body(document, body)
@@ -558,7 +562,7 @@ def openai_payload(
     request: ModelRequest, model_uri: str, max_tokens: int
 ) -> dict[str, object]:
     if request.messages is not None:
-        messages = mutable_json(request.messages)
+        messages = cast(list[dict[str, object]], mutable_json(request.messages))
     else:
         messages = []
         if request.developer_prompt is not None:

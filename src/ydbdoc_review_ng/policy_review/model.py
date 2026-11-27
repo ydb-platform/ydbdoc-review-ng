@@ -32,6 +32,7 @@ class PolicyModelResult:
     text: str | None = field(repr=False)
     status: str
     tool_calls: tuple[ModelToolCall, ...] = ()
+    reasoning_content: str | None = field(default=None, repr=False)
 
 
 class BudgetedPolicyModel:
@@ -117,7 +118,7 @@ class BudgetedPolicyModel:
         if reason is not None:
             return PolicyModelResult(None, reason)
         if result.success and (result.text is not None or result.tool_calls):
-            return PolicyModelResult(result.text, "ok", result.tool_calls)
+            return PolicyModelResult(result.text, "ok", result.tool_calls, result.reasoning_content)
         retryable = (
             result.failure in {AttemptError.MALFORMED_RESPONSE, AttemptError.NON_FINAL,
                                AttemptError.EMPTY_TEXT}

@@ -90,6 +90,7 @@ def test_native_provider_can_read_head_then_complete_report(plain_markdown):
     report = review_pr(diff, ReviewGitHub(api), model)
     assert len(wires) == 2 and all(w["max_tokens"] == 8192 for w in wires)
     assert all(w["tool_choice"] == "auto" for w in wires)
+    assert all(w["reasoning_effort"] == "medium" for w in wires)
     assert wires[0]["messages"][0]["role"] == "system"
     assert wires[0]["messages"][0]["content"] == (SKILL / "SKILL.md").read_text()
     assert "+1. Build the archive." in wires[0]["messages"][1]["content"]
@@ -270,3 +271,40 @@ def test_regular_search_reports_scope_and_truncation():
     assert result["scope"] == "entire_file"
     assert result["truncated"] is True
     assert len(result["lines"]) == 20
+
+
+def test_thinking_tool_round_preserves_opaque_provider_state_without_logging(capsys):
+    from decimal import Decimal
+
+    from ydbdoc_review_ng.models import HttpResponse, YandexCredentials
+    from ydbdoc_review_ng.policy_review.budget import RunBudget
+    from ydbdoc_review_ng.policy_review.model import BudgetedPolicyModel
+    from ydbdoc_review_ng.policy_review.types import ReviewDiff
+
+    wires = []
+    opaque = "opaque-provider-state-never-publish"
+
+    def transport(request):
+        wire = json.loads(request.body)
+        wires.append(wire)
+        assert wire["reasoning_effort"] == "medium"
+        if len(wires) == 1:
+            response = tools_reply(("read_resource", {"name": "placement"}))
+            body = json.loads(response.body)
+            body["choices"][0]["message"]["reasoning_content"] = opaque
+            return HttpResponse(200, json.dumps(body).encode())
+        assistant = [m for m in wire["messages"] if m["role"] == "assistant"][-1]
+        assert assistant["reasoning_content"] == opaque
+        return HttpResponse(200, json.dumps({
+            "choices": [{"finish_reason": "stop", "message": {
+                "role": "assistant", "content": "Review complete; unavailable checks named."}}],
+            "usage": {"prompt_tokens": 100, "completion_tokens": 20},
+        }).encode())
+
+    model = BudgetedPolicyModel(YandexCredentials("test", "test"), transport,
+                               RunBudget(Decimal(100), lambda _: None), lambda _: None)
+    result = review_pr(ReviewDiff("a" * 40, "b" * 40, "c" * 40, {}, []),
+                       ReviewGitHub(lambda *_: pytest.fail("no remote source")), model)
+    assert len(wires) == 2
+    assert opaque not in json.dumps(result)
+    assert opaque not in capsys.readouterr().out

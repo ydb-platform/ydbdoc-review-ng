@@ -223,7 +223,7 @@ def review_pr(diff: ReviewDiff, github: ReviewGitHub, model: BudgetedPolicyModel
     failed_calls: dict[str, int] = {}
     repeated_calls: dict[str, int] = {}
     for turn_number in range(MAX_TURNS):
-        request = ModelRequest(ModelRole.ARBITER, PRODUCTION_MODEL, "pr-review", None,
+        request = ModelRequest(ModelRole.CRITIC, PRODUCTION_MODEL, "pr-review", None,
                                messages=cast(FrozenJson, messages), tools=cast(FrozenJson, TOOLS),
                                tool_choice="auto", max_output_tokens=MAX_OUTPUT_TOKENS)
         try:
@@ -245,7 +245,7 @@ def review_pr(diff: ReviewDiff, github: ReviewGitHub, model: BudgetedPolicyModel
                 "A link is verified only if its actual destination and fragment were read, not inferred from "
                 "other links. Respect each search response scope; absence in changed_lines_only is not "
                 "absence in the file. Keep the report concise and omit unproved coverage claims.")})
-            request = ModelRequest(ModelRole.ARBITER, PRODUCTION_MODEL, "pr-review", None,
+            request = ModelRequest(ModelRole.CRITIC, PRODUCTION_MODEL, "pr-review", None,
                                    messages=cast(FrozenJson, messages), max_output_tokens=MAX_OUTPUT_TOKENS)
             wire = model.prepare_request(request)
             if len(wire.body) > MAX_WIRE or wire.max_tokens < MAX_OUTPUT_TOKENS:
@@ -271,6 +271,9 @@ def review_pr(diff: ReviewDiff, github: ReviewGitHub, model: BudgetedPolicyModel
         messages.append({"role": "assistant", "content": turn.text, "tool_calls": [
             {"id": c.id, "type": "function", "function": {"name": c.name, "arguments": c.arguments}}
             for c in turn.tool_calls]})
+        if turn.reasoning_content is not None:
+            # Provider continuation state stays private, never in reports or trace logs.
+            messages[-1]["reasoning_content"] = turn.reasoning_content
         for call in turn.tool_calls:
             args = {}
             try:
