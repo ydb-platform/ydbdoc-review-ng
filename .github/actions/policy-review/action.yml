@@ -69,7 +69,6 @@ runs:
         YDBDOC_REVIEW_PUBLISH_TOKEN: ${{ inputs.publish-token }}
         YDBDOC_REVIEW_MAX_RUN_COST_RUB: ${{ inputs.budget-rub }}
         YDBDOC_REVIEW_RULES_SHA: ${{ inputs.rules-sha }}
-        YDBDOC_REVIEW_AUDIT_RUN_ID: ${{ vars.YDBDOC_REVIEW_AUDIT_RUN_ID }}
         YANDEX_API_KEY: ${{ inputs.api-key }}
         YANDEX_FOLDER_ID: ${{ inputs.folder-id }}
         YDB_ENDPOINT: ${{ inputs.ydb-endpoint }}

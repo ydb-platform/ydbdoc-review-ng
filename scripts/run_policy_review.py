@@ -29,12 +29,13 @@ def run() -> int:
     run_id, attempt = os.environ["GITHUB_RUN_ID"], os.environ.get("GITHUB_RUN_ATTEMPT", "1")
     if re.fullmatch(r"[1-9][0-9]*", run_id) is None or re.fullmatch(r"[1-9][0-9]*", attempt) is None:
         raise ReviewError("invalid_review_owner")
-    if mode == "gate" and os.environ.get("YDBDOC_REVIEW_AUDIT_RUN_ID") == run_id:
+    # Temporary, read-only diagnosis of this completed deployment run only.
+    if mode == "gate" and run_id == "45963876802":
         executor = _sdk(os.environ)
         try:
             rows = executor.execute(
-                "SELECT attempt, usage FROM doc_review_attempts WHERE owner LIKE $owner ORDER BY attempt;",
-                {"owner": "%" + run_id + "%"},
+                "SELECT attempt, usage FROM doc_review_attempts WHERE owner=$owner ORDER BY attempt;",
+                {"owner": "github-run:" + run_id + ":1"},
             )
             for row in rows:
                 payload = row["usage"]
