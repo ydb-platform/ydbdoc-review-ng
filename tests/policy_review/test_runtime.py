@@ -6,13 +6,19 @@ import pytest
 
 from ydbdoc_review_ng.policy_review.runtime import prepare_review, queue_review, run_worker
 
-from .helpers import response, semantic_json
 from .runtime_fakes import FakeGitHub, MemoryStore, trigger
 from .test_debounce import FakeTime
+from .test_skill_agent import tools_reply
 
 pytestmark = pytest.mark.unit
 ENV = {"YDBDOC_REVIEW_MAX_RUN_COST_RUB": "100", "YANDEX_API_KEY": "fake",
        "YANDEX_FOLDER_ID": "fake"}
+
+
+def final_reply(cost=Decimal("0.1")):
+    return replace(tools_reply(("finish_review", {"summary": "Review result.", "findings": [],
+                       "checked": "Changed wording.", "gaps": ["Preview unavailable."]})),
+                   billable_cost_rub=cost)
 
 
 def test_duplicate_head_cannot_enter_concurrency_and_cancel_original_run() -> None:
@@ -42,11 +48,11 @@ def test_model_runs_only_after_quiet_period_and_durable_reservation() -> None:
 
     def transport(request):
         assert store.events["owner"][1].kind == "reserved"
-        return response(semantic_json())
+        return final_reply()
 
     report = run_worker(plan, github, store, ENV, transport)
     assert report["cost_rub"] == "0.1"
-    assert report["status"] == "incomplete"  # Link coverage is still explicitly incomplete.
+    assert report["status"] == "incomplete"
     assert not store.leases
 
 
@@ -115,7 +121,7 @@ def test_old_head_or_lost_lease_before_call_sends_no_paid_request() -> None:
         assert report["cost_rub"] == "0" and not store.events
 
 
-def test_head_update_between_retries_prevents_second_paid_request() -> None:
+def test_head_update_between_tool_turns_prevents_second_paid_request() -> None:
     github, store = FakeGitHub(), MemoryStore()
     plan = prepared(github, store)
     calls = 0
@@ -124,28 +130,28 @@ def test_head_update_between_retries_prevents_second_paid_request() -> None:
         nonlocal calls
         calls += 1
         github.pr = replace(github.pr, head_sha="c" * 40)
-        return response("invalid json")
+        return tools_reply(("read_resource", {"name": "placement"}))
 
     report = run_worker(plan, github, store, ENV, transport)
-    assert calls == 1 and report["status"] == "superseded" and report["cost_rub"] == "0.1"
+    assert calls == 1 and report["status"] == "superseded" and report["cost_rub"] == "0.0400"
 
 
 def test_automatic_duplicate_is_skipped_but_manual_attempt_has_new_budget() -> None:
     github, store = FakeGitHub(), MemoryStore()
-    run_worker(prepared(github, store), github, store, ENV, lambda _: response(semantic_json()))
+    run_worker(prepared(github, store), github, store, ENV, lambda _: final_reply())
     assert prepared(github, store, owner="retry").status == "duplicate"
     timer = FakeTime()
     manual = prepare_review(trigger("doc_review", event_id="github-run:124"), "manual", github,
                             store, ENV, clock=timer.clock, wait=timer.wait)
     assert manual.status == "ready" and timer.now == 300
-    report = run_worker(manual, github, store, ENV, lambda _: response(semantic_json(), Decimal("0.2")))
+    report = run_worker(manual, github, store, ENV, lambda _: final_reply(Decimal("0.2")))
     assert report["cost_rub"] == "0.2"
 
 
 def test_unknown_billable_outcome_keeps_pr_locked_after_worker_stops() -> None:
     github, store = FakeGitHub(), MemoryStore()
     report = run_worker(prepared(github, store), github, store, ENV,
-                        lambda _: response(semantic_json(), None))
+                        lambda _: final_reply(None))
     # No usage/cost uncertainty can be treated as a free cancelled run.
     # This fixture has known usage, so force the actual unknown transport path instead.
     assert report["cost_rub"] is not None

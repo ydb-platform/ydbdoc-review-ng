@@ -1,16 +1,15 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import replace
 from threading import Lock
 
 from ydbdoc_review_ng.models import AttemptResult
 from ydbdoc_review_ng.policy_review.admission import ReviewPR, ReviewTrigger
 from ydbdoc_review_ng.policy_review.budget import BudgetEvent
 from ydbdoc_review_ng.policy_review.github import ReviewGitHub
-from ydbdoc_review_ng.policy_review.types import ReviewError, ReviewSnapshot
+from ydbdoc_review_ng.policy_review.types import ReviewDiff, ReviewError
 
-from .helpers import PATH, snapshot
+from .helpers import PATH
 
 
 def trigger(label: str | None = None, *, event_id: str = "github-run:123") -> ReviewTrigger:
@@ -100,7 +99,6 @@ class FakeGitHub(ReviewGitHub):
     def files(self, pr: ReviewPR) -> list[dict[str, str]]:  # type: ignore[override]
         return self.inventory
 
-    def snapshot(self, pr: ReviewPR, files: list[dict[str, str]],  # type: ignore[override]
-                 rules_sha: str | None = None) -> ReviewSnapshot:
+    def review_diff(self, pr, files, rules_sha=None):
         self.snapshots += 1
-        return replace(snapshot(), head_sha=pr.head_sha)
+        return ReviewDiff(pr.head_sha, pr.base_sha, rules_sha or pr.base_sha, {}, files)

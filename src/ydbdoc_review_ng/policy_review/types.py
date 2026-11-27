@@ -25,10 +25,9 @@ class ReviewError(SafeDiagnosticError):
     """Only payload-free diagnostics may cross the public CLI boundary."""
 
 
-def doc_path(value: object) -> str:
+def repo_path(value: object) -> str:
     if (
         type(value) is not str
-        or not value.startswith(ROOT)
         or len(value) > 1024
         or "\\" in value
         or any(ord(c) < 32 for c in value)
@@ -37,6 +36,13 @@ def doc_path(value: object) -> str:
     ):
         raise ReviewError("invalid_documentation_path")
     return value
+
+
+def doc_path(value: object) -> str:
+    path = repo_path(value)
+    if not path.startswith(ROOT):
+        raise ReviewError("invalid_documentation_path")
+    return path
 
 
 def sha(value: object) -> str:
@@ -117,3 +123,12 @@ class Finding:
 
     def to_json(self) -> dict[str, object]:
         return {key: getattr(self, key) for key in self.__dataclass_fields__}
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewDiff:
+    head_sha: str
+    base_sha: str
+    rules_sha: str
+    metadata: dict[str, object]
+    files: list[dict[str, object]]

@@ -22,6 +22,7 @@ from ydbdoc_review_ng.models.configuration import (
     PRODUCTION_PRICING,
 )
 from ydbdoc_review_ng.models.context import ContextBudget
+from ydbdoc_review_ng.models.types import ModelToolCall
 from ydbdoc_review_ng.policy_review.budget import RunBudget
 from ydbdoc_review_ng.policy_review.types import ReviewError
 
@@ -30,6 +31,7 @@ from ydbdoc_review_ng.policy_review.types import ReviewError
 class PolicyModelResult:
     text: str | None = field(repr=False)
     status: str
+    tool_calls: tuple[ModelToolCall, ...] = ()
 
 
 class BudgetedPolicyModel:
@@ -114,8 +116,8 @@ class BudgetedPolicyModel:
         reason = self.budget.stop_reason()
         if reason is not None:
             return PolicyModelResult(None, reason)
-        if result.success and result.text is not None:
-            return PolicyModelResult(result.text, "ok")
+        if result.success and (result.text is not None or result.tool_calls):
+            return PolicyModelResult(result.text, "ok", result.tool_calls)
         retryable = (
             result.failure in {AttemptError.MALFORMED_RESPONSE, AttemptError.NON_FINAL,
                                AttemptError.EMPTY_TEXT}

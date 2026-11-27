@@ -28,8 +28,9 @@ def action_revision(root: Path, api: JsonAPI) -> str:
             raise ValueError
         blobs = {entry["path"]: entry["sha"] for entry in tree["tree"] if entry["type"] == "blob"}
         paths = [root / ".github/actions/policy-review/action.yml",
-                 root / "scripts/run_policy_review.py", root / "docker/review-image.json",
-                 root / "docker/review-requirements.lock", *sorted((root / "src").rglob("*.py"))]
+                 root / "scripts/run_policy_review.py",
+                 root / "docker/review-requirements.lock", *sorted((root / "src").rglob("*.py")),
+                 *sorted((root / "src/ydbdoc_review_ng/policy_review/skill").glob("*.md"))]
         for path in paths:
             body = path.read_bytes()
             digest = hashlib.sha1(b"blob " + str(len(body)).encode() + b"\0" + body).hexdigest()

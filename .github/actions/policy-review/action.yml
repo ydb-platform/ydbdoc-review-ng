@@ -1,5 +1,5 @@
 name: YDB documentation policy review
-description: Trusted admission, five-minute debounce, Docker worker and publication
+description: Trusted admission, five-minute debounce, read-only skill agent and publication
 inputs:
   mode:
     description: gate, run or finalize
@@ -11,7 +11,7 @@ inputs:
     description: Token with PR comments and labels write access; host only
     required: true
   api-key:
-    description: Same model API key as doc_translate; worker only
+    description: Same model API key as doc_translate; paid model transport
     required: false
   folder-id:
     description: Same model folder as doc_translate

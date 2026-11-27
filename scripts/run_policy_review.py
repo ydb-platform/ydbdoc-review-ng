@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import signal
-import subprocess
 import sys
 from pathlib import Path
 
@@ -14,30 +12,6 @@ from ydbdoc_review_ng.policy_review.commands import main, read_json
 from ydbdoc_review_ng.policy_review.github import ReviewHTTP
 from ydbdoc_review_ng.policy_review.types import ReviewError
 from ydbdoc_review_ng.policy_review.version import action_revision
-
-_WORKER_ENV = (
-    "YANDEX_API_KEY", "YANDEX_FOLDER_ID", "YDB_ENDPOINT", "YDB_DATABASE", "YDB_TOKEN", "YDB_SA_KEY",
-    "YDBDOC_REVIEW_MAX_RUN_COST_RUB",
-    "YDBDOC_REVIEW_REVISION", "YDBDOC_REVIEW_IMAGE_DIGEST",
-    "YDBDOC_REVIEW_ACTION_SHA",
-)
-
-
-def docker_arguments(image: str, name: str, input_dir: Path, output_dir: Path,
-                     uid: int, gid: int) -> list[str]:
-    if type(image) is not str or re.fullmatch(
-        r"ghcr\.io/ydb-platform/ydbdoc-review-ng@sha256:[0-9a-f]{64}", image
-    ) is None:
-        raise ReviewError("review_image_not_released")
-    if uid <= 0 or gid <= 0:
-        raise ReviewError("review_runner_must_not_be_root")
-    return ["docker", "run", "--name", name, "--read-only", "--cap-drop=ALL",
-            "--security-opt=no-new-privileges", "--pids-limit=128", "--memory=1g", "--cpus=1",
-            "--user", f"{uid}:{gid}", "--tmpfs", "/tmp:rw,noexec,nosuid,size=32m",
-            "--mount", f"type=bind,src={input_dir},dst=/review/input,readonly",
-            "--mount", f"type=bind,src={output_dir},dst=/review/output",
-            *(arg for key in _WORKER_ENV for arg in ("--env", key)),
-            image, "worker", "--input", "/review/input", "--output", "/review/output"]
 
 
 def run() -> int:
@@ -67,10 +41,6 @@ def run() -> int:
         return result
     if mode != "run":
         raise ReviewError("unsupported_review_mode")
-    image = json.loads((Path(__file__).resolve().parents[1] / "docker/review-image.json").read_text())
-    name = "policy-review-" + run_id + "-" + attempt
-    docker_started = False
-    stopped = True
     result = 1
 
     def interrupted(signum: int, frame: object) -> None:
@@ -81,27 +51,9 @@ def run() -> int:
     try:
         result = main(["prepare", "--event", os.environ["GITHUB_EVENT_PATH"], "--directory", str(input_dir)])
         if result == 0 and read_json(input_dir / "plan.json")["status"] == "ready":
-            args = docker_arguments(image["image"], name, input_dir, output_dir, os.getuid(), os.getgid())
-            revision = image["revision"]
-            if re.fullmatch(r"[0-9a-f]{40}", revision) is None:
-                raise ReviewError("review_image_not_released")
-            os.environ["YDBDOC_REVIEW_REVISION"] = revision
-            os.environ["YDBDOC_REVIEW_IMAGE_DIGEST"] = image["image"].split("@", 1)[1]
-            subprocess.run(["docker", "pull", image["image"]], check=True, timeout=300)
-            inspected = subprocess.run(["docker", "inspect", image["image"]], check=True,
-                                       capture_output=True, text=True, timeout=30)
-            actual_revision = json.loads(inspected.stdout)[0]["Config"]["Labels"][
-                "org.opencontainers.image.revision"]
-            if actual_revision != revision:
-                raise ReviewError("review_image_revision_mismatch")
-            docker_started, stopped = True, False
-            result = subprocess.run(args, check=False, timeout=1800).returncode
+            result = main(["worker", "--input", str(input_dir), "--output", str(output_dir)])
     finally:
-        if docker_started:
-            stopped = subprocess.run(["docker", "rm", "--force", name],
-                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                     check=False, timeout=30).returncode == 0
-        if stopped and (input_dir / "plan.json").exists():
+        if (input_dir / "plan.json").exists():
             published = main(["publish", "--directory", str(input_dir),
                               "--report", str(output_dir / "report.json")])
             result = result or published

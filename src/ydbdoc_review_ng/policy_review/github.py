@@ -17,9 +17,11 @@ from ydbdoc_review_ng.policy_review.types import (
     ROOT,
     RULE_FILES,
     RULE_ROOT,
+    ReviewDiff,
     ReviewError,
     ReviewSnapshot,
     doc_path,
+    repo_path,
     sha,
 )
 
@@ -119,8 +121,7 @@ class ReviewGitHub:
             batch = self._read("GET", PREFIX + f"/pulls/{pr.number}/files?per_page=100&page={page}", None)
             if type(batch) is not list or len(batch) > 100 or any(type(r) is not dict for r in batch):
                 raise ReviewError("review_file_inventory_invalid")
-            # Large diff patches are unnecessary: full immutable contents are read later.
-            rows.extend({key: r[key] for key in ("filename", "previous_filename", "status") if key in r}
+            rows.extend({key: r[key] for key in ("filename", "previous_filename", "status", "patch", "additions", "deletions") if key in r}
                         for r in batch)
             if len(batch) < 100 or len(rows) == pr.changed_files:
                 break
@@ -129,7 +130,7 @@ class ReviewGitHub:
         return rows
 
     def read_text(self, path: str, revision: str, *, required: bool = True) -> str | None:
-        path, revision = doc_path(path), sha(revision)
+        path, revision = repo_path(path), sha(revision)
         row = self._read("GET", PREFIX + "/contents/" + urllib.parse.quote(path, safe="/")
                          + "?ref=" + revision, None)
         if row is None and not required:
@@ -145,6 +146,32 @@ class ReviewGitHub:
             return raw.decode("utf-8")
         except (KeyError, TypeError, ValueError):
             raise ReviewError("review_content_invalid") from None
+
+    def review_diff(self, pr: ReviewPR, files: list[dict[str, Any]],
+                    rules_sha: str | None = None) -> ReviewDiff:
+        """The files endpoint supplies three-dot hunks. Base reads use the labeled base tip."""
+        row = self._read("GET", PREFIX + f"/pulls/{pr.number}", None)
+        metadata: dict[str, object] = {
+            "repository": REPOSITORY, "pr": pr.number, "title": str(row.get("title", ""))[:512],
+            "description": str(row.get("body") or "")[:8000], "author": pr.author,
+            "base_branch": row["base"].get("ref"), "head_branch": row["head"].get("ref"),
+            "labels": [x["name"] for x in row.get("labels", [])[:30]],
+            "requested_reviewers": [x["login"] for x in row.get("requested_reviewers", [])[:30]],
+        }
+        for endpoint in ("comments", "reviews"):
+            rows = self._read("GET", PREFIX + f"/pulls/{pr.number}/{endpoint}?per_page=31", None)
+            if not isinstance(rows, list):
+                raise ReviewError("review_comments_invalid")
+            metadata[endpoint] = [
+                {"path": x.get("path"), "line": x.get("line"), "body": str(x.get("body") or "")[:400]}
+                for x in rows[:30]
+            ]
+            metadata[endpoint + "_possibly_truncated"] = len(rows) > 30 or any(
+                len(str(x.get("body") or "")) > 400 for x in rows[:30])
+        current = self.read_pr(pr.number)
+        if (current.head_sha, current.base_sha) != (pr.head_sha, pr.base_sha):
+            raise ReviewError("superseded")
+        return ReviewDiff(pr.head_sha, pr.base_sha, sha(rules_sha or pr.base_sha), metadata, files)
 
     def snapshot(self, pr: ReviewPR, files: list[dict[str, Any]],
                  rules_sha: str | None = None) -> ReviewSnapshot | None:

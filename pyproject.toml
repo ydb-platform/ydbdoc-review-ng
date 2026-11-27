@@ -26,7 +26,7 @@ ydbdoc-review = "ydbdoc_review_ng.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-ydbdoc_review_ng = ["quality/prompts/*.txt"]
+ydbdoc_review_ng = ["quality/prompts/*.txt", "policy_review/skill/*.md"]
 
 [tool.pytest.ini_options]
 addopts = "--strict-markers --timeout=30 --timeout-method=signal --disable-socket -m 'not live'"

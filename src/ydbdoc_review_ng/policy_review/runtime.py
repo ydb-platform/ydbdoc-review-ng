@@ -1,4 +1,4 @@
-"""Model-free admission/preparation and separately credentialed paid worker."""
+"""Model-free admission and the trusted Actions-host reviewer."""
 
 from __future__ import annotations
 
@@ -6,18 +6,19 @@ import html
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
+from decimal import Decimal
 from typing import Any
 
 from ydbdoc_review_ng.models import AttemptResult, HttpTransport, YandexCredentials
 from ydbdoc_review_ng.models.configuration import PRICING_VERSION, PRODUCTION_MODEL
 from ydbdoc_review_ng.policy_review.admission import ReviewTrigger, admit
+from ydbdoc_review_ng.policy_review.agent import review_pr
 from ydbdoc_review_ng.policy_review.budget import BudgetEvent, RunBudget, run_limit
 from ydbdoc_review_ng.policy_review.debounce import wait_for_quiet_head
-from ydbdoc_review_ng.policy_review.engine import review_snapshot
 from ydbdoc_review_ng.policy_review.github import ReviewGitHub
 from ydbdoc_review_ng.policy_review.model import BudgetedPolicyModel
 from ydbdoc_review_ng.policy_review.store import ReviewStore
-from ydbdoc_review_ng.policy_review.types import ReviewError, ReviewSnapshot
+from ydbdoc_review_ng.policy_review.types import ReviewDiff, ReviewError
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,7 +26,7 @@ class Preparation:
     status: str
     trigger: ReviewTrigger
     owner: str
-    snapshot: ReviewSnapshot | None = None
+    snapshot: ReviewDiff | None = None
 
     def plan(self) -> dict[str, object]:
         return {"status": self.status, "owner": self.owner, "trigger": asdict(self.trigger)}
@@ -61,9 +62,7 @@ def prepare_review(
     pr = github.read_pr(trigger.pr)
     if pr.head_sha != trigger.head_sha:
         return Preparation("superseded", trigger, owner)
-    snapshot = github.snapshot(pr, github.files(pr), environment.get("YDBDOC_REVIEW_RULES_SHA"))
-    if snapshot is None:
-        return Preparation("no_reviewable_changes", trigger, owner)
+    snapshot = github.review_diff(pr, github.files(pr), environment.get("YDBDOC_REVIEW_RULES_SHA"))
     if run_limit(environment.get("YDBDOC_REVIEW_MAX_RUN_COST_RUB")) == 0:
         return Preparation("paid_review_disabled", trigger, owner)
     if not store.claim(trigger.pr, trigger.head_sha, trigger.request_id, owner):
@@ -107,14 +106,16 @@ def run_worker(
         store.configure(owner, {"status": "running", "head_sha": trigger.head_sha,
                                 "limit_rub": str(budget.limit),
                                 "action_sha": environment.get("YDBDOC_REVIEW_ACTION_SHA", "unreleased"),
-                                "runtime_revision": environment.get("YDBDOC_REVIEW_REVISION", "unreleased"),
-                                "image_digest": environment.get("YDBDOC_REVIEW_IMAGE_DIGEST", "unreleased")})
+                                "runtime_revision": environment.get("YDBDOC_REVIEW_ACTION_SHA", "unreleased"),
+                                "execution": "trusted-action-host"})
         model = BudgetedPolicyModel(
             YandexCredentials(environment.get("YANDEX_API_KEY", ""),
                               environment.get("YANDEX_FOLDER_ID", "")),
             transport, budget, record, before_attempt=guard,
         )
-        report: dict[str, object] = review_snapshot(preparation.snapshot, model=model).to_json()
+        report = review_pr(preparation.snapshot, github, model)
+        report.update({"head_sha": trigger.head_sha, "rules_sha": preparation.snapshot.rules_sha,
+                       "cost_rub": str(budget.spent), "reserved_rub": str(budget.reserved)})
         guard()
     except Exception as error:  # noqa: BLE001 - secret-bearing config/provider failures.
         report = {"status": error.code if isinstance(error, ReviewError) else "infrastructure_error",
@@ -125,8 +126,8 @@ def run_worker(
                    "known_cost_rub": str(budget.spent),
                    "model": PRODUCTION_MODEL, "pricing_version": PRICING_VERSION,
                    "action_sha": environment.get("YDBDOC_REVIEW_ACTION_SHA", "unreleased"),
-                   "runtime_revision": environment.get("YDBDOC_REVIEW_REVISION", "unreleased"),
-                   "image_digest": environment.get("YDBDOC_REVIEW_IMAGE_DIGEST", "unreleased")})
+                   "runtime_revision": environment.get("YDBDOC_REVIEW_ACTION_SHA", "unreleased"),
+                   "execution": "trusted-action-host"})
     # Finish never deletes a lease with reserved/unknown attempts.
     store.finish(trigger.pr, owner, report)
     return report
@@ -150,18 +151,18 @@ def queue_review(trigger: ReviewTrigger, owner: str, github: ReviewGitHub,
 def summary(report: Mapping[str, Any]) -> str:
     status = html.escape(str(report.get("status", "infrastructure_error")))
     cost = report.get("cost_rub")
-    parts = [f"Состояние: **{status}**.",
-             "Расход: " + (html.escape(str(cost)) + " RUB" if cost is not None else "неизвестен")
-             + "; лимит: " + html.escape(str(report.get("limit_rub", "не задан"))) + " RUB."]
+    estimate = f"{Decimal(str(cost)):.2f} RUB" if cost is not None else "неизвестна"
+    parts = [str(report.get("markdown") or f"Состояние проверки: **{status}**."),
+             f"Оценка стоимости по тарифу: **{estimate}**. "
+             + "Лимит: " + html.escape(str(report.get("limit_rub", "не задан"))) + " RUB."]
     parts.append("Повторная проверка: поставьте метку `doc_review`.")
     incomplete = [c for c in report.get("coverage", []) if c.get("status") == "not_checked"]
     if incomplete:
         parts.append(f"Проверка неполная: непроверенных пунктов — {len(incomplete)}.")
     if cost is None:
-        parts.append("Подтверждённый расход: " + html.escape(str(report.get("known_cost_rub", "неизвестен")))
-                     + " RUB; незавершённый резерв: " + html.escape(str(report.get("reserved_rub", "неизвестен")))
-                     + " RUB.")
-    for finding in report.get("findings", []):
+        parts.append(f"Оценка завершённых попыток: {Decimal(str(report.get('known_cost_rub', 0))):.2f} RUB. "
+                     f"Незавершённый резерв: {Decimal(str(report.get('reserved_rub', 0))):.2f} RUB.")
+    for finding in ([] if report.get("markdown") else report.get("findings", [])):
         parts.append("\n" + html.escape(str(finding["rule_id"])) + " — "
                      + html.escape(str(finding["path"])) + ":" + str(finding["line"]) + "\n\n"
                      + html.escape(str(finding["explanation"])) + "\n\n"

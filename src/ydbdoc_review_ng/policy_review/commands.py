@@ -25,7 +25,7 @@ from ydbdoc_review_ng.policy_review.runtime import (
     summary,
 )
 from ydbdoc_review_ng.policy_review.store import ReviewSDKExecutor, YdbReviewStore
-from ydbdoc_review_ng.policy_review.types import ReviewError, ReviewSnapshot
+from ydbdoc_review_ng.policy_review.types import ReviewDiff, ReviewError
 from ydbdoc_review_ng.runtime_ydb import DEFAULT_YDB_DATABASE, DEFAULT_YDB_ENDPOINT
 
 
@@ -52,7 +52,7 @@ def load_preparation(directory: Path, *, with_snapshot: bool = False) -> Prepara
     owner = plan["owner"]
     if type(owner) is not str or re.fullmatch(r"github-run:[0-9]+:[0-9]+", owner) is None:
         raise ReviewError("invalid_review_owner")
-    snapshot = ReviewSnapshot.from_json(read_json(directory / "snapshot.json")) if with_snapshot else None
+    snapshot = ReviewDiff(**read_json(directory / "snapshot.json")) if with_snapshot else None
     return Preparation(plan["status"], trigger, owner, snapshot)
 
 
@@ -150,8 +150,6 @@ def main(argv: list[str] | None = None) -> int:
             write_json(directory / "plan.json", preparation.plan())
             if preparation.snapshot is not None:
                 snapshot = asdict(preparation.snapshot)
-                snapshot["rules"] = dict(preparation.snapshot.rules)
-                snapshot["context"] = dict(preparation.snapshot.context)
                 write_json(directory / "snapshot.json", snapshot)
             if env.get("GITHUB_OUTPUT"):
                 with Path(env["GITHUB_OUTPUT"]).open("a") as output:
@@ -182,7 +180,7 @@ def main(argv: list[str] | None = None) -> int:
         if Path(args.report).exists():
             report = read_json(Path(args.report))
         elif preparation.status == "ready":
-            # Caller must stop the container before using this recovery path.
+            # The worker has exited before the launcher enters this recovery path.
             report = store.recover(preparation.owner)
             store.finish(preparation.trigger.pr, preparation.owner, report)
         else:

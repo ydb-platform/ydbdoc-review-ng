@@ -1,0 +1,25 @@
+{
+  "rules_sha": "a3c9e632e194a3a9f65bed5b70d2d6734ccbeaba",
+  "files": [
+    {
+      "path": "ydb/docs/.ruler/DOCUMENTATION_POLICY.md",
+      "bytes": 1416,
+      "sha256": "eb3d30700592394e6c6eaa14cf86927a2885ed8c9283ec930ce8771737f36080"
+    },
+    {
+      "path": "ydb/docs/.ruler/GENERAL_RULES.md",
+      "bytes": 767,
+      "sha256": "866923eb4a92a2b5a722942c3e0fe9e31f7da5d8161b50c614111ce49329d135"
+    },
+    {
+      "path": "ydb/docs/.ruler/FORMAT_RULES.md",
+      "bytes": 5867,
+      "sha256": "93dca3ad3a1a264908594906959bea9674b2491f9de326b264b8278029145b47"
+    },
+    {
+      "path": "ydb/docs/.ruler/DOCUMENTATION_RULES.md",
+      "bytes": 19994,
+      "sha256": "ebef861e1fa055e8eed580d80b71e4188a4db3c36ce3c26b5b713f1d7e24c5c6"
+    }
+  ]
+}

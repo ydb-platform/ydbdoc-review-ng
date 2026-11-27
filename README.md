@@ -1,11 +1,6 @@
 # ydbdoc-review-ng
 
-Реализация нового режима проверки нормативных правил документации описан
-в [docs/policy-review.md](docs/policy-review.md). Локальная команда
-`ydbdoc-review review --snapshot ... --output ...` работает без сети;
-GitHub/YDB/Docker orchestration и шаблоны CI описаны в том же документе;
-production consumer пока не установлен. Образ собирается отдельным workflow
-`Build documentation policy reviewer` с offline и disposable YDB smoke.
+GitHub Actions проверяет PR документации через агент с навыком `pr-review`. Устройство проверки, лимит расходов и офлайн-прогон публичного PR описаны в [docs/policy-review.md](docs/policy-review.md).
 
 Библиотека и CLI для двунаправленного перевода документации YDB, Python 3.11+.
 Версия `1.1.0` поддерживает `translate`, `verify` и `continue`.
@@ -171,7 +166,7 @@ Consumer label workflow находится в [шаблоне](docs/examples/doc
 
 [DOC_REVIEW_REQUIREMENTS_RU.md](DOC_REVIEW_REQUIREMENTS_RU.md) описывает
 отдельный режим `doc_review`: автоматический допуск для участников
-проекта, `ok-to-test` для внешних авторов, Docker, бюджет одного запуска и
+проекта, `ok-to-test` для внешних авторов, бюджет одного запуска и
 перезапуск меткой `doc_review`. Полнота реализации описана в банке знаний; действующий контракт перевода
 сохранён.
 
