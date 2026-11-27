@@ -80,7 +80,7 @@ def test_native_provider_can_read_head_then_complete_report():
     model = BudgetedPolicyModel(YandexCredentials("private-api-key", "test"), transport,
                                 RunBudget(Decimal(100), events.append), lambda _: None)
     report = review_pr(diff, ReviewGitHub(api), model)
-    assert len(wires) == 2 and all(w["max_tokens"] == 4096 for w in wires)
+    assert len(wires) == 2 and all(w["max_tokens"] == 8192 for w in wires)
     assert wires[0]["messages"][0]["content"] == (SKILL / "SKILL.md").read_text()
     assert "+1. Build the archive." in wires[0]["messages"][1]["content"]
     assert json.loads(wires[1]["messages"][-1]["content"])["lines"] == [[2, "1. Build the archive."]]
@@ -103,6 +103,36 @@ def test_insufficient_budget_before_agent_turn_never_contacts_provider(limit):
                                 RunBudget(Decimal(limit), lambda _: pytest.fail("reserved")), lambda _: None)
     with pytest.raises(ReviewError, match="budget_(exceeded|insufficient)"):
         review_pr(diff, ReviewGitHub(lambda *_: pytest.fail("unexpected GitHub read")), model)
+
+
+def test_identical_failed_tool_stops_after_one_correction_attempt(capsys):
+    from decimal import Decimal
+
+    from ydbdoc_review_ng.models import YandexCredentials
+    from ydbdoc_review_ng.policy_review.budget import RunBudget
+    from ydbdoc_review_ng.policy_review.model import BudgetedPolicyModel
+    from ydbdoc_review_ng.policy_review.types import ReviewDiff
+
+    wires, events = [], []
+    def transport(request):
+        wires.append(json.loads(request.body))
+        if len(wires) == 2:
+            assert json.loads(wires[-1]["messages"][-1]["content"])["error"] == "invalid_line_window"
+        return tools_reply(("read_file", {
+            "path": "ydb/docs/en/topic.md", "revision": "head", "start_line": 1,
+            "end_line": 200, "literal": "DO_NOT_LOG_ARGUMENT_CONTENT",
+        }))
+
+    model = BudgetedPolicyModel(YandexCredentials("private-key", "test"), transport,
+                               RunBudget(Decimal(100), events.append), lambda _: None)
+    with pytest.raises(ReviewError, match="repeated_tool_failure"):
+        review_pr(ReviewDiff("a" * 40, "b" * 40, "c" * 40, {}, []),
+                  ReviewGitHub(lambda *_: pytest.fail("invalid window must not fetch a file")), model)
+    assert len(wires) == 2
+    assert [e.kind for e in events] == ["reserved", "settled"] * 2
+    output = capsys.readouterr().out
+    assert "invalid_line_window" in output
+    assert "DO_NOT_LOG_ARGUMENT_CONTENT" not in output and "private-key" not in output
 
 
 def test_report_links_current_hunk_and_rejects_fabricated_anchor():

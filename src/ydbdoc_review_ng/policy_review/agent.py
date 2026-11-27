@@ -27,6 +27,7 @@ SKILL = Path(__file__).parent / "skill"
 MAX_TURNS = 24
 MAX_CALLS = 96
 MAX_WIRE = 512 * 1024
+MAX_OUTPUT_TOKENS = 8192
 HUNK = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 RESOURCE_NAMES = ("writing-policy", "placement", "public-map", "feature-flags")
 
@@ -211,15 +212,16 @@ def review_pr(diff: ReviewDiff, github: ReviewGitHub, model: BudgetedPolicyModel
     ]
     calls = 0
     loaded: set[str] = set()
+    failed_calls: dict[str, int] = {}
     for _ in range(MAX_TURNS):
         request = ModelRequest(ModelRole.ARBITER, PRODUCTION_MODEL, "pr-review", None,
                                messages=cast(FrozenJson, messages), tools=cast(FrozenJson, TOOLS),
-                               tool_choice="required", max_output_tokens=4096)
+                               tool_choice="required", max_output_tokens=MAX_OUTPUT_TOKENS)
         try:
             wire = model.prepare_request(request)
         except ValueError:
             raise ReviewError("model_context_limit_exceeded") from None
-        if len(wire.body) > MAX_WIRE or wire.max_tokens < 4096:
+        if len(wire.body) > MAX_WIRE or wire.max_tokens < MAX_OUTPUT_TOKENS:
             raise ReviewError("model_context_limit_exceeded")
         turn = model.invoke(request)
         if turn.status != "ok":
@@ -233,6 +235,7 @@ def review_pr(diff: ReviewDiff, github: ReviewGitHub, model: BudgetedPolicyModel
             {"id": c.id, "type": "function", "function": {"name": c.name, "arguments": c.arguments}}
             for c in turn.tool_calls]})
         for call in turn.tool_calls:
+            args = {}
             try:
                 args = json.loads(call.arguments)
                 if not isinstance(args, dict):
@@ -241,6 +244,7 @@ def review_pr(diff: ReviewDiff, github: ReviewGitHub, model: BudgetedPolicyModel
                     if len(turn.tool_calls) != 1:
                         raise ReviewError("finish_must_be_alone")
                     missing = set(RESOURCE_NAMES) - loaded
+                    print("pr-review finish_review", flush=True)
                     return finish(diff, args, gaps + ["Ресурс не проверен: " + x for x in sorted(missing)])
                 if call.name == "read_resource":
                     reply = resource(github, diff.rules_sha, args["name"])
@@ -255,6 +259,18 @@ def review_pr(diff: ReviewDiff, github: ReviewGitHub, model: BudgetedPolicyModel
             except (ValueError, KeyError, TypeError, ReviewError) as error:
                 # Return a bounded diagnostic; do not forward exceptions containing untrusted arguments.
                 reply = {"error": error.code if isinstance(error, ReviewError) else "invalid_tool_arguments_or_bounds"}
+                if not isinstance(args, dict):
+                    args = {}
+            coordinates = {k: args[k] for k in ("name", "path", "revision", "start_line", "end_line") if k in args}
+            reply_lines = reply.get("lines")
+            print("pr-review tool", repr(call.name), json.dumps(coordinates, ensure_ascii=False),
+                  "error=" + str(reply.get("error")), "missing=" + str(reply.get("missing")),
+                  "lines=" + str(len(reply_lines) if isinstance(reply_lines, list) else 0), flush=True)
+            if reply.get("error") or reply.get("missing"):
+                key = call.name + ":" + json.dumps(args, sort_keys=True)
+                failed_calls[key] = failed_calls.get(key, 0) + 1
+                if failed_calls[key] >= 2:
+                    raise ReviewError("repeated_tool_failure")
             messages.append({"role": "tool", "tool_call_id": call.id,
                              "content": json.dumps(reply, ensure_ascii=False)})
     raise ReviewError("review_turn_limit")

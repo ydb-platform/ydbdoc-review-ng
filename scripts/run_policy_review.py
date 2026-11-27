@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import signal
 import sys
 from pathlib import Path
 
-from ydbdoc_review_ng.policy_review.commands import _sdk, main, read_json
+from ydbdoc_review_ng.policy_review.commands import main, read_json
 from ydbdoc_review_ng.policy_review.github import ReviewHTTP
 from ydbdoc_review_ng.policy_review.types import ReviewError
 from ydbdoc_review_ng.policy_review.version import action_revision
@@ -29,21 +28,6 @@ def run() -> int:
     run_id, attempt = os.environ["GITHUB_RUN_ID"], os.environ.get("GITHUB_RUN_ATTEMPT", "1")
     if re.fullmatch(r"[1-9][0-9]*", run_id) is None or re.fullmatch(r"[1-9][0-9]*", attempt) is None:
         raise ReviewError("invalid_review_owner")
-    # Temporary, read-only diagnosis of this completed deployment run only.
-    if mode == "gate" and run_id == "45963876802":
-        executor = _sdk(os.environ)
-        try:
-            rows = executor.execute(
-                "SELECT attempt, usage FROM doc_review_attempts WHERE owner=$owner ORDER BY attempt;",
-                {"owner": "github-run:" + run_id + ":1"},
-            )
-            for row in rows:
-                payload = row["usage"]
-                metadata = json.loads(payload) if isinstance(payload, (str, bytes)) and payload else {}
-                print(json.dumps({"attempt": row["attempt"], **metadata}))
-        finally:
-            executor.close()
-        return 0
     workspace = Path(os.environ["RUNNER_TEMP"]) / ("policy-review-" + run_id + "-" + attempt)
     input_dir, output_dir = workspace / "input", workspace / "output"
     input_dir.mkdir(parents=True, exist_ok=True, mode=0o700)

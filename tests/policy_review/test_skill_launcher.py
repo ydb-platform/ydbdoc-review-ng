@@ -115,7 +115,7 @@ def test_action_runs_full_public_pr_with_ordered_policy_on_exact_wires(tmp_path,
         assert reservation.kind == "reserved"
         reserves.append(str(reservation.reservation_rub))
         assert "test-secret" not in request.body.decode()
-        assert unrelated_history not in request.body.decode() and wire["max_tokens"] == 4096
+        assert unrelated_history not in request.body.decode() and wire["max_tokens"] == 8192
         if len(wires) == 1:
             assert wire["messages"][0]["content"] == (SKILL / "SKILL.md").read_text()
             assert len(json.loads(wire["messages"][1]["content"])["changes"]) == 18
